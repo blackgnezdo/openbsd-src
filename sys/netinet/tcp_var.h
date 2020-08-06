@@ -496,35 +496,6 @@ struct	tcpstat {
 	{ "synhashsize", 	CTLTYPE_INT }, \
 }
 
-#define	TCPCTL_VARS { \
-	NULL, \
-	&tcp_do_rfc1323, \
-	&tcptv_keep_init, \
-	&tcp_keepidle, \
-	&tcp_keepintvl, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&tcp_mssdflt, \
-	&tcp_rst_ppslim, \
-	&tcp_ack_on_push, \
-	NULL, \
-	&tcp_syn_cache_limit, \
-	&tcp_syn_bucket_limit, \
-	&tcp_do_rfc3390, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL \
-}
-
 struct tcp_ident_mapping {
 	struct sockaddr_storage faddr, laddr;
 	int euid, ruid;
