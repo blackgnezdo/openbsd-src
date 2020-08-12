@@ -247,7 +247,6 @@ struct acpi_softc {
 		int slp_typa;
 		int slp_typb;
 	}			sc_sleeptype[6];
-	int			sc_maxgpe;
 	int			sc_lastgpe;
 
 	struct gpe_block	*gpe_table;

@@ -2361,18 +2361,14 @@ acpi_init_gpes(struct acpi_softc *sc)
 {
 	struct aml_node *gpe;
 	char name[12];
-	int  idx, ngpe;
+	int  idx;
 
 	sc->sc_lastgpe = sc->sc_fadt->gpe0_blk_len << 2;
-	if (sc->sc_fadt->gpe1_blk_len) {
-	}
 	dnprintf(50, "Last GPE: %.2x\n", sc->sc_lastgpe);
 
 	/* Allocate GPE table */
 	sc->gpe_table = mallocarray(sc->sc_lastgpe, sizeof(struct gpe_block),
 	    M_DEVBUF, M_WAITOK | M_ZERO);
-
-	ngpe = 0;
 
 	/* Clear GPE status */
 	acpi_disable_allgpes(sc);
@@ -2392,7 +2388,6 @@ acpi_init_gpes(struct acpi_softc *sc)
 		}
 	}
 	aml_find_node(&aml_root, "_PRW", acpi_foundprw, sc);
-	sc->sc_maxgpe = ngpe;
 }
 
 void
