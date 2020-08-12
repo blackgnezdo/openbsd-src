@@ -42,13 +42,6 @@ struct div6stat {
 	{ "stats",	CTLTYPE_STRUCT } \
 }
 
-#define	DIVERT6CTL_VARS { \
-	NULL, \
-	&divert6_recvspace, \
-	&divert6_sendspace, \
-	NULL \
-}
-
 #ifdef _KERNEL
 
 #include <sys/percpu.h>

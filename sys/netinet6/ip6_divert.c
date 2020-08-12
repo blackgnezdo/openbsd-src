@@ -58,7 +58,12 @@ u_int   divert6_recvspace = DIVERT_RECVSPACE;
 #define DIVERTHASHSIZE	128
 #endif
 
-int *divert6ctl_vars[DIVERT6CTL_MAXID] = DIVERT6CTL_VARS;
+const struct sysctl_bounded_args divert6ctl_vars[] = {
+	{NULL},
+	{&divert6_recvspace, 1, 65536*100},
+	{&divert6_sendspace, 1, 65536*100},
+	/* {NULL}, */
+};
 
 int divb6hashsize = DIVERTHASHSIZE;
 
@@ -398,7 +403,7 @@ divert6_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 		return (divert6_sysctl_div6stat(oldp, oldlenp, newp));
 	default:
 		NET_LOCK();
-		error = sysctl_int_arr(divert6ctl_vars, nitems(divert6ctl_vars),
+		error = sysctl_bounded_arr(divert6ctl_vars, nitems(divert6ctl_vars),
 		    name, namelen, oldp, oldlenp, newp, newlen);
 		NET_UNLOCK();
 		return (error);
