@@ -124,16 +124,6 @@ struct rt_mpls {
 	{ "mapttl_ip6", CTLTYPE_INT } \
 }
 
-#define MPLSCTL_VARS { \
-	NULL, \
-	NULL, \
-	&mpls_defttl, \
-	NULL, \
-	NULL, \
-	&mpls_mapttl_ip, \
-	&mpls_mapttl_ip6 \
-}
-
 #define IMR_TYPE_NONE			0
 #define IMR_TYPE_ETHERNET		1
 #define IMR_TYPE_ETHERNET_TAGGED	2
