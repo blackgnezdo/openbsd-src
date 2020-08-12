@@ -73,10 +73,6 @@ struct igmpstat {
 	{ "stats",	CTLTYPE_STRUCT } \
 }
 
-#define IGMPCTL_VARS { \
-	NULL \
-}
-
 #ifdef _KERNEL
 
 #include <sys/percpu.h>

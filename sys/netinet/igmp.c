@@ -96,8 +96,6 @@
 
 #define IP_MULTICASTOPTS	0
 
-int *igmpctl_vars[IGMPCTL_MAXID] = IGMPCTL_VARS;
-
 int		igmp_timers_are_running;
 static LIST_HEAD(, router_info) rti_head;
 static struct mbuf *router_alert;
@@ -683,8 +681,6 @@ int
 igmp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
     void *newp, size_t newlen)
 {
-	int error;
-
 	/* All sysctl names at this level are terminal. */
 	if (namelen != 1)
 		return (ENOTDIR);
@@ -695,11 +691,7 @@ igmp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 			return (EPERM);
 		return (igmp_sysctl_igmpstat(oldp, oldlenp, newp));
 	default:
-		NET_LOCK();
-		error = sysctl_int_arr(igmpctl_vars, nitems(igmpctl_vars), name,
-		    namelen, oldp, oldlenp, newp, newlen);
-		NET_UNLOCK();
-		return (error);
+		return (EOPNOTSUPP);
 	}
 	/* NOTREACHED */
 }
