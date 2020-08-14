@@ -85,12 +85,6 @@ struct ah {
 	{ "stats", CTLTYPE_STRUCT } \
 }
 
-#define AHCTL_VARS { \
-	NULL, \
-	&ah_enable, \
-	NULL \
-}
-
 #ifdef _KERNEL
 
 #include <sys/percpu.h>

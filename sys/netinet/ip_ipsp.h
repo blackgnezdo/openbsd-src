@@ -514,34 +514,6 @@ extern int ipsec_exp_first_use;		/* seconds between 1st asso & expire */
 #define IPSEC_FIRSTUSE			IPCTL_IPSEC_FIRSTUSE		/* 24 */
 #define IPSEC_MAXID	25
 
-#define	IPSECCTL_VARS { \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&encdebug, \
-	NULL, /* ipsecstat */ \
-	&ipsec_expire_acquire, \
-	&ipsec_keep_invalid, \
-	&ipsec_require_pfs, \
-	&ipsec_soft_allocations, \
-	&ipsec_exp_allocations, \
-	&ipsec_soft_bytes, \
-	&ipsec_exp_bytes, \
-	&ipsec_exp_timeout, \
-	&ipsec_soft_timeout, \
-	&ipsec_soft_first_use, \
-	&ipsec_exp_first_use, \
-}
-
 extern char ipsec_def_enc[];
 extern char ipsec_def_auth[];
 extern char ipsec_def_comp[];

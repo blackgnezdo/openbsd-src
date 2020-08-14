@@ -78,12 +78,6 @@ struct ipcomp {
 	{ "stats", CTLTYPE_STRUCT }, \
 }
 
-#define IPCOMPCTL_VARS { \
-	NULL, \
-	&ipcomp_enable, \
-	NULL \
-}
-
 #ifdef _KERNEL
 
 #include <sys/percpu.h>

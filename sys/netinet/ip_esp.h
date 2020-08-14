@@ -84,14 +84,6 @@ struct espstat {
 	{ "stats", CTLTYPE_STRUCT }, \
 }
 
-#define ESPCTL_VARS { \
-	NULL, \
-	&esp_enable, \
-	&udpencap_enable, \
-	&udpencap_port, \
-	NULL \
-}
-
 #ifdef _KERNEL
 
 #include <sys/percpu.h>
