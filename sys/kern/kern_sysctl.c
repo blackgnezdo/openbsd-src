@@ -925,20 +925,6 @@ sysctl_rdint(void *oldp, size_t *oldlenp, void *newp, int val)
 }
 
 /*
- * Array of integer values.
- */
-int
-sysctl_int_arr(int **valpp, u_int valplen, int *name, u_int namelen, void *oldp,
-    size_t *oldlenp, void *newp, size_t newlen)
-{
-	if (namelen > 1)
-		return (ENOTDIR);
-	if (name[0] < 0 || name[0] >= valplen || valpp[name[0]] == NULL)
-		return (EOPNOTSUPP);
-	return (sysctl_int(oldp, oldlenp, newp, newlen, valpp[name[0]]));
-}
-
-/*
  * Array of bounded integer values.
  */
 int
