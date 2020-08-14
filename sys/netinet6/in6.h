@@ -653,63 +653,6 @@ ifatoia6(struct ifaddr *ifa)
 	{ "soiikey", CTLTYPE_STRING }, /* binary string */ \
 }
 
-#define IPV6CTL_VARS { \
-	NULL, \
-	&ip6_forwarding, \
-	&ip6_sendredirects, \
-	&ip6_defhlim, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&ip6_maxfragpackets, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&ip6_log_interval, \
-	&ip6_hdrnestlimit, \
-	&ip6_dad_count, \
-	&ip6_auto_flowlabel, \
-	&ip6_defmcasthlim, \
-	NULL, \
-	NULL, \
-	&ip6_use_deprecated, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&ip6_maxfrags, \
-	&ip6_mforwarding, \
-	&ip6_multipath, \
-	&ip6_mcast_pmtu, \
-	&ip6_neighborgcthresh, \
-	NULL, \
-	NULL, \
-	&ip6_maxdynroutes, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-}
-
 __BEGIN_DECLS
 struct cmsghdr;
 

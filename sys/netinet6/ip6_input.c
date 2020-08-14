@@ -1334,7 +1334,63 @@ const u_char inet6ctlerrmap[PRC_NCMDS] = {
 	ENOPROTOOPT
 };
 
-int *ipv6ctl_vars[IPV6CTL_MAXID] = IPV6CTL_VARS;
+/* In the order of IPV6CTL_NAMES */
+const struct sysctl_bounded_args ipv6ctl_vars[] = {
+	{NULL},
+	{&ip6_forwarding, 0, 1},
+	{&ip6_sendredirects, 0, 1},
+	{&ip6_defhlim, 0, 255},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{&ip6_maxfragpackets, 0, 1000},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{&ip6_log_interval, 0, INT_MAX},
+	{&ip6_hdrnestlimit, 0, 100},
+	{&ip6_dad_count, 0, INT_MAX},
+	{&ip6_auto_flowlabel, 0, 1},
+	{&ip6_defmcasthlim, 0, 255},
+	{NULL},
+	{NULL},
+	{&ip6_use_deprecated, 0, 1},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{&ip6_maxfrags, 0, 1000},
+	{&ip6_mforwarding, 0, 1},
+	{&ip6_multipath, 0, 1},
+	{&ip6_mcast_pmtu, 0, 1},
+	{&ip6_neighborgcthresh, -1, INT_MAX},
+	{NULL},
+	{NULL},
+	{&ip6_maxdynroutes, -1, INT_MAX},
+	/* {NULL}, */
+	/* {NULL}, */
+	/* {NULL}, */
+	/* {NULL}, */
+	/* {NULL}, */
+};
 
 int
 ip6_sysctl_ip6stat(void *oldp, size_t *oldlenp, void *newp)
@@ -1437,8 +1493,8 @@ ip6_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 		return (ip6_sysctl_soiikey(oldp, oldlenp, newp, newlen));
 	default:
 		NET_LOCK();
-		error = sysctl_int_arr(ipv6ctl_vars, nitems(ipv6ctl_vars), name,
-		    namelen, oldp, oldlenp, newp, newlen);
+		error = sysctl_bounded_arr(ipv6ctl_vars, nitems(ipv6ctl_vars),
+		    name, namelen, oldp, oldlenp, newp, newlen);
 		NET_UNLOCK();
 		return (error);
 	}
