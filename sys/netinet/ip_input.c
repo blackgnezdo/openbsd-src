@@ -107,7 +107,51 @@ LIST_HEAD(, ipq) ipq;
 int	ip_maxqueue = 300;
 int	ip_frags = 0;
 
-int *ipctl_vars[IPCTL_MAXID] = IPCTL_VARS;
+/* In the order of IPCTL_NAMES */
+const struct sysctl_bounded_args ipctl_vars[] = {
+	{NULL},
+	{&ipforwarding, 0, 1},
+	{&ipsendredirects, 0, 1},
+	{&ip_defttl, 0, 255},
+	{NULL},
+	{NULL},
+	{&ip_directedbcast, 0, 1},
+	{&ipport_firstauto, 0, 65535},
+	{&ipport_lastauto, 0, 65535},
+	{&ipport_hifirstauto, 0, 65535},
+	{&ipport_hilastauto, 0, 65535},
+	{&ip_maxqueue, 0, 10000},
+	{NULL}, /* encdebug */
+	{NULL}, /* ipsecstat */
+	{NULL}, /* ipsec_expire_acquire */
+	{NULL}, /* ipsec_keep_invalid */
+	{NULL}, /* ipsec_require_pfs */
+	{NULL}, /* ipsec_soft_allocations */
+	{NULL}, /* ipsec_exp_allocations */
+	{NULL}, /* ipsec_soft_bytes */
+	{NULL}, /* ipsec_exp_bytes */
+	{NULL}, /* ipsec_exp_timeout */
+	{NULL}, /* ipsec_soft_timeout */
+	{NULL}, /* ipsec_soft_first_use */
+	{NULL}, /* ipsec_exp_first_use */
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{&ipmforwarding, 0, 1},
+	{&ipmultipath, 0, 1},
+	{NULL},
+	{NULL},
+	{NULL},
+	{&la_hold_total, 0, 1000},
+	{NULL},
+	{NULL},
+	{&arpt_keep, 0, INT_MAX},
+	{&arpt_down, 0, INT_MAX},
+	/* {NULL}, */
+};
 
 struct pool ipqent_pool;
 struct pool ipq_pool;
@@ -1646,8 +1690,8 @@ ip_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 #endif
 	default:
 		NET_LOCK();
-		error = sysctl_int_arr(ipctl_vars, nitems(ipctl_vars), name,
-		    namelen, oldp, oldlenp, newp, newlen);
+		error = sysctl_bounded_arr(ipctl_vars, nitems(ipctl_vars),
+		    name, namelen, oldp, oldlenp, newp, newlen);
 		NET_UNLOCK();
 		return (error);
 	}
