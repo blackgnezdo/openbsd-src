@@ -57,7 +57,13 @@ u_int   divert_recvspace = DIVERT_RECVSPACE;
 #define DIVERTHASHSIZE	128
 #endif
 
-int *divertctl_vars[DIVERTCTL_MAXID] = DIVERTCTL_VARS;
+/* In the order of DIVERTCTL_NAMES */
+const struct sysctl_bounded_args divertctl_vars[] = {
+	{NULL},
+	{&divert_recvspace, 0, INT_MAX},
+	{&divert_sendspace, 0, INT_MAX},
+	/* {NULL}, */
+};
 
 int divbhashsize = DIVERTHASHSIZE;
 
@@ -392,8 +398,9 @@ divert_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (divert_sysctl_divstat(oldp, oldlenp, newp));
 	default:
 		NET_LOCK();
-		error = sysctl_int_arr(divertctl_vars, nitems(divertctl_vars),
-		    name, namelen, oldp, oldlenp, newp, newlen);
+		error = sysctl_bounded_arr(divertctl_vars,
+		    nitems(divertctl_vars), name, namelen, oldp, oldlenp, newp,
+		    newlen);
 		NET_UNLOCK();
 		return (error);
 	}
