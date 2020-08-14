@@ -91,16 +91,6 @@ struct	udpstat {
 	{ "rootonly", CTLTYPE_STRUCT }, \
 }
 
-#define UDPCTL_VARS { \
-	NULL, \
-	&udpcksum, \
-	NULL, \
-	&udp_recvspace, \
-	&udp_sendspace, \
-	NULL, \
-	NULL \
-}
-
 #ifdef _KERNEL
 
 #include <sys/percpu.h>

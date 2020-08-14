@@ -127,7 +127,16 @@ u_int	udp_sendspace = 9216;		/* really max datagram size */
 u_int	udp_recvspace = 40 * (1024 + sizeof(struct sockaddr_in));
 					/* 40 1K datagrams */
 
-int *udpctl_vars[UDPCTL_MAXID] = UDPCTL_VARS;
+/* In the order of UDPCTL_NAMES */
+const struct sysctl_bounded_args udpctl_vars[] = {
+	{NULL},
+	{&udpcksum, 0, 1},
+	{NULL},
+	{&udp_recvspace, 0, INT_MAX},
+	{&udp_sendspace, 0, INT_MAX},
+	/* {NULL}, */
+	/* {NULL}, */
+};
 
 struct	inpcbtable udbtable;
 struct	cpumem *udpcounters;
@@ -1296,8 +1305,8 @@ udp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 
 	default:
 		NET_LOCK();
-		error = sysctl_int_arr(udpctl_vars, nitems(udpctl_vars), name,
-		    namelen, oldp, oldlenp, newp, newlen);
+		error = sysctl_bounded_arr(udpctl_vars, nitems(udpctl_vars),
+		    name, namelen, oldp, oldlenp, newp, newlen);
 		NET_UNLOCK();
 		return (error);
 	}
