@@ -1875,7 +1875,28 @@ icmp6_redirect_timeout(struct rtentry *rt, struct rttimer *r)
 	if_put(ifp);
 }
 
-int *icmpv6ctl_vars[ICMPV6CTL_MAXID] = ICMPV6CTL_VARS;
+/* In the order of ICMPV6CTL_NAMES */
+const struct sysctl_bounded_args icmpv6ctl_vars[] = {
+	{NULL},
+	{NULL},
+	{NULL},
+	{&icmp6_redirtimeout, 0, INT_MAX},
+	{NULL},
+	{NULL},
+	{NULL},
+	{NULL},
+	{&nd6_delay, 0, INT_MAX},
+	{&nd6_umaxtries, 0, INT_MAX},
+	{&nd6_mmaxtries, 0, INT_MAX},
+	{NULL},
+	{NULL},
+	{NULL},
+	{&icmp6errppslim, 0, 1000},
+	{&nd6_maxnudhint, 0, INT_MAX},
+	{&icmp6_mtudisc_hiwat, -1, INT_MAX},
+	{&icmp6_mtudisc_lowat, -1, INT_MAX},
+	{&nd6_debug, 0, 1},
+};
 
 int
 icmp6_sysctl_icmp6stat(void *oldp, size_t *oldlenp, void *newp)
@@ -1909,8 +1930,9 @@ icmp6_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 		return icmp6_sysctl_icmp6stat(oldp, oldlenp, newp);
 	default:
 		NET_LOCK();
-		error = sysctl_int_arr(icmpv6ctl_vars, nitems(icmpv6ctl_vars),
-		    name, namelen, oldp, oldlenp, newp, newlen);
+		error = sysctl_bounded_arr(icmpv6ctl_vars,
+		    nitems(icmpv6ctl_vars), name, namelen, oldp, oldlenp, newp,
+		    newlen);
 		NET_UNLOCK();
 		return (error);
 	}
