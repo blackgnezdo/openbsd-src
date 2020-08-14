@@ -123,7 +123,18 @@ static struct timeval icmperrppslim_last;
 static struct rttimer_queue *icmp_redirect_timeout_q = NULL;
 struct cpumem *icmpcounters;
 
-int *icmpctl_vars[ICMPCTL_MAXID] = ICMPCTL_VARS;
+/* In the order of ICMPCTL_NAMES */
+const struct sysctl_bounded_args icmpctl_vars[] =  {
+	{NULL},
+	{&icmpmaskrepl, 0, 1},
+	{&icmpbmcastecho, 0, 1},
+	{&icmperrppslim, -1, INT_MAX},
+	{&icmp_rediraccept, 0, 1},
+	{NULL},
+	{&icmptstamprepl, 0, 1},
+	/* {NULL}, */
+};
+
 
 void icmp_mtudisc_timeout(struct rtentry *, struct rttimer *);
 int icmp_ratelimit(const struct in_addr *, const int, const int);
@@ -892,8 +903,8 @@ icmp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 
 	default:
 		NET_LOCK();
-		error = sysctl_int_arr(icmpctl_vars, nitems(icmpctl_vars), name,
-		    namelen, oldp, oldlenp, newp, newlen);
+		error = sysctl_bounded_arr(icmpctl_vars, nitems(icmpctl_vars),
+		    name, namelen, oldp, oldlenp, newp, newlen);
 		NET_UNLOCK();
 		break;
 	}

@@ -79,17 +79,6 @@ struct	icmpstat {
 	{ "stats", CTLTYPE_STRUCT } \
 }
 
-#define ICMPCTL_VARS { \
-	NULL, \
-	&icmpmaskrepl, \
-	&icmpbmcastecho, \
-	&icmperrppslim, \
-	&icmp_rediraccept, \
-	NULL, \
-	&icmptstamprepl, \
-	NULL \
-}
-
 #ifdef _KERNEL
 
 #include <sys/percpu.h>
