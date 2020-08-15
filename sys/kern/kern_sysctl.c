@@ -877,6 +877,13 @@ sysctl_int_lower(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int *va
 int
 sysctl_int(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int *valp)
 {
+	return (sysctl_int_bounded(oldp, oldlenp, newp, newlen, valp, 0, 0));
+}
+
+int
+sysctl_int_bounded(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int *valp,
+    int minimum, int maximum)
+{
 	int error = 0;
 	int val;
 
@@ -890,8 +897,12 @@ sysctl_int(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int *valp)
 		error = copyout(&val, oldp, sizeof(int));
 	if (error == 0 && newp)
 		error = copyin(newp, &val, sizeof(int));
-	if (error == 0)
+	if (error != 0)
+		return (error);
+	if (minimum == maximum || (minimum <= val && val <= maximum))
 		*valp = val;
+	else
+		error = EINVAL;
 	return (error);
 }
 
@@ -925,6 +936,26 @@ sysctl_int_arr(int **valpp, u_int valplen, int *name, u_int namelen, void *oldp,
 	if (name[0] < 0 || name[0] >= valplen || valpp[name[0]] == NULL)
 		return (EOPNOTSUPP);
 	return (sysctl_int(oldp, oldlenp, newp, newlen, valpp[name[0]]));
+}
+
+/*
+ * Array of bounded integer values.
+ */
+int
+sysctl_bounded_arr(const struct sysctl_bounded_args *valpp, u_int valplen,
+    int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
+    size_t newlen)
+{
+	if (namelen > 1)
+		return (ENOTDIR);
+	if (name[0] < 0 || name[0] >= valplen)
+		return (EOPNOTSUPP);
+	const struct sysctl_bounded_args *args = &valpp[name[0]];
+	if (args->var == NULL)
+		return (EOPNOTSUPP);
+
+	return (sysctl_int_bounded(oldp, oldlenp, newp, newlen, args->var,
+	    args->minimum, args->maximum));
 }
 
 /*
