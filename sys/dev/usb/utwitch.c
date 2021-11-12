@@ -107,7 +107,7 @@ utwitch_match(struct device *parent, void *match, void *aux)
 {
 	struct uhidev_attach_arg *uha = aux;
 
-	if (uha->reportid == UHIDEV_CLAIM_MULTIPLE_REPORTID)
+	if (UHIDEV_CLAIM_MULTIPLE_REPORTID(uha))
 		return (UMATCH_NONE);
 
 	return (usb_lookup(utwitch_devs, uha->uaa->vendor, uha->uaa->product) != NULL ?

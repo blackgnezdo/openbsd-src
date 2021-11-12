@@ -248,7 +248,7 @@ uhidev_attach(struct device *parent, struct device *self, void *aux)
 
 	uha.uaa = uaa;
 	uha.parent = sc;
-	uha.reportid = UHIDEV_CLAIM_MULTIPLE_REPORTID;
+	uha.reportid = __UHIDEV_CLAIM_MULTIPLE_REPORTID;
 	uha.nreports = nrepid;
 	uha.claimed = malloc(nrepid, M_TEMP, M_WAITOK|M_ZERO);
 
@@ -360,7 +360,7 @@ uhidevprint(void *aux, const char *pnp)
 
 	if (pnp)
 		printf("uhid at %s", pnp);
-	if (uha->reportid != 0 && uha->reportid != UHIDEV_CLAIM_MULTIPLE_REPORTID)
+	if (uha->reportid != 0 && uha->reportid != __UHIDEV_CLAIM_MULTIPLE_REPORTID)
 		printf(" reportid %d", uha->reportid);
 	return (UNCONF);
 }

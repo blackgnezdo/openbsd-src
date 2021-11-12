@@ -104,7 +104,7 @@ ujoy_match(struct device *parent, void *match, void *aux)
 	void			 *desc;
 	int			  ret = UMATCH_NONE;
 
-	if (uha->reportid == UHIDEV_CLAIM_MULTIPLE_REPORTID)
+	if (UHIDEV_CLAIM_MULTIPLE_REPORTID(uha))
 		return (ret);
 
 	/* Find the general usage page and gamecontroller collections */

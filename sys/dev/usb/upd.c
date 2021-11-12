@@ -155,7 +155,7 @@ upd_match(struct device *parent, void *match, void *aux)
 	int			  ret = UMATCH_NONE;
 	int			  i;
 
-	if (uha->reportid != UHIDEV_CLAIM_MULTIPLE_REPORTID)
+	if (!UHIDEV_CLAIM_MULTIPLE_REPORTID(uha))
 		return (ret);
 
 	DPRINTF(("upd: vendor=0x%04x, product=0x%04x\n", uha->uaa->vendor,
