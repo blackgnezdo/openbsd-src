@@ -75,12 +75,11 @@ struct uhidev_attach_arg {
 	struct usb_attach_arg	*uaa;
 	struct uhidev_softc	*parent;
 	uint8_t			 reportid;
-	uint8_t			 nreports;
+	u_int			 nreports;
 	uint8_t			*claimed;
 };
 
-#define UHIDEV_CLAIM_MULTIPLE_REPORTID(u) \
-	((u)->reportid == __UHIDEV_CLAIM_MULTIPLE_REPORTID)
+#define UHIDEV_CLAIM_MULTIPLE_REPORTID(u)	((u)->claimed != NULL)
 #define	__UHIDEV_CLAIM_MULTIPLE_REPORTID	255	/* XXX */
 
 int uhidev_report_type_conv(int);
