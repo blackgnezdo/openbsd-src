@@ -163,13 +163,11 @@ uvn_attach(struct vnode *vp, vm_prot_t accessprot)
 	 */
 	if (uvn->u_flags & UVM_VNODE_VALID) {	/* already active? */
 
-		rw_enter(uvn->u_obj.vmobjlock, RW_WRITE);
 		/* regain vref if we were persisting */
 		if (uvn->u_obj.uo_refs == 0) {
 			vref(vp);
 		}
 		uvn->u_obj.uo_refs++;		/* bump uvn ref! */
-		rw_exit(uvn->u_obj.vmobjlock);
 
 		/* check for new writeable uvn */
 		if ((accessprot & PROT_WRITE) != 0 &&
