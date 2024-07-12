@@ -145,11 +145,13 @@
 #define NUM_L4_SLOT_DIRECT	4
 #define L4_SLOT_DIRECT		(L4_SLOT_KERNBASE - NUM_L4_SLOT_DIRECT)
 #define L4_SLOT_EARLY		(L4_SLOT_DIRECT - 1)
+#define L4_SLOT_KASAN		(L4_SLOT_KERN + 1)
 
 #define PDIR_SLOT_KERN		L4_SLOT_KERN
 #define PDIR_SLOT_PTE		L4_SLOT_PTE
 #define PDIR_SLOT_DIRECT	L4_SLOT_DIRECT
 #define PDIR_SLOT_EARLY		L4_SLOT_EARLY
+#define PDIR_SLOT_KASAN		L4_SLOT_KASAN
 
 /*
  * the following defines give the virtual addresses of various MMU
