@@ -268,8 +268,8 @@ kasan_alloc(vaddr_t addr, size_t size, size_t sz_with_redz)
 	if (size == 0)
 		return;
 	if (kasan_unsupported(addr))
-		panic("malloc outside of VM_KERNEL_ADDRESS range");
-	printf("kasan_alloc %lx %lu %lu\n", addr, sz_with_redz, size);
+		panic("malloc 0x%lx outside of VM_KERNEL_ADDRESS range", addr);
+	printf("kasan_alloc 0x%lx %lu %lu\n", addr, sz_with_redz, size);
 	kasan_markmem(addr, sz_with_redz, 0);
 	kasan_markmem(addr, size, 1);
 }
