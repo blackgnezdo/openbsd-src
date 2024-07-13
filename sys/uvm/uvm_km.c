@@ -134,6 +134,9 @@
 #include <sys/proc.h>
 #include <sys/kthread.h>
 #include <uvm/uvm.h>
+#ifdef KASAN
+#include <machine/kasan.h>
+#endif
 
 /*
  * global data structures
@@ -692,6 +695,7 @@ km_alloc(size_t sz, const struct kmem_va_mode *kv,
 	if (kv->kv_singlepage || kp->kp_maxseg == 1) {
 		TAILQ_FOREACH(pg, &pgl, pageq) {
 			va = pmap_map_direct(pg);
+			kasan_enter_shad_multi(va, PAGE_SIZE);
 			if (pg == TAILQ_FIRST(&pgl))
 				sva = va;
 		}
@@ -763,6 +767,7 @@ try_map:
 			pmap_kenter_pa(va, VM_PAGE_TO_PHYS(pg), prot);
 		va += PAGE_SIZE;
 	}
+	kasan_enter_shad_multi(sva, sz);
 	pmap_update(pmap_kernel());
 	return ((void *)sva);
 }

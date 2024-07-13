@@ -357,12 +357,20 @@ out:
 #endif
 	mtx_leave(&malloc_mtx);
 
+#ifdef KASAN
+	kasan_alloc((vaddr_t)va, origsz, size);
+#endif
 	if ((flags & M_ZERO) && va != NULL)
-		memset(va, 0, size);
+		memset(va, 0,
+#ifdef KASAN
+		    origsz
+#else
+		    size
+#endif
+		);
 
 	TRACEPOINT(uvm, malloc, type, va, size, flags);
 
-	kasan_alloc((vaddr_t)va, origsz, size);
 	return (va);
 }
 

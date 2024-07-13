@@ -5,5 +5,5 @@ include "arch/amd64/conf/GENERIC"
 option	MULTIPROCESSOR
 #option	MP_LOCKDEBUG
 #option	WITNESS
-
+option KASAN
 cpu*		at mainbus?
