@@ -52,6 +52,8 @@
 #include <machine/i82489var.h>
 #endif
 
+#include <sys/kasan.h>
+
 extern u_char acpi_real_mode_resume[], acpi_resume_end[];
 extern u_char acpi_tramp_data_start[], acpi_tramp_data_end[];
 extern u_int32_t acpi_pdirpa;
@@ -119,6 +121,7 @@ acpi_map(paddr_t pa, size_t len, struct acpi_mem_map *handle)
 
 	do {
 		pmap_kenter_pa(va, pgpa, PROT_READ | PROT_WRITE);
+		kasan_alloc(va, NBPG, NBPG);
 		va += NBPG;
 		pgpa += NBPG;
 	} while (pgpa < endpa);
