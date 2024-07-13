@@ -136,6 +136,7 @@
 #include <uvm/uvm.h>
 #ifdef KASAN
 #include <machine/kasan.h>
+#include <sys/kasan.h>
 #endif
 
 /*
@@ -696,6 +697,7 @@ km_alloc(size_t sz, const struct kmem_va_mode *kv,
 		TAILQ_FOREACH(pg, &pgl, pageq) {
 			va = pmap_map_direct(pg);
 			kasan_enter_shad_multi(va, PAGE_SIZE);
+			kasan_alloc(va, (kp->kp_zero) ? PAGE_SIZE : 0, PAGE_SIZE);
 			if (pg == TAILQ_FIRST(&pgl))
 				sva = va;
 		}
@@ -768,6 +770,7 @@ try_map:
 		va += PAGE_SIZE;
 	}
 	kasan_enter_shad_multi(sva, sz);
+	kasan_alloc(sva, (kp->kp_zero) ? sz : 0 , sz);
 	pmap_update(pmap_kernel());
 	return ((void *)sva);
 }
