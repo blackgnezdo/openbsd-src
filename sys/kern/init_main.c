@@ -434,7 +434,9 @@ main(void *framep)
 		if (fork1(p, FORK_FORK, start_init, NULL, NULL, &initproc))
 			panic("fork init");
 		initprocess = initproc->p_p;
+#ifdef KASAN
 printf("DEBUG PARENT: kasan_in_init=%d\n", kasan_in_init);
+#endif
 	}
 
 	/*

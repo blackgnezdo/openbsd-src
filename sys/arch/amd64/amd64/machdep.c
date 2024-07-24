@@ -101,7 +101,9 @@
 #include <machine/kcore.h>
 #include <machine/tss.h>
 #include <machine/ghcb.h>
+#ifdef KASAN
 #include <machine/kasan.h>
+#endif
 #include <machine/kexec.h>
 
 #include <dev/isa/isareg.h>
