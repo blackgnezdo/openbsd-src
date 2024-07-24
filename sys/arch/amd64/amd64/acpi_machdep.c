@@ -121,7 +121,9 @@ acpi_map(paddr_t pa, size_t len, struct acpi_mem_map *handle)
 
 	do {
 		pmap_kenter_pa(va, pgpa, PROT_READ | PROT_WRITE);
+#ifdef KASAN
 		kasan_alloc(va, NBPG, NBPG);
+#endif
 		va += NBPG;
 		pgpa += NBPG;
 	} while (pgpa < endpa);

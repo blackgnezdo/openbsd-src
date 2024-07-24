@@ -3096,8 +3096,10 @@ pmap_growkernel(vaddr_t maxkvaddr)
 	pmap_maxkvaddr = maxkvaddr;
 	splx(s);
 
+#ifdef KASAN
 	kasan_enter_shad_multi((vaddr_t)VM_MIN_KERNEL_ADDRESS, 
 	    maxkvaddr - VM_MIN_KERNEL_ADDRESS);
+#endif
 
 	return maxkvaddr;
 }

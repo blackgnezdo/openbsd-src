@@ -696,8 +696,12 @@ km_alloc(size_t sz, const struct kmem_va_mode *kv,
 	if (kv->kv_singlepage || kp->kp_maxseg == 1) {
 		TAILQ_FOREACH(pg, &pgl, pageq) {
 			va = pmap_map_direct(pg);
+#ifdef KASAN
+/* XXX: how to handle direct map?
 			kasan_enter_shad_multi(va, PAGE_SIZE);
 			kasan_alloc(va, (kp->kp_zero) ? PAGE_SIZE : 0, PAGE_SIZE);
+*/
+#endif
 			if (pg == TAILQ_FIRST(&pgl))
 				sva = va;
 		}
@@ -769,8 +773,10 @@ try_map:
 			pmap_kenter_pa(va, VM_PAGE_TO_PHYS(pg), prot);
 		va += PAGE_SIZE;
 	}
+#ifdef KASAN
 	kasan_enter_shad_multi(sva, sz);
 	kasan_alloc(sva, (kp->kp_zero) ? sz : 0 , sz);
+#endif
 	pmap_update(pmap_kernel());
 	return ((void *)sva);
 }
