@@ -28,9 +28,9 @@
 void kasan_init(void);
 int pmap_get_physpage(vaddr_t, int, paddr_t *); // XXX
 
-static int kasan_enabled = 0;
-static paddr_t kasan_zero = 0;
-int kasan_in_init = 0;
+static int kasan_enabled;
+static paddr_t kasan_zero;
+int kasan_in_init;
 
 inline char *
 kasan_addr_to_shad(vaddr_t va)
