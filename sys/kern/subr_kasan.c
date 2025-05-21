@@ -32,6 +32,13 @@ static int kasan_enabled = 0;
 static paddr_t kasan_zero = 0;
 int kasan_in_init = 0;
 
+inline char *
+kasan_addr_to_shad(vaddr_t va)
+{
+	return (char *)(KASAN_SHADOW_START +
+	    ((va - VM_MIN_KERNEL_ADDRESS) >> KASAN_SHADOW_SCALE_SHIFT));
+}
+
 static int
 kasan_unsupported(vaddr_t addr)
 {
