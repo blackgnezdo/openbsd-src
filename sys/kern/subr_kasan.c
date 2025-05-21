@@ -31,6 +31,8 @@ int pmap_get_physpage(vaddr_t, int, paddr_t *); // XXX
 static int kasan_enabled;
 static paddr_t kasan_zero;
 int kasan_in_init;
+static char kasan_early_pages[USPACE + 3 * PAGE_SIZE] __aligned(PAGE_SIZE);
+static size_t kasan_allocated_early_pages;
 
 inline char *
 kasan_addr_to_shad(vaddr_t va)
@@ -163,6 +165,82 @@ printf("mapped 0x%lx to 0x%lx\n", sva, sva + ssz);
 
 }
 
+paddr_t
+kasan_get_early_page(void)
+{
+	paddr_t npa;
+	size_t n = kasan_allocated_early_pages++;
+	npa = (vaddr_t)&kasan_early_pages[0] + n * PAGE_SIZE;
+	return npa - KERNBASE;
+}
+
+void
+kasan_enter_early_shad(vaddr_t sva)
+{
+	uint64_t l4idx, l3idx, l2idx, l1idx;
+	pd_entry_t *pd, npte;
+	paddr_t npa;
+
+	l4idx = (sva & L4_MASK) >> L4_SHIFT;
+	l3idx = (sva & L3_MASK) >> L3_SHIFT;
+	l2idx = (sva & L2_MASK) >> L2_SHIFT;
+	l1idx = (sva & L1_MASK) >> L1_SHIFT;
+
+	pd = (pd_entry_t *)(proc0.p_addr->u_pcb.pcb_cr3 + KERNBASE);
+
+	npa = pd[l4idx] & PMAP_PA_MASK & PG_FRAME;
+	if (!npa) {
+		npa = kasan_get_early_page();
+		pd[l4idx] = (npa | PG_KW | pg_nx | PG_V);
+	}
+
+	pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
+	if (pd == NULL)
+		panic("%s: can't locate PDPT @ pa=0x%llx", __func__,
+		    (uint64_t)npa);
+
+	npa = pd[l3idx] & PMAP_PA_MASK & PG_FRAME;
+	if (!npa) {
+		npa = kasan_get_early_page();
+		pd[l3idx] = (npa | PG_KW | pg_nx | PG_V);
+	}
+
+	pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
+	if (pd == NULL)
+		panic("%s: can't locate PD page @ pa=0x%llx", __func__,
+		    (uint64_t)npa);
+
+	npa = pd[l2idx] & PMAP_PA_MASK & PG_FRAME;
+	if (!npa) {
+		npa = kasan_get_early_page();
+		pd[l2idx] = (npa | PG_KW | pg_g_kern | pg_nx | PG_V);
+	}
+
+	pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
+	if (pd == NULL)
+		panic("%s: can't locate PT page @ pa=0x%llx", __func__,
+		    (uint64_t)npa);
+
+	npa = kasan_get_early_page();
+	npte = npa | PG_KW | pg_nx | PG_V;
+	pd[l1idx] = npte;
+}
+
+/*
+ * Map the stack to avoid crashing in early initialization code.
+ */
+void
+kasan_bootstrap(void) {
+	size_t i;
+	vaddr_t sva;
+
+	sva = (vaddr_t)kasan_addr_to_shad((vaddr_t)proc0.p_addr + USPACE - 16);
+	sva = (sva / PAGE_SIZE) * PAGE_SIZE;
+
+	for (i = 0; i < UPAGES; i++)
+		kasan_enter_early_shad(sva + i * PAGE_SIZE);
+}
+
 vaddr_t		pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 /*
  * Create the shadow mapping. We don't create the 'User' area, because we
@@ -183,11 +261,6 @@ printf("allocing kasan_zero\n");
 	kasan_zero = PMAP_DIRECT_UNMAP(zva);
 	pmap_get_physpage(zva, 1, &kasan_zero);
 	__builtin_memset((char *)zva, 0xFF, PAGE_SIZE);
-
-printf("stack: 0x%lx\n", (vaddr_t)proc0.p_addr + USPACE - 16);
-	/* map stack memory */
-	kasan_enter_shad_multi((vaddr_t)proc0.p_addr + USPACE - 16,
-	    1024 * 1024 * 2);
 
 	/* Call the ASAN constructors. */
 	kasan_ctors();
