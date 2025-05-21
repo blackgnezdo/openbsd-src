@@ -164,7 +164,7 @@ CFLAGS+=	-fno-wrapv
 KASAN_ENABLED = -fsanitize=kernel-address --param asan-globals=1 -mllvm -asan-instrumentation-with-call-threshold=0 -mllvm -asan-mapping-offset=0xdfff908000000000
 
 .if ${IDENT:M-DKASAN} && ${COMPILER_VERSION:Mclang}
-#CFLAGS+=${KASAN_ENABLED}
+CFLAGS+=${KASAN_ENABLED}
 .endif
 
 %LOAD
@@ -231,10 +231,6 @@ kasan.o: $S/arch/amd64/amd64/kasan.c
 	${NORMAL_C} -fno-sanitize=kernel-address
 subr_kasan.o: $S/kern/subr_kasan.c
 	${NORMAL_C} -fno-sanitize=kernel-address
-machdep.o: $S/arch/amd64/amd64/machdep.c
-	${NORMAL_C} -fno-sanitize=kernel-address
-init_main.o: $S/kern/init_main.c
-	${NORMAL_C} ${KASAN_ENABLED}
 .endif
 
 HARDFLOAT_CFLAGS= -msse -msse2
