@@ -27,13 +27,6 @@
 
 extern int kasan_in_init;
 
-inline char *
-kasan_addr_to_shad(vaddr_t va)
-{
-	return (char *)(KASAN_SHADOW_START +
-	    ((va - VM_MIN_KERNEL_ADDRESS) >> KASAN_SHADOW_SCALE_SHIFT));
-}
-
 void	 kasan_add_redzone(size_t *);
 void	 kasan_alloc(vaddr_t, size_t, size_t);
 void	 kasan_free(vaddr_t, size_t);
