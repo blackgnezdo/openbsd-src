@@ -174,7 +174,7 @@ kasan_init(void)
 {
 	vaddr_t zva;
 
-	if(kasan_enabled)
+	if (kasan_enabled)
 		panic("KASAN already enabled");
 	kasan_enabled = 1;
 
