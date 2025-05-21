@@ -189,8 +189,6 @@ printf("stack: 0x%lx\n", (vaddr_t)proc0.p_addr + USPACE - 16);
 	kasan_enter_shad_multi((vaddr_t)proc0.p_addr + USPACE - 16,
 	    1024 * 1024 * 2);
 
-	kasan_enter_shad_multi(VM_MIN_KERNEL_ADDRESS,
-	    VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS);
 	/* Call the ASAN constructors. */
 	kasan_ctors();
 }
