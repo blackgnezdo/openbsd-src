@@ -174,24 +174,23 @@ kasan_init(void)
 {
 	vaddr_t zva;
 
-	if (kasan_zero == 0) {
+	if(kasan_enabled)
+		panic("KASAN already enabled");
+	kasan_enabled = 1;
+
 printf("allocing kasan_zero\n");
-		zva = pmap_steal_memory(PAGE_SIZE, NULL, NULL);
-                kasan_zero = PMAP_DIRECT_UNMAP(zva);
-		pmap_get_physpage(zva, 1, &kasan_zero);
-		__builtin_memset((char *)zva, 0xFF, PAGE_SIZE);
-	}
+	zva = pmap_steal_memory(PAGE_SIZE, NULL, NULL);
+	kasan_zero = PMAP_DIRECT_UNMAP(zva);
+	pmap_get_physpage(zva, 1, &kasan_zero);
+	__builtin_memset((char *)zva, 0xFF, PAGE_SIZE);
 
 printf("stack: 0x%lx\n", (vaddr_t)proc0.p_addr + USPACE - 16);
-
 	/* map stack memory */
 	kasan_enter_shad_multi((vaddr_t)proc0.p_addr + USPACE - 16,
 	    1024 * 1024 * 2);
 
 	kasan_enter_shad_multi(VM_MIN_KERNEL_ADDRESS,
 	    VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS);
-	kasan_enabled = 1;
-
 	/* Call the ASAN constructors. */
 	kasan_ctors();
 }
