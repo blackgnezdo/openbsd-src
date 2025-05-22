@@ -554,35 +554,30 @@ ASAN_LOAD_STORE(16);
 void
 __asan_loadN(unsigned long addr, size_t size)
 {
-printf("%s\n", __func__);
 	kasan_shadow_check(addr, size, 0, __RET_ADDR);
 }
 
 void
 __asan_loadN_noabort(unsigned long addr, size_t size)
 {
-printf("%s\n", __func__);
 	kasan_shadow_check(addr, size, 0, __RET_ADDR);
 }
 
 void
 __asan_storeN(unsigned long addr, size_t size)
 {
-printf("%s\n", __func__);
 	kasan_shadow_check(addr, size, 1, __RET_ADDR);
 }
 
 void
 __asan_storeN_noabort(unsigned long addr, size_t size)
 {
-printf("%s\n", __func__);
 	kasan_shadow_check(addr, size, 1, __RET_ADDR);
 }
 
 void
 __asan_handle_no_return(void)
 {
-printf("%s\n", __func__);
 	/* nothing */
 }
 
