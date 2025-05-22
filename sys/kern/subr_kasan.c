@@ -187,41 +187,28 @@ kasan_enter_early_shad(vaddr_t sva)
 	l2idx = (sva & L2_MASK) >> L2_SHIFT;
 	l1idx = (sva & L1_MASK) >> L1_SHIFT;
 
-	pd = (pd_entry_t *)(proc0.p_addr->u_pcb.pcb_cr3 + KERNBASE);
-
+	pd = (pd_entry_t *)(proc0paddr->u_pcb.pcb_cr3 + KERNBASE);
 	npa = pd[l4idx] & PMAP_PA_MASK & PG_FRAME;
 	if (!npa) {
 		npa = kasan_get_early_page();
 		pd[l4idx] = (npa | PG_KW | pg_nx | PG_V);
 	}
 
-	pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
-	if (pd == NULL)
-		panic("%s: can't locate PDPT @ pa=0x%llx", __func__,
-		    (uint64_t)npa);
-
+	pd = (pd_entry_t *)(npa + KERNBASE);
 	npa = pd[l3idx] & PMAP_PA_MASK & PG_FRAME;
 	if (!npa) {
 		npa = kasan_get_early_page();
 		pd[l3idx] = (npa | PG_KW | pg_nx | PG_V);
 	}
 
-	pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
-	if (pd == NULL)
-		panic("%s: can't locate PD page @ pa=0x%llx", __func__,
-		    (uint64_t)npa);
-
+	pd = (pd_entry_t *)(npa + KERNBASE);
 	npa = pd[l2idx] & PMAP_PA_MASK & PG_FRAME;
 	if (!npa) {
 		npa = kasan_get_early_page();
 		pd[l2idx] = (npa | PG_KW | pg_g_kern | pg_nx | PG_V);
 	}
 
-	pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
-	if (pd == NULL)
-		panic("%s: can't locate PT page @ pa=0x%llx", __func__,
-		    (uint64_t)npa);
-
+	pd = (pd_entry_t *)(npa + KERNBASE);
 	npa = kasan_get_early_page();
 	npte = npa | PG_KW | pg_nx | PG_V;
 	pd[l1idx] = npte;
