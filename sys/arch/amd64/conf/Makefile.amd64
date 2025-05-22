@@ -78,7 +78,7 @@ INCLUDES=	-nostdinc -I$S -I${.OBJDIR} -I$S/arch \
 CPPFLAGS=	${INCLUDES} ${IDENT} ${PARAM} -D_KERNEL -MD -MP
 CWARNFLAGS=	-Werror -Wall -Wimplicit-function-declaration \
 		-Wno-pointer-sign \
-		-Wframe-larger-than=2047
+		-Wframe-larger-than=16382
 
 CMACHFLAGS=	-mcmodel=kernel -mno-red-zone -mno-sse2 -mno-sse -mno-3dnow \
 		-mno-mmx -msoft-float -fno-omit-frame-pointer
@@ -163,6 +163,17 @@ CFLAGS+=	-fsanitize=undefined
 CFLAGS+=	-fno-wrapv
 .endif
 
+.if ${IDENT:M-DKASAN} && ${COMPILER_VERSION:Mclang}
+# KASAN_OFFSET =	KASAN_SHADOW_START - (KERNBASE >> 3)
+KASAN_OFFSET =		0xdfff908000000000
+# Some files don't need asan-globals=1
+CFLAGS+=	-Wno-unused-command-line-argument
+KASAN_ENABLED =	-fsanitize=kernel-address --param asan-globals=1 -mllvm \
+		-asan-instrumentation-with-call-threshold=0 -mllvm \
+		-asan-mapping-offset=${KASAN_OFFSET}
+CFLAGS+=	${KASAN_ENABLED}
+.endif
+
 %LOAD
 
 # cc's -MD puts the source and output paths in the dependency file;
@@ -219,6 +230,17 @@ vers.o: ${SYSTEM_DEP:Ngap.o}
 .if ${SYSTEM_OBJ:Mkcov.o} && ${COMPILER_VERSION:Mclang}
 kcov.o: $S/dev/kcov.c
 	${NORMAL_C} -fno-sanitize-coverage=trace-pc,trace-cmp
+.endif
+
+kern_malloc.o: $S/kern/kern_malloc.c
+	${NORMAL_C} -O0 -g
+
+# XXX: add subr_asan.o check
+.if ${SYSTEM_OBJ:Mkasan.o} && ${COMPILER_VERSION:Mclang}
+kasan.o: $S/arch/amd64/amd64/kasan.c
+	${NORMAL_C} -fno-sanitize=kernel-address
+subr_kasan.o: $S/kern/subr_kasan.c
+	${NORMAL_C} -fno-sanitize=kernel-address
 .endif
 
 HARDFLOAT_CFLAGS= -msse -msse2
