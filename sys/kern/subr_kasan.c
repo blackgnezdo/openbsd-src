@@ -43,7 +43,7 @@ kasan_addr_to_shad(vaddr_t va)
 }
 
 static int
-kasan_unsupported(vaddr_t addr)
+kasan_va_out_of_range(vaddr_t addr)
 {
 	return (addr >= VM_MAX_KERNEL_ADDRESS ||
 	    addr < VM_MIN_KERNEL_ADDRESS);
@@ -276,7 +276,7 @@ kasan_shadow_fill(vaddr_t addr, size_t size, uint8_t val)
 		return;
 	if (size == 0)
 		return;
-	if (kasan_unsupported(addr))
+	if (kasan_va_out_of_range(addr))
 		return;
 
 	KASSERT(addr % KASAN_SHADOW_SCALE_SIZE == 0);
@@ -337,7 +337,7 @@ kasan_alloc(vaddr_t addr, size_t size, size_t sz_with_redz)
 		return;
 	if (size == 0)
 		return;
-	if (kasan_unsupported(addr))
+	if (kasan_va_out_of_range(addr))
 		panic("malloc 0x%lx outside of VM_KERNEL_ADDRESS range", addr);
 	printf("kasan_alloc 0x%lx %lu %lu\n", addr, sz_with_redz, size);
 	kasan_markmem(addr, sz_with_redz, 0);
@@ -351,7 +351,7 @@ kasan_free(vaddr_t addr, size_t sz_with_redz)
 		return;
 	if (sz_with_redz == 0)
 		return;
-	if (kasan_unsupported(addr))
+	if (kasan_va_out_of_range(addr))
 		return;
 
 	kasan_markmem(addr, sz_with_redz, 1);
@@ -437,7 +437,7 @@ kasan_shadow_check(vaddr_t addr, size_t size, int op, vaddr_t retaddr)
 		return;
 	if (size == 0)
 		return;
-	if (kasan_unsupported(addr))
+	if (kasan_va_out_of_range(addr))
 		return;
 
 	if (__builtin_constant_p(size)) {
