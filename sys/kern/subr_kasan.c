@@ -165,6 +165,9 @@ printf("mapped 0x%lx to 0x%lx\n", sva, sva + ssz);
 
 }
 
+/*
+ * Get a physical page by subtracting KERNBASE from an aligned virtual address.
+ */
 paddr_t
 kasan_get_early_page(void)
 {
@@ -174,6 +177,9 @@ kasan_get_early_page(void)
 	return npa - KERNBASE;
 }
 
+/*
+ * Add page table entries using pages backed by .data in the kernel image.
+ */
 void
 kasan_enter_early_shad(vaddr_t sva)
 {
@@ -214,7 +220,7 @@ kasan_enter_early_shad(vaddr_t sva)
 }
 
 /*
- * Map the stack to avoid crashing in early initialization code.
+ * Add shadow memory of the stack to avoid crashing in init_x86_64's prologue.
  */
 void
 kasan_bootstrap(void) {
