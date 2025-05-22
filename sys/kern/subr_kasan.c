@@ -153,8 +153,7 @@ kasan_enter_shad_multi(vaddr_t va, size_t sz)
 	spgs = (ssz + PAGE_SIZE - 1) / PAGE_SIZE;
 
 printf("early start: 0x%llx\n", VA_SIGN_NEG((L4_SLOT_EARLY * NBPD_L4)));
-printf("shadow start: 0x%lx\n", KASAN_SHADOW_START);
-printf("shadow end: 0x%lx\n", KASAN_SHADOW_END);
+printf("shadow start: 0x%llx\n", KASAN_SHADOW_START);
 printf("mapped 0x%lx to 0x%lx\n", sva, sva + ssz);
 	for (i = 0; i < spgs; i++)
 {
