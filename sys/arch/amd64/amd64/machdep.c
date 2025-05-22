@@ -1427,9 +1427,6 @@ paddr_t early_pte_pages;
 void
 init_x86_64(paddr_t first_avail)
 {
-#ifdef KASAN
-	kasan_bootstrap();
-#endif
 	struct region_descriptor region;
 	bios_memmap_t *bmp;
 	int x, ist;
