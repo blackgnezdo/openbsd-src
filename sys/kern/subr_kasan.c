@@ -272,7 +272,7 @@ kasan_shadow_fill(vaddr_t addr, size_t size, uint8_t val)
 {
 	char *shad;
 
-	if (!kasan_enabled || kasan_in_init)
+	if (kasan_in_init)
 		return;
 	if (size == 0)
 		return;
@@ -333,21 +333,22 @@ kasan_markmem(vaddr_t addr, size_t size, int valid)
 void
 kasan_alloc(vaddr_t addr, size_t size, size_t sz_with_redz)
 {
-	if (!kasan_enabled || kasan_in_init)
-		return;
-	if (size == 0)
+	if (kasan_in_init)
 		return;
 	if (kasan_unsupported(addr))
 		panic("malloc 0x%lx outside of VM_KERNEL_ADDRESS range", addr);
 	printf("kasan_alloc 0x%lx %lu %lu\n", addr, sz_with_redz, size);
 	kasan_markmem(addr, sz_with_redz, 0);
+
+	if (size == 0)
+		return;
 	kasan_markmem(addr, size, 1);
 }
 
 void
 kasan_free(vaddr_t addr, size_t sz_with_redz)
 {
-	if (!kasan_enabled || kasan_in_init)
+	if (kasan_in_init)
 		return;
 	if (sz_with_redz == 0)
 		return;
