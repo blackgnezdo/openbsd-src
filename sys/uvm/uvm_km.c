@@ -427,7 +427,7 @@ uvm_km_kmemalloc_pla(struct vm_map *map, struct uvm_object *obj, vsize_t size,
 		rw_exit(obj->vmobjlock);
 #ifdef KASAN
 	kasan_enter_shad_multi(kva, size);
-	kasan_alloc(kva, (flags & UVM_KMF_ZERO) ? osize : 0 , osize);
+	kasan_alloc(kva, (flags & UVM_KMF_ZERO) ? osize : 0 , size);
 #endif
 	return kva;
 }
