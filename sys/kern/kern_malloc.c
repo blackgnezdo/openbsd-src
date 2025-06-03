@@ -164,8 +164,6 @@ malloc(size_t size, int type, int flags)
 #endif
 #ifdef KASAN
 	size_t osize = size;
-
-	// kasan_add_redzone(&size); // XXX WHAT IS THIS
 #endif
 #ifdef KMEMSTATS
 	struct kmemstats *ksp = &kmemstats[type];
@@ -173,6 +171,9 @@ malloc(size_t size, int type, int flags)
 
 	if (((unsigned long)type) <= 1 || ((unsigned long)type) >= M_LAST)
 		panic("malloc: bogus type %d", type);
+#endif
+#ifdef KASAN
+	kasan_add_redzone(&size);
 #endif
 
 	KASSERT(flags & (M_WAITOK | M_NOWAIT));
@@ -284,7 +285,11 @@ malloc(size_t size, int type, int flags)
 		cp = va + (npg * PAGE_SIZE) - allocsize;
 		for (;;) {
 			freep = (struct kmem_freelist *)cp;
-#ifndef KASAN
+#ifdef KASAN
+			kasan_alloc((vaddr_t)freep,
+			    sizeof(struct kmem_freelist), 0);
+			freep->kf_type = M_FREE;
+#else
 #ifdef DIAGNOSTIC
 			/*
 			 * Copy in known text to detect modification
