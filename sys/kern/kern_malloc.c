@@ -280,6 +280,7 @@ malloc(size_t size, int type, int flags)
 		cp = va + (npg * PAGE_SIZE) - allocsize;
 		for (;;) {
 			freep = (struct kmem_freelist *)cp;
+#ifndef KASAN
 #ifdef DIAGNOSTIC
 			/*
 			 * Copy in known text to detect modification
@@ -288,6 +289,7 @@ malloc(size_t size, int type, int flags)
 			poison_mem(cp, allocsize);
 			freep->kf_type = M_FREE;
 #endif /* DIAGNOSTIC */
+#endif /* !KASAN */
 			XSIMPLEQ_INSERT_HEAD(&kbp->kb_freelist, freep,
 			    kf_flist);
 			if (cp <= va)
