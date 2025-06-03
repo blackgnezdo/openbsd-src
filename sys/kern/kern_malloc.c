@@ -163,9 +163,9 @@ malloc(size_t size, int type, int flags)
 	char *savedtype;
 #endif
 #ifdef KASAN
-	size_t origsz = size;
+	size_t osize = size;
 
-	kasan_add_redzone(&size);
+	// kasan_add_redzone(&size); // XXX WHAT IS THIS
 #endif
 #ifdef KMEMSTATS
 	struct kmemstats *ksp = &kmemstats[type];
@@ -265,6 +265,9 @@ malloc(size_t size, int type, int flags)
 #ifdef KMEMSTATS
 		kbp->kb_total += kbp->kb_elmpercl;
 #endif
+#ifdef KASAN
+		kasan_alloc((vaddr_t)va, osize, size);
+#endif
 		kup = btokup(va);
 		kup->ku_indx = indx;
 #ifdef DIAGNOSTIC
@@ -361,13 +364,10 @@ out:
 #endif
 	mtx_leave(&malloc_mtx);
 
-#ifdef KASAN
-	kasan_alloc((vaddr_t)va, origsz, size);
-#endif
 	if ((flags & M_ZERO) && va != NULL)
 		memset(va, 0,
 #ifdef KASAN
-		    origsz
+		    osize
 #else
 		    size
 #endif
