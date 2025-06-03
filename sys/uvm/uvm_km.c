@@ -703,10 +703,8 @@ km_alloc(size_t sz, const struct kmem_va_mode *kv,
 		TAILQ_FOREACH(pg, &pgl, pageq) {
 			va = pmap_map_direct(pg);
 #ifdef KASAN
-/* XXX: how to handle direct map?
 			kasan_enter_shad_multi(va, PAGE_SIZE);
 			kasan_alloc(va, (kp->kp_zero) ? PAGE_SIZE : 0, PAGE_SIZE);
-*/
 #endif
 			if (pg == TAILQ_FIRST(&pgl))
 				sva = va;
