@@ -66,6 +66,8 @@ db_elf_sym_init(int symsize, void *symtab, void *esymtab, const char *name)
 	int i;
 	char *errstr = "";
 
+	db_printf("[ %s symbol table addresses %p - %p ]\n",
+	    name, symtab, esymtab);
 	if (ALIGNED_POINTER(symtab, long) == 0) {
 		db_printf("[ %s symbol table has bad start address %p ]\n",
 		    name, symtab);
