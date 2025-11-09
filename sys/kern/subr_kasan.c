@@ -509,7 +509,6 @@ kasan_register_global(struct __asan_global *global)
 void
 __asan_register_globals(struct __asan_global *globals, size_t size)
 {
-printf("%s\n", __func__);
 	size_t i;
 	for (i = 0; i < size; i++) {
 		kasan_register_global(&globals[i]);
