@@ -287,7 +287,7 @@ malloc(size_t size, int type, int flags)
 			freep = (struct kmem_freelist *)cp;
 #ifdef KASAN
 			kasan_alloc((vaddr_t)freep,
-			    sizeof(struct kmem_freelist), 0);
+			    sizeof(*freep), sizeof(*freep));
 			freep->kf_type = M_FREE;
 #else
 #ifdef DIAGNOSTIC
