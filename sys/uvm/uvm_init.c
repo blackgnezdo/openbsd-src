@@ -62,6 +62,24 @@ vaddr_t vm_min_kernel_address = VM_MIN_KERNEL_ADDRESS;
 vaddr_t vm_min_kernel_address;
 #endif
 
+void
+malloc_test()
+{
+	const int TYPE = M_PF;
+	for (int i = 0; i < 20; ++i) {
+		const size_t SIZE_p = ((1 << 19) >> (20-i));
+		void *p = malloc(SIZE_p, TYPE, M_ZERO | M_WAITOK);
+		printf("p %zu malloc_test %p\n", SIZE_p, p);
+		const size_t SIZE_q = SIZE_p + i;
+		void *q = malloc(SIZE_q, TYPE, M_ZERO | M_WAITOK);
+		printf("q %zu malloc_test %p\n", SIZE_q, q);
+		free(p, TYPE, SIZE_p);
+		free(q, TYPE, SIZE_q);
+	}
+	extern void vmkill_now(void);
+	vmkill_now();
+}
+
 /*
  * local prototypes
  */
@@ -147,6 +165,8 @@ uvm_init(void)
 	 * step 10: start uvm_km_page allocator thread.
 	 */
 	uvm_km_page_lateinit();
+
+	malloc_test();
 
 	/*
 	 * the VM system is now up!  now that malloc is up we can
