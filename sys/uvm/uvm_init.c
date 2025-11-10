@@ -62,6 +62,19 @@ vaddr_t vm_min_kernel_address = VM_MIN_KERNEL_ADDRESS;
 vaddr_t vm_min_kernel_address;
 #endif
 
+void
+malloc_test()
+{
+	// 100 -> assertion "addr % KASAN_SHADOW_SCALE_SIZE == 0" failed
+	for (int i = 7; i < 20; ++i) {
+		const size_t SIZE = 1 << i;
+		const int TYPE = M_PF;
+		void *p = malloc(SIZE, TYPE, M_ZERO | M_WAITOK);
+		printf("malloc_test %p\n", p);
+		free(p, TYPE, SIZE);
+	}
+}
+
 /*
  * local prototypes
  */
@@ -147,6 +160,8 @@ uvm_init(void)
 	 * step 10: start uvm_km_page allocator thread.
 	 */
 	uvm_km_page_lateinit();
+
+	malloc_test();
 
 	/*
 	 * the VM system is now up!  now that malloc is up we can
