@@ -4212,7 +4212,7 @@ int
 svm_handle_exit(struct vcpu *vcpu)
 {
 	uint64_t exit_reason, rflags;
-	int update_rip, ret = 0;
+	int update_rip, ret = 0, guest_cpl;
 	struct vmcb *vmcb = (struct vmcb *)vcpu->vc_control_va;
 
 	update_rip = 0;
@@ -4273,7 +4273,6 @@ svm_handle_exit(struct vcpu *vcpu)
 	case SVM_VMEXIT_MWAIT_CONDITIONAL:
 	case SVM_VMEXIT_MONITOR:
 	case SVM_VMEXIT_VMRUN:
-	case SVM_VMEXIT_VMMCALL:
 	case SVM_VMEXIT_VMLOAD:
 	case SVM_VMEXIT_VMSAVE:
 	case SVM_VMEXIT_STGI:
@@ -4293,6 +4292,14 @@ svm_handle_exit(struct vcpu *vcpu)
 		break;
 	case SVM_VMEXIT_VMGEXIT:
 		ret = svm_handle_vmgexit(vcpu);
+		break;
+	case SVM_VMEXIT_VMMCALL:
+		guest_cpl = vmm_get_guest_cpu_cpl(vcpu);
+		if (guest_cpl == 0)
+			return (EINVAL);
+		DPRINTF("SVMX_EXIT_VMCALL at cpl=%d\n", guest_cpl);
+		ret = vmm_inject_ud(vcpu);
+		update_rip = 0;
 		break;
 	default:
 		DPRINTF("%s: unhandled exit 0x%llx (pa=0x%llx)\n", __func__,
@@ -4639,7 +4646,7 @@ int
 vmx_handle_exit(struct vcpu *vcpu)
 {
 	uint64_t exit_reason, rflags, istate;
-	int update_rip, ret = 0;
+	int update_rip, ret = 0, guest_cpl;
 
 	update_rip = 0;
 	exit_reason = vcpu->vc_gueststate.vg_exit_reason;
@@ -4702,7 +4709,6 @@ vmx_handle_exit(struct vcpu *vcpu)
 	case VMX_EXIT_VMPTRLD:
 	case VMX_EXIT_VMPTRST:
 	case VMX_EXIT_VMCLEAR:
-	case VMX_EXIT_VMCALL:
 	case VMX_EXIT_VMFUNC:
 	case VMX_EXIT_VMXOFF:
 	case VMX_EXIT_INVVPID:
@@ -4719,6 +4725,14 @@ vmx_handle_exit(struct vcpu *vcpu)
 		vmx_dump_vmcs(vcpu);
 #endif /* VMM_DEBUG */
 		ret = EAGAIN;
+		update_rip = 0;
+		break;
+	case VMX_EXIT_VMCALL:
+		guest_cpl = vmm_get_guest_cpu_cpl(vcpu);
+		if (guest_cpl == 0)
+			return (EINVAL);
+		DPRINTF("VMX_EXIT_VMCALL at cpl=%d\n", guest_cpl);
+		ret = vmm_inject_ud(vcpu);
 		update_rip = 0;
 		break;
 	default:
