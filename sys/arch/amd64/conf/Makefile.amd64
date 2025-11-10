@@ -88,10 +88,7 @@ SORTR=		sort -R
 CMACHFLAGS+=	-fno-stack-protector
 .endif
 .if ${IDENT:M-DDDB}
-. if !${IDENT:M-DKASAN}
-# KASAN does not work with -msave-args, there is a clang bug.
 CMACHFLAGS+=	-msave-args
-. endif
 .endif
 .if ${IDENT:M-DSMALL_KERNEL}
 SORTR=		cat
