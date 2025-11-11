@@ -202,6 +202,24 @@ db_sysregs_cmd(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
 	db_printf("kgsb:   0x%016llx\n", gsb);
 }
 
+void
+vmkill_now()
+{
+	enum cpu_vendor t = curcpu()->ci_vendor;
+	if (t == CPUV_INTEL) {
+		vmkill_intel();
+	} else if (t == CPUV_AMD) {
+		vmkill_amd();
+	} else {
+		db_printf("Unknown CPU type %d\n", t);
+	}
+}
+
+void
+db_vmkill_cmd(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
+{
+	vmkill_now();
+}
 
 #ifdef MULTIPROCESSOR
 void
@@ -415,6 +433,7 @@ const struct db_command db_machine_command_table[] = {
 #if NACPI > 0
 	{ "acpi",	NULL,			0,	db_acpi_cmds },
 #endif /* NACPI > 0 */
+	{ "vmkill",	db_vmkill_cmd,		0,	0 },
 	{ NULL, },
 };
 
