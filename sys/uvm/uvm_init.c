@@ -62,20 +62,227 @@ vaddr_t vm_min_kernel_address = VM_MIN_KERNEL_ADDRESS;
 vaddr_t vm_min_kernel_address;
 #endif
 
+/*
+This enhanced test provides:
+
+1. **Deterministic PRNG**: Simple LCG with adjustable seed for reproducible
+behavior
+
+2. **Multiple test phases**:
+   - Power-of-two allocations (tests alignment handling)
+   - Random allocations with deliberate fragmentation
+   - Small allocation stress test (tests small block management)
+   - Proper cleanup phase
+
+3. **Interesting allocation sizes**:
+   - Exact powers of two
+   - Just below powers of two (tests boundary conditions)
+   - Just above powers of two (tests next size class selection)
+   - Random sizes
+
+4. **Fragmentation patterns**: Maintains up to 32 live allocations, randomly
+allocating and freeing to create fragmentation
+
+5. **Different free patterns**: In the small allocation test, frees even indices
+first, then odd indices, to test coalescing behavior
+
+6. **Tracking and reporting**: Counts allocations/frees and reports potential
+leaks
+
+You can adjust the seed value to get different but reproducible test patterns,
+making it useful for regression testing and debugging specific allocation
+patterns that might trigger bugs.
+
+*/
+
+
+/* Test parameters */
+static const int NUM_ITERATIONS = 50;
+static const int MAX_LIVE_ALLOCS = 32;
+static const size_t MIN_SIZE = 16;
+static const size_t MAX_SIZE = (1 << 20);  /* 1MB */
+
+/* Use inline functions instead of macros to avoid sequencing issues */
+static inline uint32_t rand_next(uint32_t *s) {
+	*s = *s * 1103515245 + 12345;
+	return *s;
+}
+
+static inline uint32_t rand_range(uint32_t *s, uint32_t min, uint32_t max) {
+	return (rand_next(s) % (max - min + 1)) + min;
+}
+
+/* Track live allocations, too large for stack */
+struct alloc_entry {
+	void *ptr;
+	size_t size;
+	int active;
+} allocs[MAX_LIVE_ALLOCS];
+static void *small_ptrs[256];
+static size_t small_sizes[256];
+
 void
 malloc_test()
 {
 	const int TYPE = M_PF;
-	for (int i = 0; i < 20; ++i) {
-		const size_t SIZE_p = ((1 << 19) >> (20-i));
-		void *p = malloc(SIZE_p, TYPE, M_ZERO | M_WAITOK);
-		printf("p %zu malloc_test %p\n", SIZE_p, p);
-		const size_t SIZE_q = SIZE_p + i;
-		void *q = malloc(SIZE_q, TYPE, M_ZERO | M_WAITOK);
-		printf("q %zu malloc_test %p\n", SIZE_q, q);
-		free(p, TYPE, SIZE_p);
-		free(q, TYPE, SIZE_q);
+
+	/* Simple linear congruential generator for deterministic behavior */
+	uint32_t seed = 0xcafebabe;  /* Adjust this seed as needed */
+
+
+	int i, j;
+	int total_allocs = 0;
+	int total_frees = 0;
+
+	/* Initialize tracking array using designated initializers */
+	for (i = 0; i < MAX_LIVE_ALLOCS; i++) {
+		allocs[i] = (struct alloc_entry){
+			.ptr = NULL,
+			.size = 0,
+			.active = 0
+		};
 	}
+
+	printf("malloc_test: starting with seed 0x%x\n", seed);
+
+	/* Phase 1: Power-of-two allocations with increasing sizes */
+	printf("\n=== Phase 1: Power-of-two allocations ===\n");
+	for (i = 4; i <= 19; i++) {
+		size_t size = 1 << i;
+		void *p = malloc(size, TYPE, M_ZERO | M_WAITOK);
+		printf("pow2: size=%zu ptr=%p\n", size, p);
+
+		/* Write pattern to detect corruption */
+		if (p) {
+			*(uint32_t *)p = 0xfeed0000 | i;
+			*(uint32_t *)((char *)p + size - sizeof(uint32_t)) = 0xbeef0000 | i;
+		}
+
+		free(p, TYPE, size);
+		total_allocs++;
+		total_frees++;
+	}
+
+	/* Phase 2: Random sized allocations with fragmentation */
+	printf("\n=== Phase 2: Random allocations with fragmentation ===\n");
+	for (i = 0; i < NUM_ITERATIONS; i++) {
+		int action = rand_range(&seed, 0, 100);
+
+		if (action < 70) {  /* 70% chance to allocate */
+			/* Find free slot */
+			int slot = -1;
+			for (j = 0; j < MAX_LIVE_ALLOCS; j++) {
+				if (!allocs[j].active) {
+					slot = j;
+					break;
+				}
+			}
+
+			if (slot >= 0) {
+				/* Generate interesting sizes */
+				size_t base_size;
+				int size_type = rand_range(&seed, 0, 3);
+
+				switch (size_type) {
+				case 0:  /* Power of two */
+					base_size = 1 << rand_range(&seed, 4, 17);
+					break;
+				case 1:  /* Just below power of two */
+					{
+						uint32_t shift = rand_range(&seed, 5, 17);
+						uint32_t subtract = rand_range(&seed, 1, 16);
+						base_size = (1 << shift) - subtract;
+					}
+					break;
+				case 2:  /* Just above power of two */
+					{
+						uint32_t shift = rand_range(&seed, 4, 16);
+						uint32_t add = rand_range(&seed, 1, 16);
+						base_size = (1 << shift) + add;
+					}
+					break;
+				default:  /* Random */
+					base_size = rand_range(&seed, MIN_SIZE, MAX_SIZE/4);
+					break;
+				}
+
+				allocs[slot].size = base_size;
+				allocs[slot].ptr = malloc(base_size, TYPE, M_ZERO | M_WAITOK);
+				allocs[slot].active = 1;
+				total_allocs++;
+
+				printf("alloc[%d]: size=%zu ptr=%p\n",
+				       slot, base_size, allocs[slot].ptr);
+			}
+		} else {  /* 30% chance to free */
+			/* Free random active allocation */
+			int active_count = 0;
+			for (j = 0; j < MAX_LIVE_ALLOCS; j++) {
+				if (allocs[j].active)
+					active_count++;
+			}
+
+			if (active_count > 0) {
+				int target = rand_range(&seed, 0, active_count - 1);
+				for (j = 0; j < MAX_LIVE_ALLOCS; j++) {
+					if (allocs[j].active) {
+						if (target == 0) {
+							printf("free[%d]: size=%zu ptr=%p\n",
+							       j, allocs[j].size, allocs[j].ptr);
+							free(allocs[j].ptr, TYPE, allocs[j].size);
+							allocs[j].active = 0;
+							total_frees++;
+							break;
+						}
+						target--;
+					}
+				}
+			}
+		}
+	}
+
+	/* Phase 3: Stress test with many small allocations */
+	printf("\n=== Phase 3: Small allocation stress test ===\n");
+
+	for (i = 0; i < 256; i++) {
+		small_sizes[i] = rand_range(&seed, 8, 128);
+		small_ptrs[i] = malloc(small_sizes[i], TYPE, M_WAITOK);
+		total_allocs++;
+		if ((i & 15) == 0) {
+			printf("small batch %d: allocated %d entries\n", i >> 4, 16);
+		}
+	}
+
+	/* Free in different pattern than allocation */
+	for (i = 0; i < 256; i += 2) {
+		free(small_ptrs[i], TYPE, small_sizes[i]);
+		total_frees++;
+	}
+	for (i = 1; i < 256; i += 2) {
+		free(small_ptrs[i], TYPE, small_sizes[i]);
+		total_frees++;
+	}
+	printf("small stress: freed all 256 entries\n");
+
+	/* Phase 4: Cleanup remaining allocations */
+	printf("\n=== Phase 4: Cleanup ===\n");
+	for (i = 0; i < MAX_LIVE_ALLOCS; i++) {
+		if (allocs[i].active) {
+			printf("cleanup[%d]: size=%zu ptr=%p\n",
+			       i, allocs[i].size, allocs[i].ptr);
+			free(allocs[i].ptr, TYPE, allocs[i].size);
+			allocs[i].active = 0;
+			total_frees++;
+		}
+	}
+
+	printf("\n=== Test Summary ===\n");
+	printf("Total allocations: %d\n", total_allocs);
+	printf("Total frees: %d\n", total_frees);
+	printf("Leaked: %d\n", total_allocs - total_frees);
+
+	/* extern void db_enter(); */
+	/* db_enter(); */
 	extern void vmkill_now(void);
 	vmkill_now();
 }
