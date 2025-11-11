@@ -446,6 +446,22 @@ vmgexit(void)
 	__asm volatile("rep; vmmcall");
 }
 
+/* Signals vmd(8) to terminate this guest */
+static __inline void
+vmkill_intel(void)
+{
+	__asm volatile("movq $0x1234, %rax");
+	__asm volatile("vmcall");
+}
+
+/* Signals vmd(8) to terminate this guest */
+static __inline void
+vmkill_amd(void)
+{
+	__asm volatile("movq $0x1234, %rax");
+	__asm volatile("vmmcall");
+}
+
 void amd64_errata(struct cpu_info *);
 void cpu_ucode_setup(void);
 void cpu_ucode_apply(struct cpu_info *);
