@@ -353,7 +353,7 @@ kasan_free(vaddr_t addr, size_t sz_with_redz)
 	if (kasan_unsupported(addr))
 		return;
 
-	kasan_markmem(addr, sz_with_redz, 1);
+	kasan_markmem(addr, sz_with_redz, 0);
 }
 
 static inline int
