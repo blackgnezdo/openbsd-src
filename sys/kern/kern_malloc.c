@@ -269,9 +269,6 @@ malloc(size_t size, int type, int flags)
 #ifdef KMEMSTATS
 		kbp->kb_total += kbp->kb_elmpercl;
 #endif
-#ifdef KASAN
-		kasan_alloc((vaddr_t)va, osize, size);
-#endif
 		kup = btokup(va);
 		kup->ku_indx = indx;
 #ifdef CHEAP_MEMORY_DEBUG
@@ -385,6 +382,9 @@ out:
 
 	TRACEPOINT(uvm, malloc, type, va, size, flags);
 
+#ifdef KASAN
+	kasan_alloc((vaddr_t)va, osize, size);
+#endif
 	return (va);
 }
 
