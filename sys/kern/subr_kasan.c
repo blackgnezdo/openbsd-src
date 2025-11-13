@@ -31,14 +31,14 @@ int pmap_get_physpage(vaddr_t, int, paddr_t *); // XXX
 static int kasan_enabled;
 static paddr_t kasan_zero;
 int kasan_in_init;
-static char kasan_early_pages[USPACE + 3 * PAGE_SIZE] __aligned(PAGE_SIZE);
+static uint8_t kasan_early_pages[USPACE + 3 * PAGE_SIZE] __aligned(PAGE_SIZE);
 static size_t kasan_allocated_early_pages;
 extern struct user *proc0paddr;
 
-inline char *
+inline static uint8_t *
 kasan_addr_to_shad(vaddr_t va)
 {
-	return (char *)(KASAN_SHADOW_START +
+	return (uint8_t *)(KASAN_SHADOW_START +
 	    ((va - VM_MIN_KERNEL_ADDRESS) >> KASAN_SHADOW_SCALE_SHIFT));
 }
 
@@ -253,7 +253,7 @@ printf("allocing kasan_zero\n");
 	zva = pmap_steal_memory(PAGE_SIZE, NULL, NULL);
 	kasan_zero = PMAP_DIRECT_UNMAP(zva);
 	pmap_get_physpage(zva, 1, &kasan_zero);
-	__builtin_memset((char *)zva, 0xFF, PAGE_SIZE);
+	__builtin_memset((uint8_t *)zva, 0xFF, PAGE_SIZE);
 
 	/* Call the ASAN constructors. */
 	kasan_ctors();
@@ -270,7 +270,7 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 static void
 kasan_shadow_fill(vaddr_t addr, size_t size, uint8_t val)
 {
-	char *shad;
+	uint8_t *shad;
 
 	if (kasan_in_init)
 		return;
@@ -291,8 +291,8 @@ kasan_shadow_fill(vaddr_t addr, size_t size, uint8_t val)
 static inline void
 kasan_shadow_1byte_markvalid(vaddr_t addr)
 {
-	char *byte = kasan_addr_to_shad(addr);
-	char last = (addr & KASAN_SHADOW_MASK) + 1;
+	uint8_t *byte = kasan_addr_to_shad(addr);
+	uint8_t last = (addr & KASAN_SHADOW_MASK) + 1;
 
 	*byte = last;
 }
@@ -359,8 +359,8 @@ kasan_free(vaddr_t addr, size_t sz_with_redz)
 static inline int
 kasan_shadow_1byte_isvalid(vaddr_t addr)
 {
-	char *byte = kasan_addr_to_shad(addr);
-	char last = (addr & KASAN_SHADOW_MASK) + 1;
+	uint8_t *byte = kasan_addr_to_shad(addr);
+	uint8_t last = (addr & KASAN_SHADOW_MASK) + 1;
 
 	return (*byte == 0 || last <= *byte);
 }
@@ -368,7 +368,7 @@ kasan_shadow_1byte_isvalid(vaddr_t addr)
 static inline int
 kasan_shadow_2byte_isvalid(vaddr_t addr)
 {
-	char *byte, last;
+	uint8_t *byte, last;
 
 	if (ADDR_CROSSES_SCALE_BOUNDARY(addr, 2)) {
 		return (kasan_shadow_1byte_isvalid(addr) &&
