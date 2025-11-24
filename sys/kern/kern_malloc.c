@@ -311,6 +311,9 @@ malloc(size_t size, int type, int flags)
 #endif
 	}
 	freep = XSIMPLEQ_FIRST(&kbp->kb_freelist);
+#ifdef KASAN
+	kasan_alloc((vaddr_t)freep, sizeof(*freep), sizeof(*freep));
+#endif
 	XSIMPLEQ_REMOVE_HEAD(&kbp->kb_freelist, kf_flist);
 	va = (caddr_t)freep;
 #ifdef CHEAP_MEMORY_DEBUG
@@ -519,6 +522,11 @@ free(void *addr, int type, size_t freedsize)
 	wake = ksp->ks_memuse + size >= ksp->ks_limit &&
 	    ksp->ks_memuse < ksp->ks_limit;
 	ksp->ks_inuse--;
+#endif
+#ifdef KASAN
+	/* XXX: broken when last the list is empty */
+	vaddr_t insert = (vaddr_t)XSIMPLEQ_XOR(&kbp->kb_freelist, kbp->kb_freelist.sqx_last);
+	kasan_alloc(insert, sizeof(*freep), sizeof(*freep));
 #endif
 	XSIMPLEQ_INSERT_TAIL(&kbp->kb_freelist, freep, kf_flist);
 	mtx_leave(&malloc_mtx);
