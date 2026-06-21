@@ -25,6 +25,14 @@ sender.c server.c session.c socket.c symlinks.c uploader.c"
 : "${OUT:=openrsync}"
 MODE="${1:-${MODE:-asan}}"
 
+# Persistence backend selection (mirrors the Makefile's FMAP_IMPL):
+#   mmap (default) -> fmap_mmap.c     file -> fmap_file.c
+: "${FMAP_IMPL:=mmap}"
+case "$FMAP_IMPL" in
+mmap|file) SRCS="$SRCS fmap_$FMAP_IMPL.c" ;;
+*) echo "build.sh: unknown FMAP_IMPL '$FMAP_IMPL' (mmap|file)" >&2; exit 2 ;;
+esac
+
 case "$MODE" in
 asan)
 	# -fno-common catches duplicate definitions; -fno-omit-frame-pointer
@@ -44,7 +52,7 @@ release|none)
 	;;
 esac
 
-echo "building $OUT [mode=$MODE]" >&2
+echo "building $OUT [mode=$MODE fmap=$FMAP_IMPL]" >&2
 exec $CC -w $SAN ${EXTRA_CFLAGS:-} \
 	-include compat/compat.h \
 	-Icompat \

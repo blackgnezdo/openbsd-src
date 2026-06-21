@@ -84,16 +84,42 @@ printf 'second file\n'             > "$src/b.txt"
 printf 'nested\n'                  > "$src/sub/c.txt"
 printf 'deeply nested content\n'  > "$src/sub/deep/d.txt"
 head -c 100000 /dev/urandom        > "$src/blob.bin"
+# A multi-megabyte file so the file-backend readahead cache is refilled
+# many times, and so delta transfers exercise real block matching.
+head -c 3000000 /dev/urandom       > "$src/big.bin"
 ln -s a.txt                          "$src/link"      2>/dev/null || true
 chmod 0750                           "$src/sub"
 
-# run DIR NAME CLIENT SERVER SRC DST
+# A "basis" tree: a copy of src with big.bin perturbed in the middle, so
+# that when used to pre-seed a transfer destination it forces the sender
+# through the rolling-hash matcher (insert/replace/keep) instead of a
+# plain whole-file send. This is the path that hammers fmap_data().
+basis=$work/basis
+cp -a "$src" "$basis"
+# Replace a 4 KB span ~1 MB in, and prepend 1234 bytes (shifts offsets).
+dd if=/dev/urandom of="$basis/big.bin" bs=1 seek=1000000 count=4096 \
+	conv=notrunc status=none
+head -c 1234 /dev/urandom > "$work/_pre"
+cat "$basis/big.bin" >> "$work/_pre"
+mv "$work/_pre" "$basis/big.bin"
+
+# run DIR NAME CLIENT SERVER SRC DST [SEED]
 #   DIR is "push" or "pull"; CLIENT drives, SERVER via --rsync-path.
 #   push: local SRC      -> localhost:DST
 #   pull: localhost:SRC  -> local DST
+#   SEED (optional): pre-populate DST from this dir before transferring,
+#     forcing a delta (rolling-hash block-matching) transfer rather than
+#     a fresh whole-file send. The final DST must still equal SRC.
 run() {
-	dir=$1; name=$2; client=$3; server=$4; s=$5; d=$6
+	dir=$1; name=$2; client=$3; server=$4; s=$5; d=$6; seed=${7:-}
 	rm -rf "$d"
+	if [ -n "$seed" ]; then
+		cp -a "$seed" "$d"
+		# Backdate the seeded files so rsync's size+mtime quick-check
+		# never short-circuits the transfer -- we want the rolling-hash
+		# delta path to actually run against the (stale) basis.
+		find "$d" -type f -exec touch -d '2000-01-01' {} +
+	fi
 	san_collect >/dev/null   # discard any stragglers from a prior run
 	if [ "$dir" = pull ]; then
 		from="localhost:$s"; to="$d"
@@ -167,6 +193,12 @@ for RSYNC_OPTS in $OPTS_LIST; do
 	# openrsync talking to itself, to catch self-interop regressions.
 	run push "push  openrsync-cli -> openrsync-srv [$RSYNC_OPTS]" "$OPENRSYNC" "$OPENRSYNC" "$src/" "$work/d5"
 	run pull "pull  openrsync-cli <- openrsync-srv [$RSYNC_OPTS]" "$OPENRSYNC" "$OPENRSYNC" "$src/" "$work/d6"
+	# Delta transfers: pre-seed the destination with the perturbed basis
+	# so the sender runs the rolling-hash block matcher (the fmap_data
+	# hot path). openrsync is exercised as sender in each.
+	run push "delta openrsync-cli -> rsync-srv     [$RSYNC_OPTS]" "$OPENRSYNC" "$RSYNC"     "$src/" "$work/e1" "$basis"
+	run pull "delta rsync-cli     <- openrsync-srv [$RSYNC_OPTS]" "$RSYNC"     "$OPENRSYNC" "$src/" "$work/e2" "$basis"
+	run push "delta openrsync-cli -> openrsync-srv [$RSYNC_OPTS]" "$OPENRSYNC" "$OPENRSYNC" "$src/" "$work/e3" "$basis"
 	IFS='|'
 done
 IFS=$OIFS

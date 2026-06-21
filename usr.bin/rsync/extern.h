@@ -19,6 +19,8 @@
 
 #include <openssl/md4.h>
 
+#include "fmap.h"	/* struct fmap: persistence layer over local files */
+
 /*
  * This is the rsync protocol version that we support.
  */
@@ -207,7 +209,7 @@ struct	blkstat {
 	off_t		 total; /* total amount processed */
 	off_t		 dirty; /* total amount sent */
 	size_t		 hint; /* optimisation: next probable match */
-	void		*map; /* mapped file or MAP_FAILED otherwise */
+	struct fmap	*map; /* file view or NULL otherwise */
 	size_t		 mapsz; /* size of file or zero */
 	int		 fd; /* descriptor girding the map */
 	enum blkstatst	 curst; /* FSM for sending file blocks */
@@ -380,7 +382,7 @@ void		 blkhash_free(struct blktab *);
 
 struct blkset	*blk_recv(struct sess *, int, const char *);
 void		 blk_recv_ack(char [20], const struct blkset *, int32_t);
-void		 blk_match(struct sess *, const struct blkset *,
+int		 blk_match(struct sess *, const struct blkset *,
 		    const char *, struct blkstat *);
 int		 blk_send(struct sess *, int, size_t, const struct blkset *,
 		    const char *);

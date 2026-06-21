@@ -14,7 +14,6 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#include <sys/mman.h>
 #include <sys/stat.h>
 
 #include <assert.h>
@@ -53,7 +52,7 @@ struct	download {
 	enum downloadst	    state; /* state of affairs */
 	size_t		    idx; /* index of current file */
 	struct blkset	    blk; /* its blocks */
-	void		   *map; /* mmap of current file */
+	struct fmap	   *map; /* file view of current file */
 	size_t		    mapsz; /* length of mapsz */
 	int		    ofd; /* open origin file */
 	int		    fd; /* open output file */
@@ -120,7 +119,7 @@ download_reinit(struct sess *sess, struct download *p, size_t idx)
 
 	p->idx = idx;
 	memset(&p->blk, 0, sizeof(struct blkset));
-	p->map = MAP_FAILED;
+	p->map = NULL;
 	p->mapsz = 0;
 	p->ofd = -1;
 	p->fd = -1;
@@ -143,10 +142,10 @@ static void
 download_cleanup(struct download *p, int cleanup)
 {
 
-	if (p->map != MAP_FAILED) {
+	if (p->map != NULL) {
 		assert(p->mapsz);
-		munmap(p->map, p->mapsz);
-		p->map = MAP_FAILED;
+		fmap_close(p->map);
+		p->map = NULL;
 		p->mapsz = 0;
 	}
 	if (p->ofd != -1) {
@@ -300,6 +299,7 @@ rsync_downloader(struct download *p, struct sess *sess, int *ofd)
 	size_t		 sz, tok;
 	struct stat	 st;
 	char		*buf = NULL;
+	const char	*mbuf;
 	unsigned char	 ourmd[MD4_DIGEST_LENGTH],
 			 md[MD4_DIGEST_LENGTH];
 
@@ -399,10 +399,9 @@ rsync_downloader(struct download *p, struct sess *sess, int *ofd)
 
 		if (p->ofd != -1 && st.st_size > 0) {
 			p->mapsz = st.st_size;
-			p->map = mmap(NULL, p->mapsz,
-				PROT_READ, MAP_SHARED, p->ofd, 0);
-			if (p->map == MAP_FAILED) {
-				ERR("%s: mmap", f->path);
+			p->map = fmap_open(p->ofd, p->mapsz);
+			if (p->map == NULL) {
+				ERR("%s: fmap_open", f->path);
 				goto out;
 			}
 		}
@@ -494,8 +493,7 @@ again:
 		}
 		sz = tok == p->blk.blksz - 1 ? p->blk.rem : p->blk.len;
 		assert(sz);
-		assert(p->map != MAP_FAILED);
-		buf = p->map + (tok * p->blk.len);
+		assert(p->map != NULL);
 
 		/*
 		 * Now we read from our block.
@@ -505,14 +503,18 @@ again:
 		 * profile from it.
 		 */
 
-		assert(p->map != MAP_FAILED);
-		if (!buf_copy(buf, sz, p)) {
+		mbuf = fmap_data(p->map, (off_t)tok * p->blk.len, sz);
+		if (mbuf == NULL) {
+			ERR("%s: fmap_data", p->fname);
+			goto out;
+		}
+		if (!buf_copy(mbuf, sz, p)) {
 			ERRX1("buf_copy");
 			goto out;
 		}
 		p->total += sz;
 		LOG4("%s: copied %zu B", p->fname, sz);
-		MD4_Update(&p->ctx, buf, sz);
+		MD4_Update(&p->ctx, mbuf, sz);
 
 		/* Fast-track more reads as they arrive. */
 

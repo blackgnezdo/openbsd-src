@@ -140,19 +140,33 @@ blkhash_free(struct blktab *p)
  */
 static const struct blk *
 blk_find(struct sess *sess, struct blkstat *st,
-	const struct blkset *blks, const char *path, int recomp)
+	const struct blkset *blks, const char *path, int recomp, int *err)
 {
 	unsigned char	 md[MD4_DIGEST_LENGTH];
 	uint32_t	 fhash;
 	off_t		 remain, osz;
 	int		 have_md = 0;
-	char		*map;
+	const unsigned char *win;
+	size_t		 wlen;
 	const struct blkhashq *q;
 	const struct blkhash *ent;
 
+	*err = 0;
 	remain = st->mapsz - st->offs;
 	assert(remain);
 	osz = MINIMUM(remain, (off_t)blks->len);
+
+	/*
+	 * Fetch a single window covering the block we're examining plus,
+	 * if there's room, the one look-ahead byte the rolling-sum update
+	 * below reads.  All accesses in this function go through "win".
+	 */
+	wlen = (osz < remain) ? (size_t)osz + 1 : (size_t)osz;
+	if ((win = fmap_data(st->map, st->offs, wlen)) == NULL) {
+		ERR("%s: fmap_data", path);
+		*err = 1;
+		return NULL;
+	}
 
 	/*
 	 * First, compute our fast hash the hard way (if we're
@@ -163,7 +177,7 @@ blk_find(struct sess *sess, struct blkstat *st,
 	if (!recomp) {
 		fhash = (st->s1 & 0xFFFF) | (st->s2 << 16);
 	} else {
-		fhash = hash_fast(st->map + st->offs, (size_t)osz);
+		fhash = hash_fast(win, (size_t)osz);
 		st->s1 = fhash & 0xFFFF;
 		st->s2 = fhash >> 16;
 	}
@@ -176,7 +190,7 @@ blk_find(struct sess *sess, struct blkstat *st,
 	if (st->hint < blks->blksz &&
 	    fhash == blks->blks[st->hint].chksum_short &&
 	    (size_t)osz == blks->blks[st->hint].len) {
-		hash_slow(st->map + st->offs, (size_t)osz, md, sess);
+		hash_slow(win, (size_t)osz, md, sess);
 		have_md = 1;
 		if (memcmp(md, blks->blks[st->hint].chksum_long, blks->csum) == 0) {
 			LOG4("%s: found matching hinted match: "
@@ -209,7 +223,7 @@ blk_find(struct sess *sess, struct blkstat *st,
 		    (intmax_t)ent->blk->offs, ent->blk->len);
 
 		if (have_md == 0) {
-			hash_slow(st->map + st->offs, (size_t)osz, md, sess);
+			hash_slow(win, (size_t)osz, md, sess);
 			have_md = 1;
 		}
 
@@ -227,16 +241,40 @@ blk_find(struct sess *sess, struct blkstat *st,
 	 * block in the sequence.
 	 */
 
-	map = st->map + st->offs;
-	st->s1 -= map[0];
-	st->s2 -= osz * map[0];
+	st->s1 -= win[0];
+	st->s2 -= osz * win[0];
 
 	if (osz < remain) {
-		st->s1 += map[osz];
+		st->s1 += win[osz];
 		st->s2 += st->s1;
 	}
 
 	return NULL;
+}
+
+/*
+ * Feed the file range [offs, offs+len) into the running file hash, in
+ * bounded MAX_CHUNK pieces so the persistence layer never has to
+ * materialise a whole match-gap at once.
+ * Returns zero on I/O failure, non-zero on success.
+ */
+static int
+blk_hash_range(struct blkstat *st, off_t offs, off_t len, const char *path)
+{
+	const void	*win;
+	off_t		 done = 0;
+
+	while (done < len) {
+		size_t chunk = (len - done) > MAX_CHUNK ?
+		    MAX_CHUNK : (size_t)(len - done);
+		if ((win = fmap_data(st->map, offs + done, chunk)) == NULL) {
+			ERR("%s: fmap_data", path);
+			return 0;
+		}
+		hash_file_buf(&st->ctx, win, chunk);
+		done += (off_t)chunk;
+	}
+	return 1;
 }
 
 /*
@@ -245,13 +283,14 @@ blk_find(struct sess *sess, struct blkstat *st,
  * This function is reentrant: it must be called while there's still
  * data to send.
  */
-void
+int
 blk_match(struct sess *sess, const struct blkset *blks,
 	const char *path, struct blkstat *st)
 {
 	off_t		  last, end = 0, sz;
 	int32_t		  tok;
 	size_t		  i;
+	int		  err;
 	const struct blk *blk;
 
 	/*
@@ -275,7 +314,9 @@ blk_match(struct sess *sess, const struct blkset *blks,
 
 	last = st->offs;
 	for (i = 0; st->offs < end; st->offs++, i++) {
-		blk = blk_find(sess, st, blks, path, i == 0);
+		blk = blk_find(sess, st, blks, path, i == 0, &err);
+		if (err)
+			return 0;
 		if (blk == NULL)
 			continue;
 
@@ -287,7 +328,8 @@ blk_match(struct sess *sess, const struct blkset *blks,
 		    blk->len, blk->idx);
 		tok = -(blk->idx + 1);
 
-		hash_file_buf(&st->ctx, st->map + last, sz + blk->len);
+		if (!blk_hash_range(st, last, sz + (off_t)blk->len, path))
+			return 0;
 
 		/*
 		 * Write the data we have, then follow it with
@@ -303,7 +345,7 @@ blk_match(struct sess *sess, const struct blkset *blks,
 		st->offs += blk->len;
 		st->hint = blk->idx + 1;
 
-		return;
+		return 1;
 	}
 
 	/* Emit remaining data and send terminator token. */
@@ -312,7 +354,8 @@ blk_match(struct sess *sess, const struct blkset *blks,
 	LOG4("%s: flushing %s %jd B", path,
 	    last == 0 ? "whole" : "remaining", (intmax_t)sz);
 
-	hash_file_buf(&st->ctx, st->map + last, sz);
+	if (!blk_hash_range(st, last, sz, path))
+		return 0;
 
 	st->total += sz;
 	st->dirty += sz;
@@ -320,6 +363,7 @@ blk_match(struct sess *sess, const struct blkset *blks,
 	st->curlen = st->curpos + sz;
 	st->curtok = 0;
 	st->curst = sz ? BLKSTAT_DATA : BLKSTAT_TOK;
+	return 1;
 }
 
 /*

@@ -14,7 +14,6 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#include <sys/mman.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
 
@@ -68,12 +67,12 @@ send_up_reset(struct send_up *p)
 		p->cur = NULL;
 	}
 
-	/* If we mapped a file for scanning, unmap it and close. */
+	/* If we opened a file view for scanning, release it and close. */
 
-	if (p->stat.map != MAP_FAILED)
-		munmap(p->stat.map, p->stat.mapsz);
+	if (p->stat.map != NULL)
+		fmap_close(p->stat.map);
 
-	p->stat.map = MAP_FAILED;
+	p->stat.map = NULL;
 	p->stat.mapsz = 0;
 
 	if (p->stat.fd != -1)
@@ -105,6 +104,7 @@ send_up_fsm(struct sess *sess, size_t *phase,
 			 dsz = MD4_DIGEST_LENGTH;
 	unsigned char	 fmd[MD4_DIGEST_LENGTH];
 	off_t		 sz;
+	const void	*data;
 	char		 buf[20];
 
 	switch (up->stat.curst) {
@@ -118,6 +118,11 @@ send_up_fsm(struct sess *sess, size_t *phase,
 
 		sz = MINIMUM(MAX_CHUNK,
 			up->stat.curlen - up->stat.curpos);
+		data = fmap_data(up->stat.map, up->stat.curpos, sz);
+		if (data == NULL) {
+			ERR("fmap_data");
+			return 0;
+		}
 		if (!io_lowbuffer_alloc(sess, wb, wbsz, wbmax, isz)) {
 			ERRX1("io_lowbuffer_alloc");
 			return 0;
@@ -127,8 +132,7 @@ send_up_fsm(struct sess *sess, size_t *phase,
 			ERRX1("io_lowbuffer_alloc");
 			return 0;
 		}
-		io_lowbuffer_buf(sess, *wb, &pos, *wbsz,
-			up->stat.map + up->stat.curpos, sz);
+		io_lowbuffer_buf(sess, *wb, &pos, *wbsz, data, sz);
 
 		up->stat.curpos += sz;
 		if (up->stat.curpos == up->stat.curlen)
@@ -201,8 +205,11 @@ send_up_fsm(struct sess *sess, size_t *phase,
 		 */
 
 		assert(up->stat.fd != -1);
-		blk_match(sess, up->cur->blks,
-			fl[up->cur->idx].path, &up->stat);
+		if (!blk_match(sess, up->cur->blks,
+		    fl[up->cur->idx].path, &up->stat)) {
+			ERRX1("blk_match");
+			return 0;
+		}
 		return 1;
 	case BLKSTAT_NONE:
 		break;
@@ -378,7 +385,7 @@ rsync_sender(struct sess *sess, int fdin,
 	memset(&up, 0, sizeof(struct send_up));
 	TAILQ_INIT(&sdlq);
 	up.stat.fd = -1;
-	up.stat.map = MAP_FAILED;
+	up.stat.map = NULL;
 	up.stat.blktab = blkhash_alloc();
 
 	/*
@@ -520,7 +527,7 @@ rsync_sender(struct sess *sess, int fdin,
 		if (pfd[2].revents & POLLIN) {
 			assert(up.cur != NULL);
 			assert(up.stat.fd != -1);
-			assert(up.stat.map == MAP_FAILED);
+			assert(up.stat.map == NULL);
 			assert(up.stat.mapsz == 0);
 			f = &fl[up.cur->idx];
 
@@ -537,11 +544,10 @@ rsync_sender(struct sess *sess, int fdin,
 			 */
 
 			if ((up.stat.mapsz = st.st_size) > 0) {
-				up.stat.map = mmap(NULL,
-					up.stat.mapsz, PROT_READ,
-					MAP_SHARED, up.stat.fd, 0);
-				if (up.stat.map == MAP_FAILED) {
-					ERR("%s: mmap", f->path);
+				up.stat.map = fmap_open(up.stat.fd,
+					up.stat.mapsz);
+				if (up.stat.map == NULL) {
+					ERR("%s: fmap_open", f->path);
 					goto out;
 				}
 			}
@@ -603,7 +609,7 @@ rsync_sender(struct sess *sess, int fdin,
 		if (up.cur == NULL) {
 			assert(pfd[2].fd == -1);
 			assert(up.stat.fd == -1);
-			assert(up.stat.map == MAP_FAILED);
+			assert(up.stat.map == NULL);
 			assert(up.stat.mapsz == 0);
 			assert(wbufsz == 0 && wbufpos == 0);
 			pfd[1].fd = -1;
