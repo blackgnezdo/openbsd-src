@@ -4,8 +4,15 @@ This directory lets you build OpenBSD's `openrsync` on Linux (outside the
 BSD `bsd.*.mk` make infrastructure) and test it for wire-protocol interop
 against the stock `rsync` (e.g. `/bin/rsync`).
 
-The upstream OpenBSD sources are **not modified**. Everything Linux-specific
-lives here and is force-included at compile time.
+No Linux-specific changes are made to the upstream `.c`/`.h` sources:
+everything Linux-specific lives here and is force-included at compile
+time. The only changes to the sources themselves are genuine,
+platform-independent openrsync bug fixes, kept as standalone diffs in
+`patches/` for upstreaming.
+
+**AddressSanitizer is the default build/dev mode.** `./openrsync` is
+built with ASan + UBSan and is what the interop harness drives on *both*
+ends of every transfer, so the whole protocol exercise runs instrumented.
 
 ## Prerequisites
 
@@ -19,8 +26,13 @@ sudo apt-get install -y libssl-dev libbsd-dev
 ## Build
 
 ```sh
-./compat/build.sh        # produces ./openrsync
+./compat/build.sh            # default: ASan + UBSan, -g -O1
+./compat/build.sh release    # optimised, no sanitizer, -O2
 ```
+
+Both produce `./openrsync`. Env overrides: `CC`, `OUT` (output name),
+`EXTRA_CFLAGS`, `EXTRA_LDFLAGS`. The `msan` mode exists but needs an
+MSan-instrumented libc/libbsd/libcrypto and is rarely usable as-is.
 
 What the shim provides (`compat/compat.h`, force-included via `cc -include`):
 
@@ -44,6 +56,16 @@ each option set in `OPTS_LIST`, using a fake remote shell
 with no ssh or network.
 
 Env overrides: `OPENRSYNC`, `RSYNC`, `TIMEOUT`, `OPTS_LIST`, `XFAIL`.
+
+The harness is sanitizer-aware: when `./openrsync` is ASan/UBSan-built
+(the `sanitized: yes` banner line), any sanitizer report fails the
+relevant test even if the transfer otherwise succeeds — reports are
+picked up both from the per-process log files and from the server's
+stderr (relayed back through the client). A finding is reported as
+`SAN <name>` with the backtrace, and is never tolerated, not even for an
+`XFAIL`. Sanitizer behaviour can be tuned via the usual `ASAN_OPTIONS` /
+`UBSAN_OPTIONS` (the harness only appends `log_path`, `exitcode`, and
+non-aborting defaults).
 
 ### Current status (openrsync proto 27 vs rsync 3.2.7)
 

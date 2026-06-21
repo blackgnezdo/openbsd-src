@@ -14,6 +14,11 @@
 #   OPTS_LIST   '|'-separated rsync option sets to sweep (default: -a|-av)
 #   XFAIL       space-separated test names expected to fail (default: none)
 #
+# Sanitizers: if ./openrsync was built with ASan/UBSan (the default dev
+# mode, see compat/build.sh), any sanitizer report fails the relevant
+# test even when the transfer otherwise succeeds. openrsync runs on BOTH
+# ends of every transfer, so the whole protocol exercise is instrumented.
+#
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -25,6 +30,7 @@ RSH=$here/localrsh.sh
 fail=0
 pass=0
 xfail=0
+sanfail=0
 
 # Space-separated list of test names expected to fail (known limitations).
 # Empty by default: all combinations are expected to pass.
@@ -49,6 +55,28 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"; pkill -9 -P $$ 2>/dev/null' EXIT INT TERM
 
+# Route sanitizer reports to per-process log files we can scan after each
+# run, and keep the tools from killing the whole process group mid-
+# protocol (which would just look like a hang). The caller's settings win.
+sanlog=$work/san
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}:abort_on_error=0:halt_on_error=0:exitcode=99:log_path=$sanlog.asan"
+export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1}:halt_on_error=0:exitcode=99:log_path=$sanlog.ubsan"
+export LSAN_OPTIONS="${LSAN_OPTIONS:-exitcode=99}"
+
+# Is ./openrsync sanitizer-instrumented? (controls report wording only)
+if nm "$OPENRSYNC" 2>/dev/null | grep -q __asan_init; then
+	sanitized=yes
+else
+	sanitized=no
+fi
+
+# Collect+clear sanitizer log files written since the last call; echo any
+# content (empty if clean).
+san_collect() {
+	cat "$sanlog".* 2>/dev/null
+	rm -f "$sanlog".* 2>/dev/null
+}
+
 src=$work/src
 mkdir -p "$src/sub/deep"
 printf 'hello world\n'              > "$src/a.txt"
@@ -66,6 +94,7 @@ chmod 0750                           "$src/sub"
 run() {
 	dir=$1; name=$2; client=$3; server=$4; s=$5; d=$6
 	rm -rf "$d"
+	san_collect >/dev/null   # discard any stragglers from a prior run
 	if [ "$dir" = pull ]; then
 		from="localhost:$s"; to="$d"
 	else
@@ -75,8 +104,25 @@ run() {
 		--rsync-path="$server" -e "$RSH" \
 		"$from" "$to" 2>&1)
 	rc=$?
+
+	# A sanitizer report may surface three ways: via the log files, via
+	# the exitcode=99 we configured, or inline in stderr (the server's
+	# stderr is relayed through the client).
+	san=$(san_collect)
+	if [ -z "$san" ]; then
+		case $rc in 99) san="(sanitizer exit 99; see stderr)\n$out" ;; esac
+	fi
+	if [ -z "$san" ]; then
+		case $out in
+		*Sanitizer*|*"runtime error:"*|*"AddressSanitizer"*)
+			san=$out ;;
+		esac
+	fi
+
 	ok=1; detail=
-	if [ $rc -eq 124 ]; then
+	if [ -n "$san" ]; then
+		ok=0; detail="sanitizer report"
+	elif [ $rc -eq 124 ]; then
 		ok=0; detail="timeout after ${TIMEOUT}s"
 	elif [ $rc -ne 0 ]; then
 		ok=0; detail="exit $rc: $(printf '%s' "$out" | head -1)"
@@ -86,6 +132,10 @@ run() {
 
 	if [ $ok -eq 1 ]; then
 		green "PASS   $name"; pass=$((pass+1))
+	elif [ -n "$san" ]; then
+		# Sanitizer findings are never silently tolerated, even for XFAILs.
+		red   "SAN    $name  ($detail)"; sanfail=$((sanfail+1)); fail=$((fail+1))
+		printf '%b\n' "$san" | sed 's/^/    /' | head -40
 	elif is_xfail "$name"; then
 		log   "XFAIL  $name  ($detail)"; xfail=$((xfail+1))
 	else
@@ -96,6 +146,7 @@ run() {
 
 log "openrsync: $($OPENRSYNC --version 2>&1 | head -1)"
 log "rsync:     $($RSYNC --version 2>&1 | head -1)"
+log "sanitized: $sanitized"
 log "timeout:   ${TIMEOUT}s"
 
 # Option sets to sweep. Verbose mode matters because the end-of-session
@@ -121,5 +172,5 @@ done
 IFS=$OIFS
 
 log ""
-log "-------- $pass passed, $fail failed, $xfail xfail --------"
+log "-------- $pass passed, $fail failed ($sanfail sanitizer), $xfail xfail --------"
 [ $fail -eq 0 ]
