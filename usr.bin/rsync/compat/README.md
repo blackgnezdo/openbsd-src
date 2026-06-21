@@ -38,22 +38,25 @@ What the shim provides (`compat/compat.h`, force-included via `cc -include`):
 ```
 
 It builds a small source tree and transfers it in all four
-client/server x push/pull combinations, using a fake remote shell
+client/server x push/pull combinations (plus openrsync<->openrsync), for
+each option set in `OPTS_LIST`, using a fake remote shell
 (`tests/localrsh.sh`) so the real rsync protocol is exercised over a pipe
 with no ssh or network.
 
-Env overrides: `OPENRSYNC`, `RSYNC`, `TIMEOUT`, `RSYNC_OPTS`, `XFAIL`.
+Env overrides: `OPENRSYNC`, `RSYNC`, `TIMEOUT`, `OPTS_LIST`, `XFAIL`.
 
 ### Current status (openrsync proto 27 vs rsync 3.2.7)
+
+All combinations pass, in both quiet (`-a`) and verbose (`-av`) mode:
 
 | direction                                   | result |
 |---------------------------------------------|--------|
 | push  openrsync-client -> rsync-server      | PASS   |
 | push  rsync-client     -> openrsync-server  | PASS   |
 | pull  openrsync-client <- rsync-server      | PASS   |
-| pull  rsync-client     <- openrsync-server  | XFAIL  |
+| pull  rsync-client     <- openrsync-server  | PASS   |
+| push/pull openrsync <-> openrsync           | PASS   |
 
-The XFAIL case actually transfers the file contents correctly, but the
-modern rsync *generator* hangs at session teardown when openrsync is the
-server. It's marked XFAIL (expected failure) so the suite stays green;
-set `XFAIL=""` to treat it as a hard failure while debugging.
+Two upstream openrsync bugs were needed to make the last interop
+direction (rsync client pulling from an openrsync server) work; see
+`patches/` for standalone, upstreamable diffs.

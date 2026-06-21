@@ -1,0 +1,90 @@
+Subject: [PATCH] session: exchange end-of-session statistics regardless of
+ verbosity
+
+The end-of-session statistics (bytes read/written/total) are part of the
+rsync wire protocol: the server writes them and the client reads them
+before the final good-bye.  Stock rsync always performs this exchange.
+
+openrsync gated both halves on verbose mode:
+
+  - sess_stats_send() returned early when verbose == 0, so the
+    server-sender never wrote the stats;
+  - sess_stats_recv() returned early when verbose == 0, so the
+    client-receiver never read them.
+
+A missing read is harmless (the bytes are discarded at close), but a
+missing write is fatal: a peer that always reads the stats (e.g. a stock
+rsync client pulling from an openrsync server) blocks forever waiting for
+them, and openrsync in turn blocks reading the good-bye that never comes.
+
+Move the verbose gate so it only suppresses the *logging* of the figures
+(stats_log()); the wire exchange now always happens.  The server still
+does not read stats and the client still does not write them, matching
+rsync's behaviour.
+
+diff --git a/usr.bin/rsync/session.c b/usr.bin/rsync/session.c
+index 0b43036..f63d761 100644
+--- a/usr.bin/rsync/session.c
++++ b/usr.bin/rsync/session.c
+@@ -102,13 +102,18 @@ sess_stats_send(struct sess *sess, int fd)
+ {
+ 	uint64_t tw, tr, ts;
+ 
+-	if (verbose == 0)
+-		return 1;
+-
+ 	tw = sess->total_write;
+ 	tr = sess->total_read;
+ 	ts = sess->total_size;
+ 
++	/*
++	 * The end-of-session statistics are part of the wire protocol and
++	 * are exchanged unconditionally: the server sends them and the
++	 * client reads them, regardless of verbosity.  Only the *logging*
++	 * of the figures is gated on verbose mode (see below).  Skipping
++	 * the write here deadlocks a peer (e.g. stock rsync) that always
++	 * reads the stats before sending its final good-bye.
++	 */
+ 	if (sess->opts->server) {
+ 		if (!io_write_ulong(sess, fd, tr)) {
+ 			ERRX1("io_write_ulong");
+@@ -122,15 +127,17 @@ sess_stats_send(struct sess *sess, int fd)
+ 		}
+ 	}
+ 
+-	stats_log(sess, tr, tw, ts);
++	if (verbose != 0)
++		stats_log(sess, tr, tw, ts);
+ 	return 1;
+ }
+ 
+ /*
+  * At the end of the transmission, we have some statistics to read.
+- * Only do this (1) if we're in verbose mode and (2) if we're the
+- * server.
+- * Then log the findings.
++ * The server always writes these (see sess_stats_send()), so the client
++ * must always read them or the stream desynchronises -- only the
++ * *logging* of the figures is gated on verbose mode.  The server itself
++ * does not read stats, so it returns early.
+  * Return zero on failure, non-zero on success.
+  */
+ int
+@@ -138,7 +145,7 @@ sess_stats_recv(struct sess *sess, int fd)
+ {
+ 	uint64_t tr, tw, ts;
+ 
+-	if (sess->opts->server || verbose == 0)
++	if (sess->opts->server)
+ 		return 1;
+ 
+ 	if (!io_read_ulong(sess, fd, &tw)) {
+@@ -152,6 +159,7 @@ sess_stats_recv(struct sess *sess, int fd)
+ 		return 0;
+ 	}
+ 
+-	stats_log(sess, tr, tw, ts);
++	if (verbose != 0)
++		stats_log(sess, tr, tw, ts);
+ 	return 1;
+ }

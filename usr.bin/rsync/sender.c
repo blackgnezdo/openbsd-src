@@ -224,7 +224,7 @@ send_up_fsm(struct sess *sess, size_t *phase,
 		}
 		io_lowbuffer_int(sess, *wb, &pos, *wbsz, -1);
 
-		if (sess->opts->server && sess->rver > 27) {
+		if (sess->opts->server && MINIMUM(sess->lver, sess->rver) > 27) {
 			if (!io_lowbuffer_alloc(sess,
 			    wb, wbsz, wbmax, isz)) {
 				ERRX1("io_lowbuffer_alloc");

@@ -11,7 +11,8 @@
 #   OPENRSYNC   path to openrsync binary  (default: ../../openrsync)
 #   RSYNC       path to stock rsync       (default: /bin/rsync)
 #   TIMEOUT     per-transfer timeout secs (default: 15)
-#   RSYNC_OPTS  extra opts passed to both (default: -a)
+#   OPTS_LIST   '|'-separated rsync option sets to sweep (default: -a|-av)
+#   XFAIL       space-separated test names expected to fail (default: none)
 #
 set -u
 
@@ -19,7 +20,6 @@ here=$(cd "$(dirname "$0")" && pwd)
 OPENRSYNC=${OPENRSYNC:-$here/../../openrsync}
 RSYNC=${RSYNC:-/bin/rsync}
 TIMEOUT=${TIMEOUT:-15}
-RSYNC_OPTS=${RSYNC_OPTS:--a}
 RSH=$here/localrsh.sh
 
 fail=0
@@ -27,8 +27,8 @@ pass=0
 xfail=0
 
 # Space-separated list of test names expected to fail (known limitations).
-# Override with XFAIL="" to treat them as hard failures.
-XFAIL=${XFAIL:-"pull  rsync-client     <- openrsync-server"}
+# Empty by default: all combinations are expected to pass.
+XFAIL=${XFAIL:-""}
 
 is_xfail() {
 	case " $XFAIL " in
@@ -96,14 +96,29 @@ run() {
 
 log "openrsync: $($OPENRSYNC --version 2>&1 | head -1)"
 log "rsync:     $($RSYNC --version 2>&1 | head -1)"
-log "opts:      $RSYNC_OPTS  (timeout ${TIMEOUT}s)"
-log ""
+log "timeout:   ${TIMEOUT}s"
 
-# Note the trailing slash on $src/ to copy contents, not the dir itself.
-run push "push  openrsync-client -> rsync-server"     "$OPENRSYNC" "$RSYNC"     "$src/" "$work/d1"
-run push "push  rsync-client     -> openrsync-server" "$RSYNC"     "$OPENRSYNC" "$src/" "$work/d2"
-run pull "pull  openrsync-client <- rsync-server"     "$OPENRSYNC" "$RSYNC"     "$src/" "$work/d3"
-run pull "pull  rsync-client     <- openrsync-server" "$RSYNC"     "$OPENRSYNC" "$src/" "$work/d4"
+# Option sets to sweep. Verbose mode matters because the end-of-session
+# statistics exchange used to be gated on verbosity; keep both.
+: "${OPTS_LIST:=-a|-av}"
+
+OIFS=$IFS
+IFS='|'
+for RSYNC_OPTS in $OPTS_LIST; do
+	IFS=$OIFS
+	log ""
+	log "==== opts: $RSYNC_OPTS ===="
+	# Trailing slash on the source copies contents, not the dir itself.
+	run push "push  openrsync-cli -> rsync-srv     [$RSYNC_OPTS]" "$OPENRSYNC" "$RSYNC"     "$src/" "$work/d1"
+	run push "push  rsync-cli     -> openrsync-srv [$RSYNC_OPTS]" "$RSYNC"     "$OPENRSYNC" "$src/" "$work/d2"
+	run pull "pull  openrsync-cli <- rsync-srv     [$RSYNC_OPTS]" "$OPENRSYNC" "$RSYNC"     "$src/" "$work/d3"
+	run pull "pull  rsync-cli     <- openrsync-srv [$RSYNC_OPTS]" "$RSYNC"     "$OPENRSYNC" "$src/" "$work/d4"
+	# openrsync talking to itself, to catch self-interop regressions.
+	run push "push  openrsync-cli -> openrsync-srv [$RSYNC_OPTS]" "$OPENRSYNC" "$OPENRSYNC" "$src/" "$work/d5"
+	run pull "pull  openrsync-cli <- openrsync-srv [$RSYNC_OPTS]" "$OPENRSYNC" "$OPENRSYNC" "$src/" "$work/d6"
+	IFS='|'
+done
+IFS=$OIFS
 
 log ""
 log "-------- $pass passed, $fail failed, $xfail xfail --------"

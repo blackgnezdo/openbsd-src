@@ -1,0 +1,30 @@
+Subject: [PATCH] sender: gate the protocol>27 extra end-of-phase marker on the
+ negotiated version, not the peer's announced version
+
+When openrsync is the server-sender and the remote is a newer rsync, the
+peer announces a protocol version > 27 (e.g. 31).  openrsync only speaks
+protocol 27, so the effective/negotiated version is min(lver, rver) = 27.
+
+send_up_fsm() emitted a second -1 end-of-phase marker whenever the peer's
+*announced* version (sess->rver) was > 27.  But that extra marker is a
+protocol-30+ behaviour and must be keyed off the *negotiated* version.
+Emitting it while actually speaking protocol 27 desynchronises the
+stream and hangs the peer (e.g. a stock rsync client pulling from an
+openrsync server).
+
+Since openrsync hardcodes lver = RSYNC_PROTOCOL (27), MINIMUM(lver, rver)
+is always <= 27 and the extra marker is never (incorrectly) sent.
+
+diff --git a/usr.bin/rsync/sender.c b/usr.bin/rsync/sender.c
+index a5e4f3f..3d87886 100644
+--- a/usr.bin/rsync/sender.c
++++ b/usr.bin/rsync/sender.c
+@@ -224,7 +224,7 @@ send_up_fsm(struct sess *sess, size_t *phase,
+ 		}
+ 		io_lowbuffer_int(sess, *wb, &pos, *wbsz, -1);
+ 
+-		if (sess->opts->server && sess->rver > 27) {
++		if (sess->opts->server && MINIMUM(sess->lver, sess->rver) > 27) {
+ 			if (!io_lowbuffer_alloc(sess,
+ 			    wb, wbsz, wbmax, isz)) {
+ 				ERRX1("io_lowbuffer_alloc");
