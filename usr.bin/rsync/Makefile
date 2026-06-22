@@ -1,7 +1,7 @@
 #	$OpenBSD: Makefile,v 1.13 2021/10/29 08:00:59 claudio Exp $
 
 PROG=	openrsync
-SRCS=	blocks.c client.c copy.c downloader.c fargs.c flist.c hash.c ids.c \
+SRCS=	blocks.c client.c copy.c downloader.c fargs.c fmap_file.c flist.c hash.c ids.c \
 	io.c log.c main.c misc.c mkpath.c mktemp.c receiver.c rmatch.c \
 	rules.c sender.c server.c session.c socket.c symlinks.c uploader.c
 LDADD+= -lcrypto -lm -lutil
