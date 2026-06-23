@@ -50,6 +50,11 @@
 #include <ddb/db_output.h>
 #endif
 
+#ifdef KASAN
+#include <machine/vmmvar.h>
+#include <sys/kasan.h>
+#endif
+
 /*
  * Locks used to protect data:
  *	I	Immutable data
@@ -156,6 +161,11 @@ malloc(size_t size, int type, int flags)
 #ifdef DIAGNOSTIC
 	int freshalloc;
 	char *savedtype;
+#endif
+#ifdef KASAN
+	size_t origsz = size;
+
+	kasan_add_redzone(&size);
 #endif
 #ifdef KMEMSTATS
 	struct kmemstats *ksp = &kmemstats[type];
@@ -356,6 +366,7 @@ out:
 
 	TRACEPOINT(uvm, malloc, type, va, size, flags);
 
+	kasan_alloc((vaddr_t)va, origsz, size);
 	return (va);
 }
 
@@ -372,6 +383,10 @@ free(void *addr, int type, size_t freedsize)
 	int s;
 #ifdef DIAGNOSTIC
 	long alloc;
+#endif
+#ifdef KASAN
+	if (freedsize != 0)
+		kasan_add_redzone(&freedsize);
 #endif
 #ifdef KMEMSTATS
 	struct kmemstats *ksp = &kmemstats[type];
@@ -489,6 +504,9 @@ free(void *addr, int type, size_t freedsize)
 #endif
 	XSIMPLEQ_INSERT_TAIL(&kbp->kb_freelist, freep, kf_flist);
 	mtx_leave(&malloc_mtx);
+#ifdef KASAN
+	kasan_free((vaddr_t)addr, size);
+#endif
 #ifdef KMEMSTATS
 	if (wake)
 		wakeup(ksp);

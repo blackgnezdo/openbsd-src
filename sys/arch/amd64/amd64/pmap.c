@@ -116,6 +116,9 @@
 #include <machine/i82489reg.h>
 #include <machine/i82489var.h>
 #endif
+#ifdef KASAN
+#include <machine/kasan.h>
+#endif
 
 #include "vmm.h"
 
@@ -3102,6 +3105,9 @@ pmap_growkernel(vaddr_t maxkvaddr)
 	}
 	pmap_maxkvaddr = maxkvaddr;
 	splx(s);
+
+	kasan_enter_shad_multi((vaddr_t)VM_MIN_KERNEL_ADDRESS,
+	    maxkvaddr - VM_MIN_KERNEL_ADDRESS);
 
 	return maxkvaddr;
 }
