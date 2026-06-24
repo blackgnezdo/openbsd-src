@@ -34,6 +34,15 @@ static uint8_t kasan_early_pages[USPACE + 3 * PAGE_SIZE] __aligned(PAGE_SIZE);
 static size_t kasan_allocated_early_pages;
 extern struct user *proc0paddr;
 
+/*
+ * One shared, zeroed page mapped read-only across the whole shadow region by
+ * kasan_premap_zero_shadow().  Untracked in-range memory thus reads as 0x00
+ * (valid) instead of faulting on an unmapped shadow page; kasan_enter_shad()
+ * copies-on-write a private writable page over it the first time a region is
+ * actually poisoned.
+ */
+static paddr_t kasan_zero_shadow_pa;
+
 inline static uint8_t *
 kasan_addr_to_shad(vaddr_t va)
 {
@@ -156,10 +165,13 @@ kasan_enter_shad(vaddr_t sva)
 
 	/*
 	 * Back the shadow with a private, writable page so distinct regions
-	 * never share a shadow cell.  Idempotent: an already-backed leaf is
-	 * left untouched, preserving the poison state recorded so far.
+	 * never share a shadow cell.  A leaf still pointing at the shared
+	 * read-only zero page (or never mapped at all) is copied-on-write to a
+	 * fresh zeroed page here; an already-private leaf is left untouched,
+	 * preserving the poison state recorded so far.
 	 */
-	if (pd[l1idx] == 0) {
+	if (pd[l1idx] == 0 ||
+	    (pd[l1idx] & PMAP_PA_MASK & PG_FRAME) == kasan_zero_shadow_pa) {
 		pd[l1idx] = kasan_alloc_shadow_page() | PG_KW | pg_nx | PG_V;
 		pmap->pm_stats.resident_count++;
 	}
@@ -265,6 +277,67 @@ kasan_bootstrap(void) {
 }
 
 /*
+ * Map every shadow page in the monitored range to one shared, read-only,
+ * zeroed page.  This guarantees a shadow read never faults: untracked
+ * in-range memory reads as 0x00 (valid).  All leaf PTEs alias a single
+ * physical page, so the cost is the page-table skeleton (~256 PT pages for
+ * the 512MB shadow) plus that one zero page.  kasan_enter_shad() later
+ * copies a private writable page over a leaf the first time it is poisoned.
+ */
+static void
+kasan_premap_zero_shadow(void)
+{
+	uint64_t l4idx, l3idx, l2idx, l1idx;
+	vaddr_t sva, send;
+	pd_entry_t *pd;
+	paddr_t npa;
+	struct pmap *pmap = pmap_kernel();
+
+	kasan_zero_shadow_pa = kasan_alloc_shadow_page();
+
+	sva = (vaddr_t)kasan_addr_to_shad(VM_MIN_KERNEL_ADDRESS) & PMAP_PA_MASK;
+	send = (vaddr_t)kasan_addr_to_shad(VM_MAX_KERNEL_ADDRESS);
+
+	for (; sva < send; sva += PAGE_SIZE) {
+		l4idx = (sva & L4_MASK) >> L4_SHIFT;
+		l3idx = (sva & L3_MASK) >> L3_SHIFT;
+		l2idx = (sva & L2_MASK) >> L2_SHIFT;
+		l1idx = (sva & L1_MASK) >> L1_SHIFT;
+
+		pd = (pd_entry_t *)pmap->pm_pdir;
+		npa = pd[l4idx] & PMAP_PA_MASK & PG_FRAME;
+		if (!npa) {
+			pmap_get_physpage(sva, 3, &npa);
+			pd[l4idx] = (npa | PG_KW | pg_nx | PG_V);
+		}
+		pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
+		npa = pd[l3idx] & PMAP_PA_MASK & PG_FRAME;
+		if (!npa) {
+			pmap_get_physpage(sva, 2, &npa);
+			pd[l3idx] = (npa | PG_KW | pg_nx | PG_V);
+		}
+		pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
+		npa = pd[l2idx] & PMAP_PA_MASK & PG_FRAME;
+		if (!npa) {
+			pmap_get_physpage(sva, 1, &npa);
+			pd[l2idx] = (npa | PG_KW | pg_g_kern | pg_nx | PG_V);
+		}
+		pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
+
+		/*
+		 * Read-only (no PG_W) so an accidental shadow write to an
+		 * un-poisoned region faults loudly rather than silently
+		 * scribbling on the shared page; the real poison paths run
+		 * kasan_enter_shad() first, which COWs in a writable page.
+		 * Leave any already-mapped leaf (e.g. the bootstrap stack
+		 * shadow) untouched.
+		 */
+		if (pd[l1idx] == 0)
+			pd[l1idx] = (kasan_zero_shadow_pa | pg_nx | PG_V);
+	}
+}
+
+/*
  * Create the shadow mapping. We don't create the 'User' area, because we
  * exclude it from the monitoring. The 'Main' area is created dynamically
  * in pmap_growkernel.
@@ -274,6 +347,10 @@ kasan_init(void)
 {
 	if (kasan_enabled)
 		panic("KASAN already enabled");
+
+	/* Back the whole shadow range before any check can read it. */
+	kasan_premap_zero_shadow();
+
 	kasan_enabled = 1;
 
 	/* Call the ASAN constructors. */
