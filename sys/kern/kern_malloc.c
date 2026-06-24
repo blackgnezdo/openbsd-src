@@ -526,12 +526,14 @@ free(void *addr, int type, size_t freedsize)
 #endif
 #ifdef KASAN
 	/*
-	 * INSERT_TAIL writes through *sqx_last. On a non-empty list that
-	 * target is the previous tail's link, a poisoned freed object in the
-	 * arena, so unpoison it first. On an empty list sqx_last points at the
-	 * freelist head in the global bucket[] array, which is always valid and
-	 * not KASAN-tracked, so there's nothing to do.
+	 * INSERT_TAIL writes freep's own link and through *sqx_last. The link
+	 * sits inside the object being freed, which may be redzone past a small
+	 * allocation, so unpoison the freelist node first. On a non-empty list
+	 * *sqx_last is the previous tail's (poisoned) link; unpoison it too. On
+	 * an empty list it is the head in the global bucket[] array, always
+	 * valid and untracked, so there is nothing to do.
 	 */
+	kasan_alloc((vaddr_t)freep, sizeof(*freep), sizeof(*freep));
 	if (!XSIMPLEQ_EMPTY(&kbp->kb_freelist)) {
 		vaddr_t insert = (vaddr_t)XSIMPLEQ_XOR(&kbp->kb_freelist,
 		    kbp->kb_freelist.sqx_last);
