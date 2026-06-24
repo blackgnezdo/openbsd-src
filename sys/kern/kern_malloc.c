@@ -374,20 +374,21 @@ out:
 #endif
 	mtx_leave(&malloc_mtx);
 
-	if ((flags & M_ZERO) && va != NULL)
-		memset(va, 0,
 #ifdef KASAN
-		    osize
+	/* Validate the object before any access; the M_ZERO write below is
+	 * instrumented and the carve left everything past the freelist link
+	 * poisoned. */
+	kasan_alloc((vaddr_t)va, osize, size);
+
+	if ((flags & M_ZERO) && va != NULL)
+		memset(va, 0, osize);
 #else
-		    size
+	if ((flags & M_ZERO) && va != NULL)
+		memset(va, 0, size);
 #endif
-		);
 
 	TRACEPOINT(uvm, malloc, type, va, size, flags);
 
-#ifdef KASAN
-	kasan_alloc((vaddr_t)va, osize, size);
-#endif
 	return (va);
 }
 
