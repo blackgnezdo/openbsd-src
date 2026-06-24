@@ -450,8 +450,8 @@ uvm_init(void)
 	 */
 	uvm_km_page_lateinit();
 
-	pool_test();
-	malloc_test();
+	//	pool_test();
+	//	malloc_test();
 
 	/*
 	 * the VM system is now up!  now that malloc is up we can
