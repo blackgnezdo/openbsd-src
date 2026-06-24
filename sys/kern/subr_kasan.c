@@ -8,6 +8,7 @@
 #include <sys/user.h>
 
 #include <uvm/uvm_extern.h>
+#include <uvm/uvm.h>
 
 #include <machine/kasan.h>
 #include <machine/cpu.h>
@@ -23,11 +24,11 @@
 
 void kasan_init(void);
 int pmap_get_physpage(vaddr_t, int, paddr_t *); // XXX
+vaddr_t pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 
 static int kasan_enabled;
 /* Set to 1 (e.g. from ddb) to log every shadow map/alloc operation. */
 int kasan_debug = 0;
-static paddr_t kasan_zero;
 int kasan_in_init;
 static uint8_t kasan_early_pages[USPACE + 3 * PAGE_SIZE] __aligned(PAGE_SIZE);
 static size_t kasan_allocated_early_pages;
@@ -50,11 +51,35 @@ kasan_unsupported(vaddr_t addr)
 	    addr < VM_MIN_KERNEL_ADDRESS);
 }
 
+/*
+ * Allocate a zeroed physical page to back one shadow page.  Shadow starts
+ * out 0x00 (all valid), so untracked memory in the monitored range reads
+ * as accessible until something poisons it.  Handles both the early phase
+ * (before UVM is up, via steal) and normal operation.
+ */
+static paddr_t
+kasan_alloc_shadow_page(void)
+{
+	struct vm_page *pg;
+	vaddr_t va;
+
+	if (uvm.page_init_done == 0) {
+		va = pmap_steal_memory(PAGE_SIZE, NULL, NULL);
+		__builtin_memset((void *)va, 0, PAGE_SIZE);
+		return PMAP_DIRECT_UNMAP(va);
+	}
+
+	pg = uvm_pagealloc(NULL, 0, NULL, UVM_PGA_USERESERVE | UVM_PGA_ZERO);
+	if (pg == NULL)
+		panic("%s: out of memory", __func__);
+	return VM_PAGE_TO_PHYS(pg);
+}
+
 int
-kasan_enter_shad(vaddr_t sva, paddr_t pa)
+kasan_enter_shad(vaddr_t sva)
 {
 	uint64_t l4idx, l3idx, l2idx, l1idx;
-	pd_entry_t *pd, npte;
+	pd_entry_t *pd;
 	paddr_t npa;
 	struct pmap *pmap = pmap_kernel();
 
@@ -129,15 +154,15 @@ kasan_enter_shad(vaddr_t sva, paddr_t pa)
 		panic("%s: can't locate PT page @ pa=0x%llx", __func__,
 		    (uint64_t)npa);
 
-	npte = pa | PG_KW | pg_nx | PG_V;
-
+	/*
+	 * Back the shadow with a private, writable page so distinct regions
+	 * never share a shadow cell.  Idempotent: an already-backed leaf is
+	 * left untouched, preserving the poison state recorded so far.
+	 */
 	if (pd[l1idx] == 0) {
+		pd[l1idx] = kasan_alloc_shadow_page() | PG_KW | pg_nx | PG_V;
 		pmap->pm_stats.resident_count++;
-	} else {
-		/* XXX flush ept */
 	}
-
-	pd[l1idx] = npte;
 
 	return 0;
 }
@@ -159,14 +184,11 @@ kasan_enter_shad_multi(vaddr_t va, size_t sz)
 		printf("shadow start: 0x%llx\n", KASAN_SHADOW_START);
 		printf("mapped 0x%lx to 0x%lx\n", sva, sva + ssz);
 	}
-	for (i = 0; i < spgs; i++)
-{
-		if (kasan_enter_shad(sva + i * PAGE_SIZE, kasan_zero))
-			panic("failed to create kasa page at 0x%lx", sva +
-			    i * PAGE_SIZE);
-//printf("mapped 0x%lx\n", sva + i * PAGE_SIZE);
-}
-
+	for (i = 0; i < spgs; i++) {
+		if (kasan_enter_shad(sva + i * PAGE_SIZE))
+			panic("failed to create kasan shadow page at 0x%lx",
+			    sva + i * PAGE_SIZE);
+	}
 }
 
 /*
@@ -238,7 +260,6 @@ kasan_bootstrap(void) {
 		kasan_enter_early_shad(sva + i * PAGE_SIZE);
 }
 
-vaddr_t		pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 /*
  * Create the shadow mapping. We don't create the 'User' area, because we
  * exclude it from the monitoring. The 'Main' area is created dynamically
@@ -247,17 +268,9 @@ vaddr_t		pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 void
 kasan_init(void)
 {
-	vaddr_t zva;
-
 	if (kasan_enabled)
 		panic("KASAN already enabled");
 	kasan_enabled = 1;
-
-printf("allocing kasan_zero\n");
-	zva = pmap_steal_memory(PAGE_SIZE, NULL, NULL);
-	kasan_zero = PMAP_DIRECT_UNMAP(zva);
-	pmap_get_physpage(zva, 1, &kasan_zero);
-	__builtin_memset((uint8_t *)zva, 0xFF, PAGE_SIZE);
 
 	/* Call the ASAN constructors. */
 	kasan_ctors();
@@ -321,25 +334,15 @@ kasan_add_redzone(size_t *size)
 	*size += KASAN_SHADOW_SCALE_SIZE;
 }
 
-struct vm_page *pmap_find_ptp(struct pmap *, vaddr_t, paddr_t, int);
-
 static void
 kasan_markmem(vaddr_t addr, size_t size, int valid)
 {
-	struct vm_page *vm;
 	size_t i;
 
 	if (addr % KASAN_SHADOW_SCALE_SIZE != 0)
 		panic("%s: %s region at 0x%lx size %zu is not %lu-byte shadow "
 		    "aligned", __func__, valid ? "valid" : "redzone", addr,
 		    size, KASAN_SHADOW_SCALE_SIZE);
-
-	// XXX: PHYS_TO_VM_PAGE might also work
-	if ((vm = pmap_find_ptp(pmap_kernel(), addr, kasan_zero, 1)) == NULL) {
-		//		printf("found pmap pa ptp kasan_zero thing\n");
-	} else {
-		//		panic("no pmap pa ptp kasan_zero thing\n");
-	}
 
 	if (valid) {
 		for (i = 0; i < size; i++)
