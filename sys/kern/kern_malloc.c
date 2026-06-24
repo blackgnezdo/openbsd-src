@@ -524,9 +524,18 @@ free(void *addr, int type, size_t freedsize)
 	ksp->ks_inuse--;
 #endif
 #ifdef KASAN
-	/* XXX: broken when last the list is empty */
-	vaddr_t insert = (vaddr_t)XSIMPLEQ_XOR(&kbp->kb_freelist, kbp->kb_freelist.sqx_last);
-	kasan_alloc(insert, sizeof(*freep), sizeof(*freep));
+	/*
+	 * INSERT_TAIL writes through *sqx_last. On a non-empty list that
+	 * target is the previous tail's link, a poisoned freed object in the
+	 * arena, so unpoison it first. On an empty list sqx_last points at the
+	 * freelist head in the global bucket[] array, which is always valid and
+	 * not KASAN-tracked, so there's nothing to do.
+	 */
+	if (!XSIMPLEQ_EMPTY(&kbp->kb_freelist)) {
+		vaddr_t insert = (vaddr_t)XSIMPLEQ_XOR(&kbp->kb_freelist,
+		    kbp->kb_freelist.sqx_last);
+		kasan_alloc(insert, sizeof(*freep), sizeof(*freep));
+	}
 #endif
 	XSIMPLEQ_INSERT_TAIL(&kbp->kb_freelist, freep, kf_flist);
 	mtx_leave(&malloc_mtx);
