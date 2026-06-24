@@ -666,11 +666,14 @@ try_map:
 #ifdef KASAN
 	kasan_enter_shad_multi(sva, sz);
 	/*
-	 * kp_nomem regions are VA-only; the caller maps and owns the backing
-	 * (e.g. firmware/device memory via pmap_kenter_pa).  Mark the window
-	 * valid rather than redzoning pages km_alloc never populated.
+	 * Redzoning the backing is only right for allocator pools (malloc/pool,
+	 * kp_dirty) that carve it and mark each object valid on hand-out.  Direct
+	 * consumers get a usable buffer, so mark it valid:
+	 *   - kp_nomem: VA-only, caller maps and owns the backing (e.g. firmware
+	 *     windows via pmap_kenter_pa);
+	 *   - kp_pageable: large direct-use buffers (exec args, pipe buffers).
 	 */
-	if (kp->kp_nomem)
+	if (kp->kp_nomem || kp->kp_pageable)
 		kasan_alloc(sva, sz, sz);
 	else
 		kasan_alloc(sva, (kp->kp_zero) ? sz : 0 , sz);
