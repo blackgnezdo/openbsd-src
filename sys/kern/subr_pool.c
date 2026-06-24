@@ -46,6 +46,10 @@
 
 #include <uvm/uvm_extern.h>
 
+#ifdef KASAN
+#include <sys/kasan.h>
+#endif
+
 /*
  * Pool resource management utility.
  *
@@ -151,7 +155,13 @@ struct pool_page_header {
 	uint64_t		ph_timestamp;
 };
 #define POOL_MAGICBIT (1 << 3) /* keep away from perturbed low bits */
+#ifdef KASAN
+/* KASAN poisons free items itself; the pool's own body poisoning would
+ * read/write the redzone and is redundant, so disable it. */
+#define POOL_PHPOISON(ph) 0
+#else
 #define POOL_PHPOISON(ph) ISSET((ph)->ph_magic, POOL_MAGICBIT)
+#endif
 
 #ifdef MULTIPROCESSOR
 #define POOL_CACHE_LIST_MIN	8		/* minimum list length */
@@ -750,6 +760,11 @@ pool_do_get(struct pool *pp, int flags, int *slowdown)
 	}
 #endif /* DIAGNOSTIC */
 
+#ifdef KASAN
+	/* Hand the caller a fully valid item. */
+	kasan_alloc((vaddr_t)pi, pp->pr_size, pp->pr_size);
+#endif
+
 	if (ph->ph_nmissing++ == 0) {
 		/*
 		 * This page was previously empty.  Move it to the list of
@@ -859,6 +874,10 @@ pool_do_put(struct pool *pp, void *v)
 	if (POOL_PHPOISON(ph))
 		poison_mem(pi + 1, pp->pr_size - sizeof(*pi));
 #endif /* DIAGNOSTIC */
+#ifdef KASAN
+	/* Freed item: keep the freelist link valid, redzone the body. */
+	kasan_alloc((vaddr_t)pi, sizeof(*pi), pp->pr_size);
+#endif
 
 	if (ph->ph_nmissing-- == pp->pr_itemsperpage) {
 		/*
@@ -931,6 +950,16 @@ pool_p_alloc(struct pool *pp, int flags, int *slowdown)
 	if (addr == NULL)
 		return (NULL);
 
+#ifdef KASAN
+	/*
+	 * km_alloc() hands back a redzone-poisoned page; the pool now owns it
+	 * and writes its header and per-item bookkeeping throughout, so mark
+	 * the whole backing page valid. (No-op for direct-mapped, unmonitored
+	 * pages.)
+	 */
+	kasan_alloc((vaddr_t)addr, pp->pr_pgsize, pp->pr_pgsize);
+#endif
+
 	if (POOL_INPGHDR(pp))
 		ph = (struct pool_page_header *)(addr + pp->pr_phoffset);
 	else {
@@ -974,6 +1003,10 @@ pool_p_alloc(struct pool *pp, int flags, int *slowdown)
 		if (POOL_PHPOISON(ph))
 			poison_mem(pi + 1, pp->pr_size - sizeof(*pi));
 #endif /* DIAGNOSTIC */
+#ifdef KASAN
+		/* Carved free item: keep the link valid, redzone the body. */
+		kasan_alloc((vaddr_t)pi, sizeof(*pi), pp->pr_size);
+#endif
 
 		addr += pp->pr_size;
 	}
