@@ -1983,6 +1983,16 @@ pool_cache_get(struct pool *pp)
 	pc->pc_nget++;
 	pc->pc_nout++;
 
+#ifdef KASAN
+	/*
+	 * The per-CPU cache fast path bypasses pool_do_get(), so revalidate
+	 * the item here.  A cached item carries the redzoned-body shadow set
+	 * when it was put to the cache (or carved), and would otherwise be
+	 * handed back to the caller still poisoned.
+	 */
+	kasan_alloc((vaddr_t)ci, pp->pr_size, pp->pr_size);
+#endif
+
 done:
 	pool_cache_leave(pp, pc, s);
 
@@ -2023,6 +2033,18 @@ pool_cache_put(struct pool *pp, void *v)
 	ci->ci_nitems |= poison ? POOL_CACHE_ITEM_NITEMS_POISON : 0;
 #endif
 	pool_cache_item_magic(pp, ci);
+
+#ifdef KASAN
+	/*
+	 * Mirror pool_do_put() for the cache fast path: keep the cache header
+	 * (ci_next/ci_nitems/magic in ci_nextl) valid so the magazine can link
+	 * and magic-check the item, and redzone the body so a use-after-free is
+	 * caught.  pool_cache_get() revalidates the whole item on hand-out.
+	 */
+	if (pp->pr_size > sizeof(struct pool_cache_item))
+		kasan_alloc((vaddr_t)ci, sizeof(struct pool_cache_item),
+		    pp->pr_size);
+#endif
 
 	pc->pc_actv = ci;
 	pc->pc_nactv = nitems;
