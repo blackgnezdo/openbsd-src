@@ -173,6 +173,10 @@ kasan_enter_shad_multi(vaddr_t va, size_t sz)
 	size_t ssz, spgs, i;
 	vaddr_t sva;
 
+	/* Only the monitored range has shadow; ignore e.g. direct-map VAs. */
+	if (kasan_unsupported(va))
+		return;
+
 	sva = (vaddr_t)kasan_addr_to_shad(va);
 	sva &= PMAP_PA_MASK;
 	ssz = (sz + KASAN_SHADOW_SCALE_SIZE - 1) / KASAN_SHADOW_SCALE_SIZE;
@@ -374,11 +378,9 @@ kasan_alloc(vaddr_t addr, size_t size, size_t redzone)
 
 	if (kasan_in_init)
 		return;
+	/* Memory outside the monitored range (e.g. direct map) has no shadow. */
 	if (kasan_unsupported(addr))
-		panic("%s: address 0x%lx (size %zu, redzone %zu) outside KASAN "
-		    "range [0x%lx, 0x%lx) -- not a tracked heap object?",
-		    __func__, addr, size, redzone,
-		    (vaddr_t)VM_MIN_KERNEL_ADDRESS, (vaddr_t)VM_MAX_KERNEL_ADDRESS);
+		return;
 
 	if (kasan_debug)
 		printf("%s: 0x%lx+%lu-%lu\n", __func__, addr, size, redzone);

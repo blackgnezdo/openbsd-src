@@ -579,8 +579,17 @@ km_alloc(size_t sz, const struct kmem_va_mode *kv,
 			TAILQ_REMOVE(&pgl, pg, pageq);
 			va = pmap_map_direct(pg);
 #ifdef KASAN
-			kasan_enter_shad_multi(va, PAGE_SIZE);
-			kasan_alloc(va, (kp->kp_zero) ? PAGE_SIZE : 0, PAGE_SIZE);
+			/*
+			 * Direct-mapped pages live outside the monitored
+			 * [VM_MIN_KERNEL_ADDRESS, VM_MAX_KERNEL_ADDRESS) range,
+			 * so KASAN cannot shadow them.
+			 */
+			if (va >= VM_MIN_KERNEL_ADDRESS &&
+			    va < VM_MAX_KERNEL_ADDRESS) {
+				kasan_enter_shad_multi(va, PAGE_SIZE);
+				kasan_alloc(va,
+				    (kp->kp_zero) ? PAGE_SIZE : 0, PAGE_SIZE);
+			}
 #endif
 			if (sva == 0)
 				sva = va;
