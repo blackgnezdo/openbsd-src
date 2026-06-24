@@ -316,6 +316,15 @@ pool_test(void)
 		for (i = 0; i < 256; i++) {
 			char *p = pool_get(&kasan_test_pool, PR_WAITOK | PR_ZERO);
 			pool_ptrs[i] = p;
+			/*
+			 * Items must live in mapped KVA so KASAN can shadow them;
+			 * a direct-mapped (unmonitored) item would slip past every
+			 * check below and defeat the test.
+			 */
+			if ((vaddr_t)p < VM_MIN_KERNEL_ADDRESS ||
+			    (vaddr_t)p >= VM_MAX_KERNEL_ADDRESS)
+				panic("pool_test: item %p (size %zu) is not in the "
+				    "KASAN-monitored range", p, isz);
 			p[0] = 0x41;
 			p[isz - 1] = 0x5a;
 			total_gets++;

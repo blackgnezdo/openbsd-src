@@ -1669,13 +1669,45 @@ pool_page_alloc(struct pool *pp, int flags, int *slowdown)
 	kd.kd_waitok = ISSET(flags, PR_WAITOK);
 	kd.kd_slowdown = slowdown;
 
+#ifdef KASAN
+	/*
+	 * kv_page draws from the single-page (direct-mapped) allocator, which
+	 * lives outside the KASAN shadow range and so cannot be monitored.
+	 * Route single-page pools through mapped KVA instead (as the multi-page
+	 * allocator does) so their items get shadow coverage.
+	 */
+	{
+		struct kmem_va_mode kv = kv_intrsafe;
+		void *v;
+		int s;
+
+		if (POOL_INPGHDR(pp))
+			kv.kv_align = pp->pr_pgsize;
+		s = splvm();
+		v = km_alloc(pp->pr_pgsize, &kv, pp->pr_crange, &kd);
+		splx(s);
+		return (v);
+	}
+#else
 	return (km_alloc(pp->pr_pgsize, &kv_page, pp->pr_crange, &kd));
+#endif
 }
 
 void
 pool_page_free(struct pool *pp, void *v)
 {
+#ifdef KASAN
+	struct kmem_va_mode kv = kv_intrsafe;	/* must match pool_page_alloc() */
+	int s;
+
+	if (POOL_INPGHDR(pp))
+		kv.kv_align = pp->pr_pgsize;
+	s = splvm();
+	km_free(v, pp->pr_pgsize, &kv, pp->pr_crange);
+	splx(s);
+#else
 	km_free(v, pp->pr_pgsize, &kv_page, pp->pr_crange);
+#endif
 }
 
 void *
