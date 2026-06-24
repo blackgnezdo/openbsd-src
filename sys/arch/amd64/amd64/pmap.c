@@ -965,6 +965,17 @@ pmap_randomize(void)
 	paddr_t pml4pa;
 	int i;
 
+#ifdef KASAN
+	/*
+	 * Kernel PML4 randomization rewrites the page tables that host the
+	 * KASAN shadow and runs right after switching %cr3, which faults the
+	 * bootstrap-PML4 wipe.  Randomization is a hardening feature orthogonal
+	 * to bug hunting; skip it so the shadow mappings stay intact and kernel
+	 * VAs remain reproducible across boots.
+	 */
+	return;
+#endif
+
 	pml4va = km_alloc(PAGE_SIZE, &kv_page, &kp_zero, &kd_nowait);
 	if (pml4va == NULL)
 		panic("%s: km_alloc failed", __func__);
