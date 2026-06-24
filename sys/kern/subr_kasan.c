@@ -481,12 +481,19 @@ kasan_free(vaddr_t addr, size_t sz_with_redz)
 }
 
 static size_t valid_access = 0;
+/*
+ * Set while emitting a report.  The report path (kasan_report, db_stack_dump,
+ * and ddb's panic handlers) touches plenty of poisoned/freed memory itself;
+ * without this guard each such access re-reports and re-panics, spinning out
+ * endless nested reports instead of the one we care about.
+ */
+static int kasan_reporting;
 static inline void
 kasan_shadow_check(vaddr_t addr, size_t size, int op, vaddr_t retaddr)
 {
 	int valid;
 
-	if (!kasan_enabled || kasan_in_init)
+	if (!kasan_enabled || kasan_in_init || kasan_reporting)
 		return;
 	if (size == 0)
 		return;
@@ -516,6 +523,7 @@ kasan_shadow_check(vaddr_t addr, size_t size, int op, vaddr_t retaddr)
 	}
 
 	if (!valid) {
+		kasan_reporting = 1;
 		printf("%zu valid accesses\n", valid_access);
 		kasan_report(addr, size, op, retaddr);
 #ifdef DDB
@@ -523,6 +531,7 @@ kasan_shadow_check(vaddr_t addr, size_t size, int op, vaddr_t retaddr)
 		panic("Caught invalid memory access at %lx size %lu op %d",
 		    addr, size, op);
 #endif
+		kasan_reporting = 0;
 	} else
 		valid_access++;
 }
