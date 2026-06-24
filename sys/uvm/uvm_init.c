@@ -287,6 +287,74 @@ malloc_test()
 	vmkill_now();
 }
 
+static struct pool kasan_test_pool;
+static void *pool_ptrs[256];
+
+/*
+ * Exercise pool(9) get/put across several item sizes, touching every byte
+ * of each item, so KASAN catches under-marked items or stale poison on the
+ * shared backing pages.
+ */
+void
+pool_test(void)
+{
+	static const size_t sizes[] = { 8, 24, 64, 200, 1000 };
+	uint32_t seed = 0x12345678;
+	int total_gets = 0, total_puts = 0;
+	size_t s;
+	int i;
+
+	printf("\npool_test: starting\n");
+
+	for (s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+		size_t isz = sizes[s];
+
+		pool_init(&kasan_test_pool, isz, 0, IPL_NONE, 0, "kasantst", NULL);
+		printf("=== pool item size %zu ===\n", isz);
+
+		/* Phase A: fill, touching first and last byte, then drain. */
+		for (i = 0; i < 256; i++) {
+			char *p = pool_get(&kasan_test_pool, PR_WAITOK | PR_ZERO);
+			pool_ptrs[i] = p;
+			p[0] = 0x41;
+			p[isz - 1] = 0x5a;
+			total_gets++;
+		}
+		for (i = 0; i < 256; i++) {
+			pool_put(&kasan_test_pool, pool_ptrs[i]);
+			pool_ptrs[i] = NULL;
+			total_puts++;
+		}
+
+		/* Phase B: interleaved get/put for fragmentation, full-item write. */
+		for (i = 0; i < 1000; i++) {
+			int slot = rand_range(&seed, 0, 255);
+
+			if (pool_ptrs[slot] == NULL) {
+				char *p = pool_get(&kasan_test_pool, PR_WAITOK);
+				memset(p, 0x33, isz);
+				pool_ptrs[slot] = p;
+				total_gets++;
+			} else {
+				pool_put(&kasan_test_pool, pool_ptrs[slot]);
+				pool_ptrs[slot] = NULL;
+				total_puts++;
+			}
+		}
+		for (i = 0; i < 256; i++) {
+			if (pool_ptrs[i] != NULL) {
+				pool_put(&kasan_test_pool, pool_ptrs[i]);
+				pool_ptrs[i] = NULL;
+				total_puts++;
+			}
+		}
+
+		pool_destroy(&kasan_test_pool);
+	}
+
+	printf("pool_test: gets=%d puts=%d done\n", total_gets, total_puts);
+}
+
 /*
  * local prototypes
  */
@@ -373,6 +441,7 @@ uvm_init(void)
 	 */
 	uvm_km_page_lateinit();
 
+	pool_test();
 	malloc_test();
 
 	/*
