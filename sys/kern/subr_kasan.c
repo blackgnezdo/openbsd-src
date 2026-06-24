@@ -293,8 +293,10 @@ kasan_shadow_descr(uint8_t code)
 		return "stack redzone (out-of-bounds)";
 	case KASAN_USE_AFTER_SCOPE:
 		return "use-after-scope";
+	case KASAN_SHADOW_SCALE_SIZE:
+		return "valid";
 	default:
-		if (code <= KASAN_SHADOW_SCALE_SIZE)
+		if (code < KASAN_SHADOW_SCALE_SIZE)
 			return "partial granule (out-of-bounds)";
 		return "unknown";
 	}
@@ -303,12 +305,24 @@ kasan_shadow_descr(uint8_t code)
 static void
 kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 {
-	uint8_t code = *kasan_addr_to_shad(addr);
+	vaddr_t bad = addr;
+	size_t i;
+	uint8_t code;
+
+	/* The base may be valid while a later byte trips; point at the
+	 * first offending byte so the offset into the object is obvious. */
+	for (i = 0; i < size; i++) {
+		if (!kasan_shadow_1byte_isvalid(addr + i)) {
+			bad = addr + i;
+			break;
+		}
+	}
+	code = *kasan_addr_to_shad(bad);
 
 	printf("KASAN: invalid %s of %lu byte%s at 0x%lx from pc 0x%lx\n",
 	    (op ? "write" : "read"), size, (size > 1 ? "s" : ""), addr, rip);
-	printf("KASAN: shadow 0x%02x at 0x%lx: %s\n", code,
-	    (unsigned long)kasan_addr_to_shad(addr), kasan_shadow_descr(code));
+	printf("KASAN: first bad byte at 0x%lx (+%lu); shadow 0x%02x: %s\n",
+	    bad, (unsigned long)(bad - addr), code, kasan_shadow_descr(code));
 }
 
 static void
