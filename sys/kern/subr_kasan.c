@@ -21,14 +21,12 @@
 
 #define __RET_ADDR	(vaddr_t)__builtin_return_address(0)
 
-#define ADDR_CROSSES_SCALE_BOUNDARY(addr, size) 		\
-	(addr >> KASAN_SHADOW_SCALE_SHIFT) !=			\
-	    ((addr + size - 1) >> KASAN_SHADOW_SCALE_SHIFT)
-
 void kasan_init(void);
 int pmap_get_physpage(vaddr_t, int, paddr_t *); // XXX
 
 static int kasan_enabled;
+/* Set to 1 (e.g. from ddb) to log every shadow map/alloc operation. */
+int kasan_debug = 0;
 static paddr_t kasan_zero;
 int kasan_in_init;
 static uint8_t kasan_early_pages[USPACE + 3 * PAGE_SIZE] __aligned(PAGE_SIZE);
@@ -41,6 +39,9 @@ kasan_addr_to_shad(vaddr_t va)
 	return (uint8_t *)(KASAN_SHADOW_START +
 	    ((va - VM_MIN_KERNEL_ADDRESS) >> KASAN_SHADOW_SCALE_SHIFT));
 }
+
+/* Shadow primitives; built on kasan_addr_to_shad() above. */
+#include "kasan_shadow.h"
 
 static int
 kasan_unsupported(vaddr_t addr)
@@ -152,9 +153,12 @@ kasan_enter_shad_multi(vaddr_t va, size_t sz)
 	ssz = (sz + KASAN_SHADOW_SCALE_SIZE - 1) / KASAN_SHADOW_SCALE_SIZE;
 	spgs = (ssz + PAGE_SIZE - 1) / PAGE_SIZE;
 
-printf("early start: 0x%llx\n", VA_SIGN_NEG((L4_SLOT_EARLY * NBPD_L4)));
-printf("shadow start: 0x%llx\n", KASAN_SHADOW_START);
-printf("mapped 0x%lx to 0x%lx\n", sva, sva + ssz);
+	if (kasan_debug) {
+		printf("early start: 0x%llx\n",
+		    VA_SIGN_NEG((L4_SLOT_EARLY * NBPD_L4)));
+		printf("shadow start: 0x%llx\n", KASAN_SHADOW_START);
+		printf("mapped 0x%lx to 0x%lx\n", sva, sva + ssz);
+	}
 	for (i = 0; i < spgs; i++)
 {
 		if (kasan_enter_shad(sva + i * PAGE_SIZE, kasan_zero))
@@ -259,19 +263,44 @@ printf("allocing kasan_zero\n");
 	kasan_ctors();
 }
 
+static const char *
+kasan_shadow_descr(uint8_t code)
+{
+	switch (code) {
+	case 0:
+		return "valid";
+	case KASAN_MEMORY_REDZONE:
+		return "heap redzone (out-of-bounds)";
+	case KASAN_GLOBAL_REDZONE:
+		return "global redzone (out-of-bounds)";
+	case KASAN_STACK_LEFT:
+	case KASAN_STACK_MID:
+	case KASAN_STACK_RIGHT:
+	case KASAN_STACK_PARTIAL:
+		return "stack redzone (out-of-bounds)";
+	case KASAN_USE_AFTER_SCOPE:
+		return "use-after-scope";
+	default:
+		if (code <= KASAN_SHADOW_SCALE_SIZE)
+			return "partial granule (out-of-bounds)";
+		return "unknown";
+	}
+}
+
 static void
 kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 {
-	printf("KASAN: unregistered access at 0x%lx: "
-	    "%s of %lu byte%s from 0x%lx\n", rip,
-	    (op ? "write" : "read"), size, (size > 1 ? "s" : ""), addr);
+	uint8_t code = *kasan_addr_to_shad(addr);
+
+	printf("KASAN: invalid %s of %lu byte%s at 0x%lx from pc 0x%lx\n",
+	    (op ? "write" : "read"), size, (size > 1 ? "s" : ""), addr, rip);
+	printf("KASAN: shadow 0x%02x at 0x%lx: %s\n", code,
+	    (unsigned long)kasan_addr_to_shad(addr), kasan_shadow_descr(code));
 }
 
 static void
 kasan_shadow_fill(vaddr_t addr, size_t size, uint8_t val)
 {
-	uint8_t *shad;
-
 	if (kasan_in_init)
 		return;
 	if (size == 0)
@@ -282,19 +311,7 @@ kasan_shadow_fill(vaddr_t addr, size_t size, uint8_t val)
 	KASSERT(addr % KASAN_SHADOW_SCALE_SIZE == 0);
 	KASSERT(size % KASAN_SHADOW_SCALE_SIZE == 0);
 
-	shad = kasan_addr_to_shad(addr);
-	size = size >> KASAN_SHADOW_SCALE_SHIFT;
-
-	__builtin_memset(shad, val, size);
-}
-
-static inline void
-kasan_shadow_1byte_markvalid(vaddr_t addr)
-{
-	uint8_t *byte = kasan_addr_to_shad(addr);
-	uint8_t last = (addr & KASAN_SHADOW_MASK) + 1;
-
-	*byte = last;
+	kasan_shadow_memset(addr, size, val);
 }
 
 void
@@ -312,7 +329,10 @@ kasan_markmem(vaddr_t addr, size_t size, int valid)
 	struct vm_page *vm;
 	size_t i;
 
-	KASSERT(addr % KASAN_SHADOW_SCALE_SIZE == 0);
+	if (addr % KASAN_SHADOW_SCALE_SIZE != 0)
+		panic("%s: %s region at 0x%lx size %zu is not %lu-byte shadow "
+		    "aligned", __func__, valid ? "valid" : "redzone", addr,
+		    size, KASAN_SHADOW_SCALE_SIZE);
 
 	// XXX: PHYS_TO_VM_PAGE might also work
 	if ((vm = pmap_find_ptp(pmap_kernel(), addr, kasan_zero, 1)) == NULL) {
@@ -333,13 +353,21 @@ kasan_markmem(vaddr_t addr, size_t size, int valid)
 void
 kasan_alloc(vaddr_t addr, size_t size, size_t redzone)
 {
+	size_t rzbeg;
+
 	if (kasan_in_init)
 		return;
 	if (kasan_unsupported(addr))
-		panic("%s: 0x%lx outside of VM_KERNEL_ADDRESS range", __func__, addr);
+		panic("%s: address 0x%lx (size %zu, redzone %zu) outside KASAN "
+		    "range [0x%lx, 0x%lx) -- not a tracked heap object?",
+		    __func__, addr, size, redzone,
+		    (vaddr_t)VM_MIN_KERNEL_ADDRESS, (vaddr_t)VM_MAX_KERNEL_ADDRESS);
 
-	printf("%s: 0x%lx+%lu-%lu\n", __func__, addr, size, redzone);
-	kasan_markmem(addr + size, redzone - size, 0);
+	if (kasan_debug)
+		printf("%s: 0x%lx+%lu-%lu\n", __func__, addr, size, redzone);
+	/* Redzone starts past the object's partial granule (kept aligned). */
+	rzbeg = kasan_redzone_start(size);
+	kasan_markmem(addr + rzbeg, redzone - rzbeg, 0);
 	kasan_markmem(addr, size, 1);
 }
 
@@ -354,76 +382,6 @@ kasan_free(vaddr_t addr, size_t sz_with_redz)
 		return;
 
 	kasan_markmem(addr, sz_with_redz, 0);
-}
-
-static inline int
-kasan_shadow_1byte_isvalid(vaddr_t addr)
-{
-	uint8_t *byte = kasan_addr_to_shad(addr);
-	uint8_t last = (addr & KASAN_SHADOW_MASK) + 1;
-
-	return (*byte == 0 || last <= *byte);
-}
-
-static inline int
-kasan_shadow_2byte_isvalid(vaddr_t addr)
-{
-	uint8_t *byte, last;
-
-	if (ADDR_CROSSES_SCALE_BOUNDARY(addr, 2)) {
-		return (kasan_shadow_1byte_isvalid(addr) &&
-		    kasan_shadow_1byte_isvalid(addr + 1));
-	}
-
-	byte = kasan_addr_to_shad(addr);
-	last = ((addr + 1) & KASAN_SHADOW_MASK) + 1;
-
-	return (*byte == 0 || last <= *byte);
-}
-
-static inline int
-kasan_shadow_4byte_isvalid(vaddr_t addr)
-{
-	char *byte, last;
-
-	if (ADDR_CROSSES_SCALE_BOUNDARY(addr, 4)) {
-		return (kasan_shadow_2byte_isvalid(addr) &&
-		    kasan_shadow_2byte_isvalid(addr + 2));
-	}
-
-	byte = kasan_addr_to_shad(addr);
-	last = ((addr + 3) & KASAN_SHADOW_MASK) + 1;
-
-	return (*byte == 0 || last <= *byte);
-}
-
-static inline int
-kasan_shadow_8byte_isvalid(vaddr_t addr)
-{
-	int8_t *byte, last;
-
-	if (ADDR_CROSSES_SCALE_BOUNDARY(addr, 8)) {
-		return (kasan_shadow_4byte_isvalid(addr) &&
-		    kasan_shadow_4byte_isvalid(addr + 4));
-	}
-
-	byte = kasan_addr_to_shad(addr);
-	last = ((addr + 7) & KASAN_SHADOW_MASK) + 1;
-
-	return (*byte == 0 || last <= *byte);
-}
-
-static inline int
-kasan_shadow_Nbyte_isvalid(vaddr_t addr, size_t size)
-{
-	size_t i;
-
-	for (i = 0; i < size; i++) {
-		if (!kasan_shadow_1byte_isvalid(addr + i))
-			return 0;
-	}
-
-	return 1;
 }
 
 static size_t valid_access = 0;
