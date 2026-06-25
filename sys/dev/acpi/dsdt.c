@@ -1294,8 +1294,9 @@ int	aml_parseopcode(struct aml_scope *);
 int
 aml_parseopcode(struct aml_scope *scope)
 {
+	if (scope->pos >= scope->end)
+		aml_die("parseop_code %p %p", scope->pos, scope->end);
 	int opcode = (scope->pos[0]);
-	int twocode = (scope->pos[0]<<8) + scope->pos[1];
 
 	/* Check if this is an embedded name */
 	switch (opcode) {
@@ -1308,10 +1309,14 @@ aml_parseopcode(struct aml_scope *scope)
 	}
 	if (opcode >= 'A' && opcode <= 'Z')
 		return AMLOP_NAMECHAR;
-	if (twocode == AMLOP_LNOTEQUAL || twocode == AMLOP_LLESSEQUAL ||
-	    twocode == AMLOP_LGREATEREQUAL || opcode == AMLOP_EXTPREFIX) {
-		scope->pos += 2;
-		return twocode;
+
+	if (scope->pos + 1 < scope->end) {
+		int twocode = (scope->pos[0]<<8) + scope->pos[1];
+		if (twocode == AMLOP_LNOTEQUAL || twocode == AMLOP_LLESSEQUAL ||
+		    twocode == AMLOP_LGREATEREQUAL || opcode == AMLOP_EXTPREFIX) {
+			scope->pos += 2;
+			return twocode;
+		}
 	}
 	scope->pos += 1;
 	return opcode;
