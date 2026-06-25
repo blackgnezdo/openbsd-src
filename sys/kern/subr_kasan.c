@@ -42,6 +42,22 @@ extern struct user *proc0paddr;
  */
 static paddr_t kasan_zero_shadow_pa;
 
+/*
+ * The kernel image plus the bootstrap memory stolen just above it -- the proc0
+ * u-area and the per-CPU interrupt/IST stacks among it -- live at
+ * [KERNBASE, kern_end), outside the monitored heap window.  (proc0's stack sits
+ * past &end, in the first_avail steal region, so &end is too low a bound;
+ * kern_end = KERNBASE + first_avail covers all of it.)  The compiler still
+ * emits inline stack-redzone poison and global redzones for that region, so it
+ * needs real, writable, checked shadow.  kasan_premap_image_shadow() maps it;
+ * kasan_unsupported() then treats [kasan_image_start, kasan_image_end) as
+ * monitored so the out-of-line checks actually run there too.
+ */
+static vaddr_t kasan_image_start;
+static vaddr_t kasan_image_end;
+int kasan_img_l4slot;		/* PML4 slot of the image shadow; see pmap_pdp_ctor */
+extern vaddr_t kern_end;	/* end of bootstrap-allocated kernel memory */
+
 inline static uint8_t *
 kasan_addr_to_shad(vaddr_t va)
 {
@@ -55,15 +71,22 @@ kasan_addr_to_shad(vaddr_t va)
 static int
 kasan_unsupported(vaddr_t addr)
 {
-	return (addr >= VM_MAX_KERNEL_ADDRESS ||
-	    addr < VM_MIN_KERNEL_ADDRESS);
+	/* The monitored heap window. */
+	if (addr >= VM_MIN_KERNEL_ADDRESS && addr < VM_MAX_KERNEL_ADDRESS)
+		return 0;
+	/* The kernel image + statically-embedded stacks. */
+	if (addr >= kasan_image_start && addr < kasan_image_end)
+		return 0;
+	return 1;
 }
 
 /*
- * Allocate a zeroed physical page to back one shadow page.  Shadow starts
- * out 0x00 (all valid), so untracked memory in the monitored range reads
- * as accessible until something poisons it.  Handles both the early phase
- * (before UVM is up, via steal) and normal operation.
+ * Allocate a zeroed physical page to back one shadow (leaf) page.  Shadow
+ * starts out 0x00 (all valid), so untracked memory in the monitored range
+ * reads as accessible until something poisons it.  Handles both the early
+ * phase (before UVM is up, via steal) and normal operation.  Leaf pages are
+ * written only through their shadow VA, so their physical placement is
+ * unconstrained.
  */
 static paddr_t
 kasan_alloc_shadow_page(void)
@@ -86,81 +109,31 @@ kasan_alloc_shadow_page(void)
 int
 kasan_enter_shad(vaddr_t sva)
 {
-	uint64_t l4idx, l3idx, l2idx, l1idx;
-	pd_entry_t *pd;
-	paddr_t npa;
 	struct pmap *pmap = pmap_kernel();
 
-	l4idx = (sva & L4_MASK) >> L4_SHIFT; /* PML4E idx */
-	l3idx = (sva & L3_MASK) >> L3_SHIFT; /* PDPTE idx */
-	l2idx = (sva & L2_MASK) >> L2_SHIFT; /* PDE idx */
-	l1idx = (sva & L1_MASK) >> L1_SHIFT; /* PTE idx */
-
-	/* Start at PML4 / top level */
-	pd = (pd_entry_t *)pmap->pm_pdir;
-
-	if (pd == NULL)
-		return ENOMEM;
-
-	/* npa = physaddr of PDPT */
-	npa = pd[l4idx] & PMAP_PA_MASK & PG_FRAME;
-
-	/* Valid PML4e for the 512GB region containing sva? */
-	if (!npa) {
-		/* No valid PML4e - allocate PDPT page and set PML4e */
-		pmap_get_physpage(sva, 3, &npa);
-
-		/*
-		 * Higher levels get full perms; specific permissions are
-		 * entered at the lowest level.
-		 */
-		pd[l4idx] = (npa | PG_KW | pg_nx | PG_V);
+	/*
+	 * Walk and populate top-down through the recursive page-table self-map
+	 * (L4_BASE..L1_BASE), never through PMAP_DIRECT_MAP: the direct map is
+	 * read-only over the kernel image's physical range, so a page-table page
+	 * that lands there cannot have its entries written via the direct map,
+	 * whereas the recursive alias is always writable.  Each level must be
+	 * present before the next is accessed, so link as we descend.
+	 */
+	if ((L4_BASE[pl4_i(sva)] & PG_V) == 0) {
+		L4_BASE[pl4_i(sva)] =
+		    kasan_alloc_shadow_page() | PG_KW | pg_nx | PG_V;
+		pmap->pm_stats.resident_count++;
 	}
-
-	pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
-	if (pd == NULL)
-		panic("%s: can't locate PDPT @ pa=0x%llx", __func__,
-		    (uint64_t)npa);
-
-	/* npa = physaddr of PD page */
-	npa = pd[l3idx] & PMAP_PA_MASK & PG_FRAME;
-
-	/* Valid PDPTe for the 1GB region containing sva? */
-	if (!npa) {
-		/* No valid PDPTe - allocate PD page and set PDPTe */
-		pmap_get_physpage(sva, 2, &npa);
-
-		/*
-		 * Higher levels get full perms; specific permissions are
-		 * entered at the lowest level.
-		 */
-		pd[l3idx] = (npa | PG_KW | pg_nx | PG_V);
+	if ((L3_BASE[pl3_i(sva)] & PG_V) == 0) {
+		L3_BASE[pl3_i(sva)] =
+		    kasan_alloc_shadow_page() | PG_KW | pg_nx | PG_V;
+		pmap->pm_stats.resident_count++;
 	}
-
-	pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
-	if (pd == NULL)
-		panic("%s: can't locate PD page @ pa=0x%llx", __func__,
-		    (uint64_t)npa);
-
-	/* npa = physaddr of PT page */
-	npa = pd[l2idx] & PMAP_PA_MASK & PG_FRAME;
-
-	/* Valid PDE for the 2MB region containing sva? */
-	if (!npa) {
-		/* No valid PDE - allocate PT page and set PDE */
-		pmap_get_physpage(sva, 1, &npa);
-
-		/*
-		 * Higher level get full perms; specific permissions are
-		 * entered at the lowest level.
-		 */
-		pd[l2idx] = (npa | PG_KW | pg_g_kern | pg_nx | PG_V);
+	if ((L2_BASE[pl2_i(sva)] & PG_V) == 0) {
+		L2_BASE[pl2_i(sva)] =
+		    kasan_alloc_shadow_page() | PG_KW | pg_g_kern | pg_nx | PG_V;
+		pmap->pm_stats.resident_count++;
 	}
-
-	pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
-	if (pd == NULL)
-		panic("%s: can't locate PT page @ pa=0x%llx", __func__,
-		    (uint64_t)npa);
 
 	/*
 	 * Back the shadow with a private, writable page so distinct regions
@@ -169,9 +142,11 @@ kasan_enter_shad(vaddr_t sva)
 	 * fresh zeroed page here; an already-private leaf is left untouched,
 	 * preserving the poison state recorded so far.
 	 */
-	if (pd[l1idx] == 0 ||
-	    (pd[l1idx] & PMAP_PA_MASK & PG_FRAME) == kasan_zero_shadow_pa) {
-		pd[l1idx] = kasan_alloc_shadow_page() | PG_KW | pg_nx | PG_V;
+	if (L1_BASE[pl1_i(sva)] == 0 ||
+	    (L1_BASE[pl1_i(sva)] & PMAP_PA_MASK & PG_FRAME) ==
+	    kasan_zero_shadow_pa) {
+		L1_BASE[pl1_i(sva)] =
+		    kasan_alloc_shadow_page() | PG_KW | pg_nx | PG_V;
 		pmap->pm_stats.resident_count++;
 	}
 
@@ -286,54 +261,69 @@ kasan_bootstrap(void) {
 static void
 kasan_premap_zero_shadow(void)
 {
-	uint64_t l4idx, l3idx, l2idx, l1idx;
 	vaddr_t sva, send;
-	pd_entry_t *pd;
-	paddr_t npa;
-	struct pmap *pmap = pmap_kernel();
 
 	kasan_zero_shadow_pa = kasan_alloc_shadow_page();
 
-	sva = (vaddr_t)kasan_addr_to_shad(VM_MIN_KERNEL_ADDRESS) & PMAP_PA_MASK;
+	sva = (vaddr_t)kasan_addr_to_shad(VM_MIN_KERNEL_ADDRESS) & ~PAGE_MASK;
 	send = (vaddr_t)kasan_addr_to_shad(VM_MAX_KERNEL_ADDRESS);
 
+	/* Populate top-down through the recursive self-map (always writable). */
 	for (; sva < send; sva += PAGE_SIZE) {
-		l4idx = (sva & L4_MASK) >> L4_SHIFT;
-		l3idx = (sva & L3_MASK) >> L3_SHIFT;
-		l2idx = (sva & L2_MASK) >> L2_SHIFT;
-		l1idx = (sva & L1_MASK) >> L1_SHIFT;
-
-		pd = (pd_entry_t *)pmap->pm_pdir;
-		npa = pd[l4idx] & PMAP_PA_MASK & PG_FRAME;
-		if (!npa) {
-			pmap_get_physpage(sva, 3, &npa);
-			pd[l4idx] = (npa | PG_KW | pg_nx | PG_V);
-		}
-		pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
-		npa = pd[l3idx] & PMAP_PA_MASK & PG_FRAME;
-		if (!npa) {
-			pmap_get_physpage(sva, 2, &npa);
-			pd[l3idx] = (npa | PG_KW | pg_nx | PG_V);
-		}
-		pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
-		npa = pd[l2idx] & PMAP_PA_MASK & PG_FRAME;
-		if (!npa) {
-			pmap_get_physpage(sva, 1, &npa);
-			pd[l2idx] = (npa | PG_KW | pg_g_kern | pg_nx | PG_V);
-		}
-		pd = (pd_entry_t *)PMAP_DIRECT_MAP(npa);
+		if ((L4_BASE[pl4_i(sva)] & PG_V) == 0)
+			L4_BASE[pl4_i(sva)] =
+			    kasan_alloc_shadow_page() | PG_KW | pg_nx | PG_V;
+		if ((L3_BASE[pl3_i(sva)] & PG_V) == 0)
+			L3_BASE[pl3_i(sva)] =
+			    kasan_alloc_shadow_page() | PG_KW | pg_nx | PG_V;
+		if ((L2_BASE[pl2_i(sva)] & PG_V) == 0)
+			L2_BASE[pl2_i(sva)] = kasan_alloc_shadow_page() |
+			    PG_KW | pg_g_kern | pg_nx | PG_V;
 
 		/*
-		 * Read-only (no PG_W) so an accidental shadow write to an
+		 * Read-only (no PG_KW) so an accidental shadow write to an
 		 * un-poisoned region faults loudly rather than silently
 		 * scribbling on the shared page; the real poison paths run
 		 * kasan_enter_shad() first, which COWs in a writable page.
 		 * Leave any already-mapped leaf (e.g. the bootstrap stack
 		 * shadow) untouched.
 		 */
-		if (pd[l1idx] == 0)
-			pd[l1idx] = (kasan_zero_shadow_pa | pg_nx | PG_V);
+		if (L1_BASE[pl1_i(sva)] == 0)
+			L1_BASE[pl1_i(sva)] =
+			    (kasan_zero_shadow_pa | pg_nx | PG_V);
 	}
+}
+
+/*
+ * Map writable shadow for the kernel image + bootstrap steal region
+ * ([KERNBASE, kern_end)).  Unlike the heap shadow (one shared read-only zero page,
+ * COWed on first poison), the compiler poisons stack-frame and global redzones
+ * here with INLINE writes that never call kasan_enter_shad(), so every leaf
+ * must be a private writable page up front.  kasan_enter_shad() does exactly
+ * that -- it COWs a fresh zeroed writable page over an empty/zero leaf -- so we
+ * just drive it across the whole range, then record the range (so
+ * kasan_unsupported() starts checking it) and its PML4 slot (so pmap_pdp_ctor()
+ * shares it with every pmap).
+ */
+static void
+kasan_premap_image_shadow(void)
+{
+	vaddr_t sva, send;
+
+	kasan_image_start = (vaddr_t)KERNBASE;
+	kasan_image_end = kern_end;		/* page-aligned; past proc0's u-area */
+
+	sva = (vaddr_t)kasan_addr_to_shad(kasan_image_start) & ~PAGE_MASK;
+	send = (vaddr_t)kasan_addr_to_shad(kasan_image_end - 1);
+	kasan_img_l4slot = pl4_pi(sva);
+
+	for (; sva <= send; sva += PAGE_SIZE) {
+		if (kasan_enter_shad(sva))
+			panic("%s: shadow at 0x%lx", __func__, sva);
+	}
+
+	/* The image shadow must not spill into a second, un-propagated slot. */
+	KASSERT(pl4_pi(send) == kasan_img_l4slot);
 }
 
 /*
@@ -349,6 +339,13 @@ kasan_init(void)
 
 	/* Back the whole shadow range before any check can read it. */
 	kasan_premap_zero_shadow();
+
+	/*
+	 * Give the kernel image + embedded stacks real writable shadow and mark
+	 * the range monitored, before kasan_ctors() (which poisons global
+	 * redzones into it) or any inline stack poison runs.
+	 */
+	kasan_premap_image_shadow();
 
 	kasan_enabled = 1;
 
