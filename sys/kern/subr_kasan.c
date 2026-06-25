@@ -29,7 +29,6 @@ vaddr_t pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 static int kasan_enabled;
 /* Set to 1 (e.g. from ddb) to log every shadow map/alloc operation. */
 int kasan_debug = 0;
-int kasan_in_init;
 static uint8_t kasan_early_pages[USPACE + 3 * PAGE_SIZE] __aligned(PAGE_SIZE);
 static size_t kasan_allocated_early_pages;
 extern struct user *proc0paddr;
@@ -409,8 +408,6 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 static void
 kasan_shadow_fill(vaddr_t addr, size_t size, uint8_t val)
 {
-	if (kasan_in_init)
-		return;
 	if (size == 0)
 		return;
 	if (kasan_unsupported(addr))
@@ -453,8 +450,6 @@ kasan_alloc(vaddr_t addr, size_t size, size_t redzone)
 {
 	size_t rzbeg;
 
-	if (kasan_in_init)
-		return;
 	/* Memory outside the monitored range (e.g. direct map) has no shadow. */
 	if (kasan_unsupported(addr))
 		return;
@@ -470,8 +465,6 @@ kasan_alloc(vaddr_t addr, size_t size, size_t redzone)
 void
 kasan_free(vaddr_t addr, size_t sz_with_redz)
 {
-	if (kasan_in_init)
-		return;
 	if (sz_with_redz == 0)
 		return;
 	if (kasan_unsupported(addr))
@@ -493,7 +486,7 @@ kasan_shadow_check(vaddr_t addr, size_t size, int op, vaddr_t retaddr)
 {
 	int valid;
 
-	if (!kasan_enabled || kasan_in_init || kasan_reporting)
+	if (!kasan_enabled || kasan_reporting)
 		return;
 	if (size == 0)
 		return;

@@ -20,8 +20,6 @@
 #define KASAN_STACK_PARTIAL	0xF4
 #define KASAN_USE_AFTER_SCOPE	0xF8
 
-extern int kasan_in_init;
-
 void	 kasan_add_redzone(size_t *);
 void	 kasan_alloc(vaddr_t, size_t, size_t);
 void	 kasan_free(vaddr_t, size_t);

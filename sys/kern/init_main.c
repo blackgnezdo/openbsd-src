@@ -434,9 +434,6 @@ main(void *framep)
 		if (fork1(p, FORK_FORK, start_init, NULL, NULL, &initproc))
 			panic("fork init");
 		initprocess = initproc->p_p;
-#ifdef KASAN
-printf("DEBUG PARENT: kasan_in_init=%d\n", kasan_in_init);
-#endif
 	}
 
 	/*
@@ -619,9 +616,6 @@ start_init(void *arg)
 	/*
 	 * Now in process 1.
 	 */
-#ifdef KASAN
-	kasan_in_init = 1;
-#endif
 
 	/*
 	 * Wait for main() to tell us that it's safe to exec.
@@ -735,9 +729,6 @@ start_init(void *arg)
 		 */
 		if ((error = sys_execve(p, &args, retval)) == EJUSTRETURN) {
 			KERNEL_UNLOCK();
-#ifdef KASAN
-			kasan_in_init = 0;
-#endif
 			return;
 		}
 		if (error != ENOENT)
