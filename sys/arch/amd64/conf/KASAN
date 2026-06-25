@@ -2,6 +2,8 @@
 
 include "arch/amd64/conf/GENERIC"
 
+option MULTIPROCESSOR
+
 option KASAN
 option NO_PROPOLICE
 
