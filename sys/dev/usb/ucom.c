@@ -1263,7 +1263,10 @@ sysctl_ucominit(void)
 
 	if (ucoms == NULL || ucom_change) {
 		free(ucoms, M_SYSCTL, ucomslen);
-		ucomslen = ucom_cd.cd_ndevs * sizeof(name);
+		/* +1 entry so the allocation is never zero-sized: malloc(0)
+		 * returns unzeroed storage (M_ZERO memsets osize == 0 bytes),
+		 * leaving ucoms unterminated for the strlen() below. */
+		ucomslen = (ucom_cd.cd_ndevs + 1) * sizeof(name);
 		ucoms = malloc(ucomslen, M_SYSCTL, M_WAITOK | M_ZERO);
 		for (unit = 0; unit < ucom_cd.cd_ndevs; unit++) {
 			sc = ucom_cd.cd_devs[unit];
