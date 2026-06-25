@@ -280,11 +280,6 @@ malloc_test()
 	printf("Total allocations: %d\n", total_allocs);
 	printf("Total frees: %d\n", total_frees);
 	printf("Leaked: %d\n", total_allocs - total_frees);
-
-	/* extern void db_enter(); */
-	/* db_enter(); */
-	extern void vmkill_now(void);
-	vmkill_now();
 }
 
 static struct pool kasan_test_pool;
@@ -365,28 +360,6 @@ pool_test(void)
 }
 
 #ifdef KASAN
-/*
- * Negative test: deliberately overrun a stack buffer by one byte to prove the
- * compiler's inline stack-redzone poisoning lands in mapped, checked shadow.
- * The store must trip a KASAN "stack redzone (out-of-bounds)" report (shadow
- * code 0xf1/0xf2/0xf3) and panic; a silent return ("MISS") or an unmapped-shadow
- * fault is a failure.  Runs on the proc0 kernel stack, which lives in the
- * bootstrap steal region [end, kern_end) -- past &end, so it is only covered
- * once kasan_premap_image_shadow() maps shadow out to kern_end.  One-shot (it
- * panics into ddb), so the call in uvm_init() is left disabled; enable it to run.
- */
-void
-kasan_stack_test(void)
-{
-	volatile char buf[64];
-	volatile int idx = sizeof(buf);	/* 1 past the end; opaque to -Warray-bounds */
-
-	printf("kasan_stack_test: overrunning a %zu-byte stack buffer by 1 "
-	    "(expect a KASAN stack-redzone report)\n", sizeof(buf));
-	buf[idx] = 0x41;
-	printf("kasan_stack_test: MISS -- overflow went undetected\n");
-}
-
 /*
  * Regression test for the per-CPU pool cache under KASAN.  With pool_debug on,
  * pool_cache_put() both KASAN-redzones and pool-poisons an item's body; on the
@@ -512,7 +485,6 @@ uvm_init(void)
 	 */
 	uvm_km_page_lateinit();
 
-	//	kasan_stack_test();	/* negative test: panics; enable to run */
 	//	pool_test();
 	//	malloc_test();
 

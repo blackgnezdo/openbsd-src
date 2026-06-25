@@ -453,10 +453,15 @@ main(void *framep)
 
 	dostartuphooks();
 
-#ifdef KASAN
+#ifdef KASAN_TEST
+	{
+		extern void kasan_test_run(void);
+		kasan_test_run();		/* full KASAN self-test suite */
+	}
+#elif defined(KASAN)
 	{
 		extern void kasan_poolcache_test(void);
-		kasan_poolcache_test();		/* WIP: per-CPU cache regression */
+		kasan_poolcache_test();		/* per-CPU cache regression */
 	}
 #endif
 

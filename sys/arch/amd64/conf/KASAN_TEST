@@ -1,0 +1,10 @@
+#	$OpenBSD$
+#
+# KASAN self-test kernel: the full KASAN config plus the in-kernel positive +
+# negative test suite (kern/subr_kasan_test.c, driven by ~/bin/kasan-negtest).
+# option KASAN_TEST turns reports into record-and-continue (no panic) so the
+# whole battery runs in one boot; never use this kernel in production.
+
+include "arch/amd64/conf/KASAN"
+
+option KASAN_TEST
