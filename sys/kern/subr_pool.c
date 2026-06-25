@@ -1960,6 +1960,18 @@ pool_cache_get(struct pool *pp)
 	}
 
 	pool_cache_item_magic_check(pp, ci);
+
+#ifdef KASAN
+	/*
+	 * The per-CPU cache fast path bypasses pool_do_get(), so revalidate
+	 * the item here -- and before the DIAGNOSTIC poison_check below, which
+	 * reads the item body that pool_cache_put() redzoned.  kasan_alloc()
+	 * only flips shadow (the poison pattern in memory is left intact), so
+	 * poison_check() still verifies it.
+	 */
+	kasan_alloc((vaddr_t)ci, pp->pr_size, pp->pr_size);
+#endif
+
 #ifdef DIAGNOSTIC
 	if (pool_debug && POOL_CACHE_ITEM_POISONED(ci)) {
 		size_t pidx;
@@ -1982,16 +1994,6 @@ pool_cache_get(struct pool *pp)
 	pc->pc_nactv = POOL_CACHE_ITEM_NITEMS(ci) - 1;
 	pc->pc_nget++;
 	pc->pc_nout++;
-
-#ifdef KASAN
-	/*
-	 * The per-CPU cache fast path bypasses pool_do_get(), so revalidate
-	 * the item here.  A cached item carries the redzoned-body shadow set
-	 * when it was put to the cache (or carved), and would otherwise be
-	 * handed back to the caller still poisoned.
-	 */
-	kasan_alloc((vaddr_t)ci, pp->pr_size, pp->pr_size);
-#endif
 
 done:
 	pool_cache_leave(pp, pc, s);
