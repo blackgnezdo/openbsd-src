@@ -386,6 +386,44 @@ kasan_stack_test(void)
 	buf[idx] = 0x41;
 	printf("kasan_stack_test: MISS -- overflow went undetected\n");
 }
+
+/*
+ * Regression test for the per-CPU pool cache under KASAN.  With pool_debug on,
+ * pool_cache_put() both KASAN-redzones and pool-poisons an item's body; on the
+ * next pool_cache_get() the cache's poison_check() reads that body, so KASAN
+ * must revalidate the item before the check runs.  Fill the cache (freeing a
+ * batch redzones each body) then re-get the batch to drive poison_check across
+ * cached items: reaching the final print means the ordering is right; a KASAN
+ * report in poison_check is the bug.  Needs a live per-CPU cache, so it is
+ * called from main() after cpu_configure()/dostartuphooks(), not uvm_init().
+ */
+void
+kasan_poolcache_test(void)
+{
+	static struct pool pc_test_pool;
+	void *items[64];
+	int i;
+
+	pool_init(&pc_test_pool, 128, 0, IPL_NONE, 0, "kctst", NULL);
+	pool_cache_init(&pc_test_pool);
+	if (pc_test_pool.pr_cache == NULL) {
+		printf("kasan_poolcache_test: no per-CPU cache; skipped\n");
+		return;
+	}
+
+	for (i = 0; i < 64; i++)
+		items[i] = pool_get(&pc_test_pool, PR_WAITOK);
+	for (i = 0; i < 64; i++)
+		pool_put(&pc_test_pool, items[i]);	/* poison + redzone bodies */
+	for (i = 0; i < 64; i++) {
+		items[i] = pool_get(&pc_test_pool, PR_WAITOK); /* poison_check here */
+		*(volatile char *)items[i] = 0x5a;
+	}
+	for (i = 0; i < 64; i++)
+		pool_put(&pc_test_pool, items[i]);
+
+	printf("kasan_poolcache_test: cache get/put cycle OK\n");
+}
 #endif /* KASAN */
 
 /*

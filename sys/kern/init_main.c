@@ -453,6 +453,13 @@ main(void *framep)
 
 	dostartuphooks();
 
+#ifdef KASAN
+	{
+		extern void kasan_poolcache_test(void);
+		kasan_poolcache_test();		/* WIP: per-CPU cache regression */
+	}
+#endif
+
 #if NVSCSI > 0
 	config_rootfound("vscsi", NULL);
 #endif
