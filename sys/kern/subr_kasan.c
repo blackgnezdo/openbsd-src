@@ -3,6 +3,7 @@
 #include <sys/param.h>
 #include <sys/atomic.h>
 #include <sys/proc.h>
+#include <sys/stacktrace.h>
 #include <sys/systm.h>
 #include <sys/user.h>
 
@@ -13,7 +14,11 @@
 #include <machine/pmap.h>
 #include <machine/kasan.h>
 
+#ifdef DDB
+#include <machine/db_machdep.h>
 #include <ddb/db_output.h>
+#include <ddb/db_sym.h>
+#endif
 
 #include <sys/kasan.h>
 
@@ -425,6 +430,9 @@ kasan_shadow_descr(uint8_t code)
 static void
 kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 {
+#ifdef DDB
+	struct stacktrace st;
+#endif
 	vaddr_t bad = addr;
 	size_t i;
 	uint8_t code;
@@ -443,6 +451,21 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 	    (op ? "write" : "read"), size, (size > 1 ? "s" : ""), addr, rip);
 	printf("KASAN: first bad byte at 0x%lx (+%lu); shadow 0x%02x: %s\n",
 	    bad, (unsigned long)(bad - addr), code, kasan_shadow_descr(code));
+
+#ifdef DDB
+	/*
+	 * Symbolize on the spot: the KASAN_TEST build never panics (so this is
+	 * the only trace it gets) and a symbol+file:line beats fishing the raw
+	 * pc out of a hex dump.  Nested shadow checks are suppressed by
+	 * kasan_reporting, so walking and printing here is safe.
+	 */
+	printf("KASAN: pc: ");
+	db_printsym(rip, DB_STGY_PROC, printf);
+	printf("\n");
+	stacktrace_save_at(&st, 1);
+	printf("KASAN: call trace:\n");
+	stacktrace_print(&st, printf);
+#endif
 
 #ifdef KASAN_TEST
 	/* Record the result for the test harness to read at the
@@ -573,7 +596,7 @@ kasan_shadow_check(vaddr_t addr, size_t size, int op, vaddr_t retaddr)
 		 * mandatory: a stuck flag would suppress every later case into a
 		 * false MISS. */
 #elif defined(DDB)
-		db_stack_dump();
+		/* kasan_report() already printed the symbolized call trace. */
 		panic("Caught invalid memory access at %lx size %zu op %d",
 		    addr, size, op);
 #endif
