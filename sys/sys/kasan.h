@@ -19,8 +19,8 @@
 #define KASAN_USE_AFTER_SCOPE	0xF8
 
 void	 kasan_add_redzone(size_t *);
-void	 kasan_alloc(vaddr_t, size_t, size_t);
-void	 kasan_free(vaddr_t, size_t);
+void	 kasan_alloc(vaddr_t, size_t, size_t, uint8_t);
+void	 kasan_free(vaddr_t, size_t, uint8_t);
 
 #ifdef KASAN_TEST
 void	 kasan_test_run(void);
