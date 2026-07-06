@@ -764,7 +764,8 @@ pool_do_get(struct pool *pp, int flags, int *slowdown)
 
 #ifdef KASAN
 	/* Hand the caller a fully valid item. */
-	kasan_alloc((vaddr_t)pi, pp->pr_size, pp->pr_size);
+	kasan_alloc((vaddr_t)pi, pp->pr_size, pp->pr_size,
+	    KASAN_MEMORY_REDZONE);
 #endif
 
 	if (ph->ph_nmissing++ == 0) {
@@ -878,7 +879,8 @@ pool_do_put(struct pool *pp, void *v)
 #endif /* DIAGNOSTIC */
 #ifdef KASAN
 	/* Freed item: keep the freelist link valid, redzone the body. */
-	kasan_alloc((vaddr_t)pi, sizeof(*pi), pp->pr_size);
+	kasan_alloc((vaddr_t)pi, sizeof(*pi), pp->pr_size,
+	    KASAN_MEMORY_REDZONE);
 #endif
 
 	if (ph->ph_nmissing-- == pp->pr_itemsperpage) {
@@ -959,7 +961,8 @@ pool_p_alloc(struct pool *pp, int flags, int *slowdown)
 	 * the whole backing page valid. (No-op for direct-mapped, unmonitored
 	 * pages.)
 	 */
-	kasan_alloc((vaddr_t)addr, pp->pr_pgsize, pp->pr_pgsize);
+	kasan_alloc((vaddr_t)addr, pp->pr_pgsize, pp->pr_pgsize,
+	    KASAN_MEMORY_REDZONE);
 #endif
 
 	if (POOL_INPGHDR(pp))
@@ -1007,7 +1010,8 @@ pool_p_alloc(struct pool *pp, int flags, int *slowdown)
 #endif /* DIAGNOSTIC */
 #ifdef KASAN
 		/* Carved free item: keep the link valid, redzone the body. */
-		kasan_alloc((vaddr_t)pi, sizeof(*pi), pp->pr_size);
+		kasan_alloc((vaddr_t)pi, sizeof(*pi), pp->pr_size,
+	    KASAN_MEMORY_REDZONE);
 #endif
 
 		addr += pp->pr_size;
@@ -1971,7 +1975,8 @@ pool_cache_get(struct pool *pp)
 	 * only flips shadow (the poison pattern in memory is left intact), so
 	 * poison_check() still verifies it.
 	 */
-	kasan_alloc((vaddr_t)ci, pp->pr_size, pp->pr_size);
+	kasan_alloc((vaddr_t)ci, pp->pr_size, pp->pr_size,
+	    KASAN_MEMORY_REDZONE);
 #endif
 
 #ifdef DIAGNOSTIC
@@ -2047,7 +2052,7 @@ pool_cache_put(struct pool *pp, void *v)
 	 */
 	if (pp->pr_size > sizeof(struct pool_cache_item))
 		kasan_alloc((vaddr_t)ci, sizeof(struct pool_cache_item),
-		    pp->pr_size);
+		    pp->pr_size, KASAN_MEMORY_REDZONE);
 #endif
 
 	pc->pc_actv = ci;
