@@ -2688,7 +2688,7 @@ dovutimens(struct proc *p, struct vnode *vp, struct timespec ts[2])
 		vattr.va_mtime = ts[1];
 
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-	if (vp->v_mount->mnt_flag & MNT_RDONLY)
+	if (vp->v_mount && vp->v_mount->mnt_flag & MNT_RDONLY)
 		error = EROFS;
 	else
 		error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
