@@ -11,6 +11,7 @@
  * comparisons must be signed at every width (else redzone reads pass).
  */
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -309,6 +310,98 @@ test_markvalid_equivalence(void)
 	}
 }
 
+/* kasan_shadow_dump() output captured for inspection. */
+static char dump_buf[8192];
+static size_t dump_len;
+
+static int
+dump_pr(const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(dump_buf + dump_len, sizeof(dump_buf) - dump_len, fmt,
+	    ap);
+	va_end(ap);
+	dump_len += n;
+	return n;
+}
+
+static void
+dump_reset(void)
+{
+	dump_buf[0] = '\0';
+	dump_len = 0;
+}
+
+static int
+count_lines(const char *s)
+{
+	int n = 0;
+
+	for (; *s != '\0'; s++)
+		n += (*s == '\n');
+	return n;
+}
+
+static void
+test_shadow_dump(void)
+{
+	vaddr_t base = MEM_BASE + 0x20000;
+	vaddr_t hi = MEM_BASE + MEM_BYTES;
+	size_t size = 16, redz = add_redzone(16);
+	char want[32];
+	char *row;
+
+	/* Centered case: header + KASAN_DUMP_ROWS rows, guilty cell
+	 * bracketed on the marked '>' row. */
+	shadow_reset();
+	mark_alloc(base, size, redz);
+	dump_reset();
+	kasan_shadow_dump(base + size, MEM_BASE, hi, dump_pr);
+
+	CHECK(count_lines(dump_buf) == 1 + KASAN_DUMP_ROWS, "%d lines",
+	    count_lines(dump_buf));
+	CHECK(strstr(dump_buf, "[fb]") != NULL, "guilty cell bracketed: %s",
+	    dump_buf);
+	row = strchr(dump_buf, '>');
+	CHECK(row != NULL, "'>' row present");
+	if (row != NULL) {
+		snprintf(want, sizeof(want), ">0x%016lx:",
+		    (unsigned long)((base + size) &
+		    ~(vaddr_t)(KASAN_DUMP_CELLS * KASAN_SHADOW_SCALE_SIZE - 1)));
+		CHECK(strncmp(row, want, strlen(want)) == 0,
+		    "'>' row is the guilty row: %.24s != %s", row, want);
+		CHECK(strchr(row, '[') != NULL, "bracket on the '>' row");
+	}
+
+	/* Low edge: window may not reach below lo; first row starts at lo
+	 * and carries the guilty cell. */
+	shadow_reset();
+	kasan_shadow_memset(MEM_BASE, 8, TEST_REDZONE);
+	dump_reset();
+	kasan_shadow_dump(MEM_BASE + 3, MEM_BASE, hi, dump_pr);
+
+	snprintf(want, sizeof(want), ">0x%016lx:[fb]",
+	    (unsigned long)MEM_BASE);
+	CHECK(strstr(dump_buf, want) != NULL, "low edge clamped: %s",
+	    dump_buf);
+	CHECK(count_lines(dump_buf) == 1 + KASAN_DUMP_ROWS, "%d lines at lo",
+	    count_lines(dump_buf));
+
+	/* High edge: rows past hi are cut, not printed. */
+	shadow_reset();
+	kasan_shadow_memset(hi - 8, 8, TEST_REDZONE);
+	dump_reset();
+	kasan_shadow_dump(hi - 8, MEM_BASE, hi, dump_pr);
+
+	CHECK(count_lines(dump_buf) == 1 + KASAN_DUMP_ROWS / 2 + 1,
+	    "%d lines at hi", count_lines(dump_buf));
+	CHECK(strstr(dump_buf, "[fb]\n") != NULL,
+	    "guilty cell is the last printed: %s", dump_buf);
+}
+
 int
 main(void)
 {
@@ -320,6 +413,7 @@ main(void)
 	test_boundary_crossing();
 	test_remark_race();
 	test_markvalid_equivalence();
+	test_shadow_dump();
 
 	if (failures == 0) {
 		printf("kasan_shadow_test: all tests passed\n");

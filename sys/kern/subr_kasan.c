@@ -467,6 +467,23 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 	stacktrace_print(&st, printf);
 #endif
 
+	/*
+	 * The poison pattern across the object tells freed body from trailing
+	 * redzone from carve-time fill at a glance.  Shadow reads are safe
+	 * across whichever monitored window (kasan_unsupported()) bad is in:
+	 * the heap window is premapped to the zero page, the image window to
+	 * real shadow.
+	 */
+	if (bad >= VM_MIN_KERNEL_ADDRESS && bad < VM_MAX_KERNEL_ADDRESS)
+		kasan_shadow_dump(bad, VM_MIN_KERNEL_ADDRESS,
+		    VM_MAX_KERNEL_ADDRESS, printf);
+	else
+		kasan_shadow_dump(bad, kasan_image_start, kasan_image_end,
+		    printf);
+	printf("KASAN: legend: 00 valid; 01..07 partial; fb malloc redzone; "
+	    "fc malloc freed; fd pool freed; fe kmem; fa global; "
+	    "f1..f4/f8 stack/scope\n");
+
 #ifdef KASAN_TEST
 	/* Record the result for the test harness to read at the
 	 * kasan_test_caseend() breakpoint (subr_kasan_test.c). */
