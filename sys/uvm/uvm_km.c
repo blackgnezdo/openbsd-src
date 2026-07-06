@@ -135,6 +135,10 @@
 #include <sys/proc.h>
 #include <sys/kthread.h>
 #include <uvm/uvm.h>
+#ifdef KASAN
+#include <machine/kasan.h>
+#include <sys/kasan.h>
+#endif
 
 /*
  * global data structures
@@ -571,6 +575,12 @@ km_alloc(size_t sz, const struct kmem_va_mode *kv,
 	 * allocations.
 	 */
 	if (kv->kv_singlepage || kp->kp_maxseg == 1) {
+		/*
+		 * KASAN note: direct-mapped pages live outside the monitored
+		 * [VM_MIN_KERNEL_ADDRESS, VM_MAX_KERNEL_ADDRESS) window and
+		 * get no shadow; consumers needing coverage must use mapped
+		 * KVA (see pool_page_alloc()).
+		 */
 		while ((pg = TAILQ_FIRST(&pgl)) != NULL) {
 			TAILQ_REMOVE(&pgl, pg, pageq);
 			va = pmap_map_direct(pg);
@@ -646,6 +656,21 @@ try_map:
 			pmap_kenter_pa(va, VM_PAGE_TO_PHYS(pg), prot);
 		va += PAGE_SIZE;
 	}
+#ifdef KASAN
+	kasan_enter_shad_multi(sva, sz);
+	/*
+	 * Redzoning the backing is only right for allocator pools (malloc/pool,
+	 * kp_dirty) that carve it and mark each object valid on hand-out.  Direct
+	 * consumers get a usable buffer, so mark it valid:
+	 *   - kp_nomem: VA-only, caller maps and owns the backing (e.g. firmware
+	 *     windows via pmap_kenter_pa);
+	 *   - kp_pageable: large direct-use buffers (exec args, pipe buffers).
+	 */
+	if (kp->kp_nomem || kp->kp_pageable)
+		kasan_alloc(sva, sz, sz);
+	else
+		kasan_alloc(sva, kp->kp_zero ? sz : 0, sz);
+#endif
 	pmap_update(pmap_kernel());
 	return ((void *)sva);
 }
