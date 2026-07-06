@@ -159,4 +159,51 @@ kasan_shadow_Nbyte_isvalid(vaddr_t addr, size_t size)
 	return 1;
 }
 
+#define KASAN_DUMP_CELLS	16	/* shadow cells per dump row */
+#define KASAN_DUMP_ROWS		5
+
+/*
+ * Print the shadow cells around a faulting address, the guilty cell
+ * bracketed, so the poison pattern across the whole object is visible at a
+ * glance (freed body vs trailing redzone vs partial granule).  [lo, hi) is
+ * the surrounding range with readable shadow; rows never stray outside it.
+ * lo must be granule-aligned.  The row prefix is the covered VA, not the
+ * shadow address.
+ */
+static inline void
+kasan_shadow_dump(vaddr_t bad, vaddr_t lo, vaddr_t hi,
+    int (*pr)(const char *, ...))
+{
+	const vaddr_t rowbytes = KASAN_DUMP_CELLS * KASAN_SHADOW_SCALE_SIZE;
+	vaddr_t badva = bad & ~(vaddr_t)KASAN_SHADOW_MASK;
+	vaddr_t start, end, row, va;
+	int guilty;
+
+	/* Center the window on the guilty cell's row, clamped to [lo, hi). */
+	start = bad & ~(rowbytes - 1);
+	if (start >= lo && start - lo >= (KASAN_DUMP_ROWS / 2) * rowbytes)
+		start -= (KASAN_DUMP_ROWS / 2) * rowbytes;
+	else
+		start = lo;
+	end = start + KASAN_DUMP_ROWS * rowbytes;
+	if (end > hi || end < start)
+		end = hi;
+
+	pr("KASAN: shadow of 0x%lx..0x%lx (1 cell = %lu bytes):\n",
+	    (unsigned long)start, (unsigned long)end,
+	    (unsigned long)KASAN_SHADOW_SCALE_SIZE);
+	for (row = start; row < end; row += rowbytes) {
+		pr("%s0x%016lx:", (badva - row < rowbytes) ? ">" : " ",
+		    (unsigned long)row);
+		guilty = 0;
+		for (va = row; va < row + rowbytes && va < end;
+		    va += KASAN_SHADOW_SCALE_SIZE) {
+			pr("%s%02x", (va == badva) ? "[" : (guilty ? "]" : " "),
+			    (uint8_t)*kasan_addr_to_shad(va));
+			guilty = (va == badva);
+		}
+		pr("%s\n", guilty ? "]" : "");
+	}
+}
+
 #endif /* !_KERN_KASAN_SHADOW_H_ */
