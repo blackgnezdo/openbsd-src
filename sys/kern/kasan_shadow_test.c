@@ -19,7 +19,7 @@
 
 typedef uintptr_t vaddr_t;
 
-/* Redzone code, mirrors KASAN_MEMORY_REDZONE in <sys/kasan.h>. */
+/* Redzone code, mirrors KASAN_MALLOC_REDZONE in <sys/kasan.h>. */
 #define TEST_REDZONE	0xFB
 
 /* Modeled memory + shadow; kasan_shadow.h builds on kasan_addr_to_shad(). */
@@ -150,6 +150,37 @@ test_redzone_detected_all_widths(void)
 	CHECK(kasan_shadow_1byte_isvalid(base + 0), "1-byte in-bounds");
 	CHECK(kasan_shadow_8byte_isvalid(base + 8), "8-byte in-bounds");
 	CHECK(kasan_shadow_Nbyte_isvalid(base + 0, 16), "N-byte in-bounds");
+}
+
+/*
+ * Every distinct poison code (KASAN_*_REDZONE/_FREE in <sys/kasan.h>) must
+ * round-trip through the fill and read back as invalid at every width, so a
+ * report can name the memory's state from the shadow byte alone.
+ */
+static void
+test_poison_codes(void)
+{
+	static const uint8_t codes[] = { 0xFA, 0xFB, 0xFC, 0xFD, 0xFE };
+	vaddr_t base = MEM_BASE + 0x10000;
+	size_t i;
+
+	for (i = 0; i < sizeof(codes); i++) {
+		shadow_reset();
+		kasan_shadow_memset(base, 16, codes[i]);
+		CHECK((uint8_t)*kasan_addr_to_shad(base) == codes[i],
+		    "code 0x%02x cell=0x%02x", codes[i],
+		    (uint8_t)*kasan_addr_to_shad(base));
+		CHECK(!kasan_shadow_1byte_isvalid(base),
+		    "code 0x%02x 1-byte read", codes[i]);
+		CHECK(!kasan_shadow_2byte_isvalid(base),
+		    "code 0x%02x 2-byte read", codes[i]);
+		CHECK(!kasan_shadow_4byte_isvalid(base),
+		    "code 0x%02x 4-byte read", codes[i]);
+		CHECK(!kasan_shadow_8byte_isvalid(base),
+		    "code 0x%02x 8-byte read", codes[i]);
+		CHECK(!kasan_shadow_Nbyte_isvalid(base, 16),
+		    "code 0x%02x N-byte read", codes[i]);
+	}
 }
 
 static void
@@ -285,6 +316,7 @@ main(void)
 	test_aligned_alloc();
 	test_partial_granule_alloc();
 	test_redzone_detected_all_widths();
+	test_poison_codes();
 	test_boundary_crossing();
 	test_remark_race();
 	test_markvalid_equivalence();

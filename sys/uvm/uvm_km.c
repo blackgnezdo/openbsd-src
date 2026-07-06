@@ -667,10 +667,10 @@ try_map:
 	 *   - kp_pageable: large direct-use buffers (exec args, pipe buffers).
 	 */
 	if (kp->kp_nomem || kp->kp_pageable)
-		kasan_alloc(sva, sz, sz, KASAN_MEMORY_REDZONE);
+		kasan_alloc(sva, sz, sz, KASAN_KMEM_REDZONE);
 	else
 		kasan_alloc(sva, kp->kp_zero ? sz : 0, sz,
-		    KASAN_MEMORY_REDZONE);
+		    KASAN_KMEM_REDZONE);
 #endif
 	pmap_update(pmap_kernel());
 	return ((void *)sva);

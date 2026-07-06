@@ -666,7 +666,7 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 	}
 	pcb = ci->ci_idle_pcb = (struct pcb *) kstack;
 #ifdef KASAN
-	kasan_alloc(kstack, USPACE, USPACE, KASAN_MEMORY_REDZONE);
+	kasan_alloc(kstack, USPACE, USPACE, KASAN_KMEM_REDZONE);
 #endif
 	memset(pcb, 0, USPACE);
 
