@@ -292,7 +292,7 @@ malloc(size_t size, int type, int flags)
 			freep = (struct kmem_freelist *)cp;
 #ifdef KASAN
 			kasan_alloc((vaddr_t)freep, sizeof(*freep),
-			    sizeof(*freep), KASAN_MEMORY_REDZONE);
+			    sizeof(*freep), KASAN_MALLOC_REDZONE);
 			freep->kf_type = M_FREE;
 #else
 #ifdef CHEAP_MEMORY_DEBUG
@@ -318,7 +318,7 @@ malloc(size_t size, int type, int flags)
 	freep = XSIMPLEQ_FIRST(&kbp->kb_freelist);
 #ifdef KASAN
 	kasan_alloc((vaddr_t)freep, sizeof(*freep), sizeof(*freep),
-	    KASAN_MEMORY_REDZONE);
+	    KASAN_MALLOC_REDZONE);
 #endif
 	XSIMPLEQ_REMOVE_HEAD(&kbp->kb_freelist, kf_flist);
 	va = (caddr_t)freep;
@@ -386,7 +386,7 @@ out:
 	 * instrumented and the carve left everything past the freelist link
 	 * poisoned.
 	 */
-	kasan_alloc((vaddr_t)va, osize, size, KASAN_MEMORY_REDZONE);
+	kasan_alloc((vaddr_t)va, osize, size, KASAN_MALLOC_REDZONE);
 
 	if ((flags & M_ZERO) && va != NULL)
 		memset(va, 0, osize);
@@ -544,7 +544,7 @@ free(void *addr, int type, size_t freedsize)
 	 * bucket[] array, always valid and untracked.
 	 */
 	kasan_alloc((vaddr_t)freep, sizeof(*freep), sizeof(*freep),
-	    KASAN_MEMORY_REDZONE);
+	    KASAN_MALLOC_REDZONE);
 #endif
 	XSIMPLEQ_INSERT_TAIL(&kbp->kb_freelist, freep, kf_flist);
 #ifdef KASAN
@@ -559,9 +559,9 @@ free(void *addr, int type, size_t freedsize)
 	 * setup and its INSERT_TAIL link write).
 	 */
 	kasan_free((vaddr_t)addr, offsetof(struct kmem_freelist, kf_flist),
-	    KASAN_MEMORY_REDZONE);
+	    KASAN_MALLOC_FREE);
 	kasan_free((vaddr_t)addr + sizeof(struct kmem_freelist),
-	    size - sizeof(struct kmem_freelist), KASAN_MEMORY_REDZONE);
+	    size - sizeof(struct kmem_freelist), KASAN_MALLOC_FREE);
 #endif
 	mtx_leave(&malloc_mtx);
 #ifdef KMEMSTATS

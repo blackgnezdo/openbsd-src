@@ -396,8 +396,14 @@ kasan_shadow_descr(uint8_t code)
 	switch (code) {
 	case 0:
 		return "valid";
-	case KASAN_MEMORY_REDZONE:
-		return "heap redzone (out-of-bounds)";
+	case KASAN_MALLOC_REDZONE:
+		return "malloc redzone (out-of-bounds)";
+	case KASAN_MALLOC_FREE:
+		return "malloc use-after-free";
+	case KASAN_POOL_FREE:
+		return "pool use-after-free (or unallocated item)";
+	case KASAN_KMEM_REDZONE:
+		return "kmem page redzone (unallocated)";
 	case KASAN_GLOBAL_REDZONE:
 		return "global redzone (out-of-bounds)";
 	case KASAN_STACK_LEFT:

@@ -7,9 +7,16 @@
 #define KASAN_SHADOW_SCALE_SIZE		(1UL << KASAN_SHADOW_SCALE_SHIFT)
 #define KASAN_SHADOW_MASK		(KASAN_SHADOW_SCALE_SIZE - 1)
 
-/* Our redzone values. */
-#define KASAN_GLOBAL_REDZONE	0xFA
-#define KASAN_MEMORY_REDZONE	0xFB
+/*
+ * Our poison values.  A shadow byte both blocks the access and names the
+ * memory's state in the report, so freed memory is distinguishable from a
+ * live object's trailing redzone (UAF vs out-of-bounds).
+ */
+#define KASAN_GLOBAL_REDZONE	0xFA	/* global variable trailing redzone */
+#define KASAN_MALLOC_REDZONE	0xFB	/* malloc(9) live-object redzone */
+#define KASAN_MALLOC_FREE	0xFC	/* malloc(9) freed object */
+#define KASAN_POOL_FREE		0xFD	/* pool(9) freed/never-allocated item */
+#define KASAN_KMEM_REDZONE	0xFE	/* km_alloc backing not yet carved */
 
 /* Stack redzone shadow values. Part of the compiler ABI. */
 #define KASAN_STACK_LEFT	0xF1
