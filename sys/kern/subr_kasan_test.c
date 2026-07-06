@@ -384,17 +384,17 @@ kasan_poolcache_test(void)
  * kern_malloc.c), and free()/malloc() write and read that link through
  * *sqx_last / REMOVE_HEAD while the object sits on the freelist.  So the
  * link granule must stay valid for as long as the object is freed; the rest
- * of the body is poisoned 0xFB.
+ * of the body is poisoned 0xFC.
  *
  * Regression test for the syzbot ktrgenio crash (extid f028f6e8, fault at
  * kern_malloc.c INSERT_TAIL): free() used to poison the WHOLE object with a
  * trailing kasan_free() after dropping malloc_mtx, so on MP a late poison
  * landed between the next free()'s tail-link unpoison and its INSERT_TAIL
- * write, which then trapped on shadow 0xFB.  A single CPU can't schedule
+ * write, which then trapped on shadow 0xFC.  A single CPU can't schedule
  * that interleaving, but it can perform the racing access itself: the 8-byte
  * link access below is byte-identical to what a second free()'s INSERT_TAIL
  * does to the tail.  Pre-fix it reports (op=write size=8 at obj+8, shadow
- * 0xFB -- the exact syzbot signature); with the link granule kept valid it
+ * 0xFC -- the exact syzbot signature); with the link granule kept valid it
  * runs clean.
  */
 static void
@@ -436,7 +436,7 @@ kt_heap_oob_write(void)
 	free((void *)p, KT_MTYPE, 64);
 }
 
-/* Heap use-after-free: free() poisons the freed object 0xFB (all but its
+/* Heap use-after-free: free() poisons the freed object 0xFC (all but its
  * freelist link granule at offset 8, see kt_freelist_link), so a read of its
  * first byte reports.  Read (not write) to avoid disturbing the freelist. */
 static void
@@ -447,7 +447,7 @@ kt_heap_uaf(void)
 	volatile char sink;
 
 	free((void *)p, KT_MTYPE, 64);
-	sink = p[idx];				/* freed body -> 0xFB read */
+	sink = p[idx];				/* freed body -> 0xFC read */
 	(void)sink;
 }
 
@@ -515,7 +515,7 @@ kt_width16(void)
 	free((void *)p, KT_MTYPE, 64);
 }
 
-/* Pool use-after-free: pool_put() redzones a freed item's body 0xFB (keeping
+/* Pool use-after-free: pool_put() redzones a freed item's body 0xFD (keeping
  * only the freelist link valid), so a read past the link reports.  Pools pack
  * items with no inter-item redzone, so a live-item overrun is not detectable;
  * the free path is. */
@@ -532,8 +532,8 @@ kt_pool_uaf(void)
 	if ((vaddr_t)p < VM_MIN_KERNEL_ADDRESS ||
 	    (vaddr_t)p >= VM_MAX_KERNEL_ADDRESS)
 		panic("kt_pool_uaf: item %p not in KASAN-monitored range", p);
-	pool_put(&kt_pool, p);			/* redzones the item body 0xFB */
-	sink = p[idx];				/* freed body -> 0xFB read */
+	pool_put(&kt_pool, p);			/* redzones the item body 0xFD */
+	sink = p[idx];				/* freed body -> 0xFD read */
 	(void)sink;
 	pool_destroy(&kt_pool);
 }
@@ -584,15 +584,15 @@ static const struct kasan_test kasan_tests[] = {
 	{ "poolcache_test", KT_CLEAN,  0, 0x00, "",               kasan_poolcache_test },
 	{ "freelist_link",  KT_CLEAN,  0, 0x00, "",               kt_freelist_link   },
 	/* Negative: one deliberate bad access each, expect the listed report. */
-	{ "heap_oob_read",  KT_REPORT, 0, 0xFB, "heap redzone",    kt_heap_oob_read   },
-	{ "heap_oob_write", KT_REPORT, 1, 0xFB, "heap redzone",    kt_heap_oob_write  },
-	{ "heap_uaf",       KT_REPORT, 0, 0xFB, "heap redzone",    kt_heap_uaf        },
+	{ "heap_oob_read",  KT_REPORT, 0, 0xFB, "malloc redzone",  kt_heap_oob_read   },
+	{ "heap_oob_write", KT_REPORT, 1, 0xFB, "malloc redzone",  kt_heap_oob_write  },
+	{ "heap_uaf",       KT_REPORT, 0, 0xFC, "malloc use-after-free", kt_heap_uaf  },
 	{ "partial_gran",   KT_REPORT, 0, 0x05, "partial granule", kt_partial_granule },
-	{ "width2",         KT_REPORT, 0, 0xFB, "heap redzone",    kt_width2          },
-	{ "width4",         KT_REPORT, 0, 0xFB, "heap redzone",    kt_width4          },
-	{ "width8",         KT_REPORT, 0, 0xFB, "heap redzone",    kt_width8          },
-	{ "width16",        KT_REPORT, 0, 0xFB, "heap redzone",    kt_width16         },
-	{ "pool_uaf",       KT_REPORT, 0, 0xFB, "heap redzone",    kt_pool_uaf        },
+	{ "width2",         KT_REPORT, 0, 0xFB, "malloc redzone",  kt_width2          },
+	{ "width4",         KT_REPORT, 0, 0xFB, "malloc redzone",  kt_width4          },
+	{ "width8",         KT_REPORT, 0, 0xFB, "malloc redzone",  kt_width8          },
+	{ "width16",        KT_REPORT, 0, 0xFB, "malloc redzone",  kt_width16         },
+	{ "pool_uaf",       KT_REPORT, 0, 0xFD, "pool use-after-free", kt_pool_uaf    },
 	{ "stack_redzone",  KT_REPORT, 1, 0xF1, "stack redzone",   kasan_stack_test   },
 	{ "global_oob",     KT_REPORT, 1, 0xFA, "global redzone",  kt_global_oob      },
 };
