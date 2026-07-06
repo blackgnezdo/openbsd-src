@@ -97,6 +97,10 @@
 #include <machine/pio.h>
 #include <machine/vmmvar.h>
 
+#ifdef KASAN
+#include <sys/kasan.h>
+#endif
+
 #if NLAPIC > 0
 #include <machine/i82489reg.h>
 #include <machine/i82489var.h>
@@ -661,6 +665,9 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 		return;
 	}
 	pcb = ci->ci_idle_pcb = (struct pcb *) kstack;
+#ifdef KASAN
+	kasan_alloc(kstack, USPACE, USPACE);
+#endif
 	memset(pcb, 0, USPACE);
 
 	pcb->pcb_kstack = kstack + USPACE - 16;
