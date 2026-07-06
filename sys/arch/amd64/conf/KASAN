@@ -1,0 +1,17 @@
+#	$OpenBSD$
+#
+# GENERIC.MP-equivalent kernel with the kernel address sanitizer.
+# MULTIPROCESSOR is spelled out (rather than including GENERIC.MP)
+# so the per-CPU pool cache and other MP-only paths run under KASAN.
+
+include "arch/amd64/conf/GENERIC"
+
+option MULTIPROCESSOR
+
+option KASAN
+option NO_PROPOLICE
+
+makeoptions DEBUG="-g"
+makeoptions COPTIMIZE="-Og -g -fno-omit-frame-pointer"
+
+cpu*		at mainbus?
