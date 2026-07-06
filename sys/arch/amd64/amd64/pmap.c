@@ -1362,6 +1362,14 @@ pmap_pdp_ctor(pd_entry_t *pdir)
 	 * this pmap doesn't fault on an unmapped page.
 	 */
 	pdir[PDIR_SLOT_KASAN] = kpm->pm_pdir[PDIR_SLOT_KASAN];
+	/*
+	 * The kernel image + embedded stacks have their own writable shadow in a
+	 * separate PML4 slot (set up by kasan_premap_image_shadow()); share it
+	 * too, or a stack/global shadow access on this pmap faults.  Zero until
+	 * kasan_init() runs, at which point only kpm exists and gets it directly.
+	 */
+	if (kasan_img_l4slot != 0)
+		pdir[kasan_img_l4slot] = kpm->pm_pdir[kasan_img_l4slot];
 #endif
 
 #if VM_MIN_KERNEL_ADDRESS != KERNBASE

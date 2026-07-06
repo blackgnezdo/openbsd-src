@@ -44,6 +44,22 @@ extern struct user *proc0paddr;
  */
 static paddr_t kasan_zero_shadow_pa;
 
+/*
+ * The kernel image plus the bootstrap memory stolen just above it -- the proc0
+ * u-area and the per-CPU interrupt/IST stacks among it -- live at
+ * [KERNBASE, kern_end), outside the monitored heap window.  (proc0's stack sits
+ * past &end, in the first_avail steal region, so &end is too low a bound;
+ * kern_end = KERNBASE + first_avail covers all of it.)  The compiler still
+ * emits inline stack-redzone poison and global redzones for that region, so it
+ * needs real, writable, checked shadow.  kasan_premap_image_shadow() maps it;
+ * kasan_unsupported() then treats [kasan_image_start, kasan_image_end) as
+ * monitored so the out-of-line checks actually run there too.
+ */
+static vaddr_t kasan_image_start;
+static vaddr_t kasan_image_end;
+int kasan_img_l4slot;		/* PML4 slot of the image shadow; see pmap_pdp_ctor */
+extern vaddr_t kern_end;	/* end of bootstrap-allocated kernel memory */
+
 static inline uint8_t *
 kasan_addr_to_shad(vaddr_t va)
 {
@@ -59,6 +75,9 @@ kasan_unsupported(vaddr_t addr)
 {
 	/* The monitored heap window. */
 	if (addr >= VM_MIN_KERNEL_ADDRESS && addr < VM_MAX_KERNEL_ADDRESS)
+		return 0;
+	/* The kernel image + statically-embedded stacks. */
+	if (addr >= kasan_image_start && addr < kasan_image_end)
 		return 0;
 	return 1;
 }
@@ -105,9 +124,10 @@ kasan_enter_shad(vaddr_t sva)
 	 * present before the next is accessed, so link as we descend.
 	 *
 	 * The L4..L2 skeleton is fully populated single-threaded at boot
-	 * (kasan_premap_zero_shadow() covers the whole monitored window), so
-	 * these three branches never run once other CPUs are up; only the L1
-	 * leaf below changes at runtime and needs the CAS.
+	 * (kasan_premap_zero_shadow() for the heap window,
+	 * kasan_premap_image_shadow() for the image window), so these three
+	 * branches never run once other CPUs are up; only the L1 leaf below
+	 * changes at runtime and needs the CAS.
 	 */
 	if ((L4_BASE[pl4_i(sva)] & PG_V) == 0) {
 		L4_BASE[pl4_i(sva)] =
@@ -304,6 +324,36 @@ kasan_premap_zero_shadow(void)
 }
 
 /*
+ * Map writable shadow for the kernel image + bootstrap steal region
+ * ([KERNBASE, kern_end)).  Unlike the heap shadow (one shared read-only zero page,
+ * COWed on first poison), the compiler poisons stack-frame and global redzones
+ * here with INLINE writes that never call kasan_enter_shad(), so every leaf
+ * must be a private writable page up front.  kasan_enter_shad() does exactly
+ * that -- it COWs a fresh zeroed writable page over an empty/zero leaf -- so we
+ * just drive it across the whole range, then record the range (so
+ * kasan_unsupported() starts checking it) and its PML4 slot (so pmap_pdp_ctor()
+ * shares it with every pmap).
+ */
+static void
+kasan_premap_image_shadow(void)
+{
+	vaddr_t sva, send;
+
+	kasan_image_start = (vaddr_t)KERNBASE;
+	kasan_image_end = kern_end;		/* page-aligned; past proc0's u-area */
+
+	sva = (vaddr_t)kasan_addr_to_shad(kasan_image_start) & ~PAGE_MASK;
+	send = (vaddr_t)kasan_addr_to_shad(kasan_image_end - 1);
+	kasan_img_l4slot = pl4_pi(sva);
+
+	for (; sva <= send; sva += PAGE_SIZE)
+		kasan_enter_shad(sva);
+
+	/* The image shadow must not spill into a second, un-propagated slot. */
+	KASSERT(pl4_pi(send) == kasan_img_l4slot);
+}
+
+/*
  * Create the shadow mapping. We don't create the 'User' area, because we
  * exclude it from the monitoring. The 'Main' area is created dynamically
  * in pmap_growkernel.
@@ -316,6 +366,13 @@ kasan_init(void)
 
 	/* Back the whole shadow range before any check can read it. */
 	kasan_premap_zero_shadow();
+
+	/*
+	 * Give the kernel image + embedded stacks real writable shadow and mark
+	 * the range monitored, before kasan_ctors() (which poisons global
+	 * redzones into it) or any inline stack poison runs.
+	 */
+	kasan_premap_image_shadow();
 
 	kasan_enabled = 1;
 
