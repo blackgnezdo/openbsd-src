@@ -965,6 +965,17 @@ pmap_randomize(void)
 	paddr_t pml4pa;
 	int i;
 
+#ifdef KASAN
+	/*
+	 * Kernel PML4 randomization rewrites the page tables that host the
+	 * KASAN shadow and runs right after switching %cr3, which faults the
+	 * bootstrap-PML4 wipe.  Randomization is a hardening feature orthogonal
+	 * to bug hunting; skip it so the shadow mappings stay intact and kernel
+	 * VAs remain reproducible across boots.
+	 */
+	return;
+#endif
+
 	pml4va = km_alloc(PAGE_SIZE, &kv_page, &kp_zero, &kd_nowait);
 	if (pml4va == NULL)
 		panic("%s: km_alloc failed", __func__);
@@ -1341,6 +1352,17 @@ pmap_pdp_ctor(pd_entry_t *pdir)
 
 	for (i = 0; i < DIRECT_MAP_RESERVED_PML4_SLOTS; i++)
 		pdir[PDIR_SLOT_DIRECT + i] = kpm->pm_pdir[PDIR_SLOT_DIRECT + i];
+
+#ifdef KASAN
+	/*
+	 * The KASAN shadow is global kernel state living one PML4 slot above
+	 * PDIR_SLOT_KERN, but the loop above only copies the kernel slot(s)
+	 * (nkptp[PTP_LEVELS-1]) and the memset zeroed the rest, including the
+	 * shadow slot.  Share kpm's shadow PML4 entry so a shadow access on
+	 * this pmap doesn't fault on an unmapped page.
+	 */
+	pdir[PDIR_SLOT_KASAN] = kpm->pm_pdir[PDIR_SLOT_KASAN];
+#endif
 
 #if VM_MIN_KERNEL_ADDRESS != KERNBASE
 	pdir[pl4_pi(KERNBASE)] = PDP_BASE[pl4_pi(KERNBASE)];
