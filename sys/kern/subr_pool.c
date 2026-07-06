@@ -1963,6 +1963,17 @@ pool_cache_get(struct pool *pp)
 
 	pool_cache_item_magic_check(pp, ci);
 
+#ifdef KASAN
+	/*
+	 * The per-CPU cache fast path bypasses pool_do_get(), so revalidate
+	 * the item here -- and before the DIAGNOSTIC poison_check below, which
+	 * reads the item body that pool_cache_put() redzoned.  kasan_alloc()
+	 * only flips shadow (the poison pattern in memory is left intact), so
+	 * poison_check() still verifies it.
+	 */
+	kasan_alloc((vaddr_t)ci, pp->pr_size, pp->pr_size);
+#endif
+
 #ifdef DIAGNOSTIC
 	if (pool_debug && POOL_CACHE_ITEM_POISONED(ci)) {
 		size_t pidx;
@@ -2026,6 +2037,18 @@ pool_cache_put(struct pool *pp, void *v)
 	ci->ci_nitems |= poison ? POOL_CACHE_ITEM_NITEMS_POISON : 0;
 #endif
 	pool_cache_item_magic(pp, ci);
+
+#ifdef KASAN
+	/*
+	 * Mirror pool_do_put() for the cache fast path: keep the cache header
+	 * (ci_next/ci_nitems/magic in ci_nextl) valid so the magazine can link
+	 * and magic-check the item, and redzone the body so a use-after-free is
+	 * caught.  pool_cache_get() revalidates the whole item on hand-out.
+	 */
+	if (pp->pr_size > sizeof(struct pool_cache_item))
+		kasan_alloc((vaddr_t)ci, sizeof(struct pool_cache_item),
+		    pp->pr_size);
+#endif
 
 	pc->pc_actv = ci;
 	pc->pc_nactv = nitems;
