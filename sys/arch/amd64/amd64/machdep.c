@@ -101,6 +101,9 @@
 #include <machine/kcore.h>
 #include <machine/tss.h>
 #include <machine/ghcb.h>
+#ifdef KASAN
+#include <machine/kasan.h>
+#endif
 #include <machine/kexec.h>
 
 #include <dev/isa/isareg.h>
@@ -1885,6 +1888,15 @@ init_x86_64(paddr_t first_avail)
 	ddb_init();
 	if (boothowto & RB_KDB)
 		db_enter();
+#endif
+#ifdef KASAN
+	/*
+	 * The pmap_growkernel() call above already entered shadow for the
+	 * initial kernel VA via its KASAN hook; kasan_init() adds the
+	 * zero-page backing for the rest of the range, the kernel image
+	 * shadow, and the global redzones.
+	 */
+	kasan_init();
 #endif
 }
 

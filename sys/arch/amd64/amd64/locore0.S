@@ -805,6 +805,16 @@ longmode_hi:
 	leaq	TABLESIZE(%rsi),%rdi
 	subq	$(NBPG*5), %rdi
 
+#ifdef KASAN
+	/*
+	 * We need to set up the shadow memory before we can call any
+	 * instrumented function.
+	 * Save and restore first_avail.
+	 */
+	pushq	%rdi
+	call	kasan_bootstrap
+	popq	%rdi
+#endif
 	/* XXX merge these */
 	call	init_x86_64
 	call	main
