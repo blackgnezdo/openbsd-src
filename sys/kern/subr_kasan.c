@@ -471,7 +471,7 @@ kasan_add_redzone(size_t *size)
 }
 
 static void
-kasan_markmem(vaddr_t addr, size_t size, int valid)
+kasan_markmem(vaddr_t addr, size_t size, int valid, uint8_t code)
 {
 	if (addr % KASAN_SHADOW_SCALE_SIZE != 0)
 		panic("%s: %s region at 0x%lx size %zu is not %lu-byte shadow "
@@ -482,12 +482,12 @@ kasan_markmem(vaddr_t addr, size_t size, int valid)
 		kasan_shadow_markvalid(addr, size);
 	} else {
 		KASSERT(size % KASAN_SHADOW_SCALE_SIZE == 0);
-		kasan_shadow_fill(addr, size, KASAN_MEMORY_REDZONE);
+		kasan_shadow_fill(addr, size, code);
 	}
 }
 
 void
-kasan_alloc(vaddr_t addr, size_t size, size_t redzone)
+kasan_alloc(vaddr_t addr, size_t size, size_t redzone, uint8_t code)
 {
 	size_t rzbeg;
 
@@ -499,19 +499,19 @@ kasan_alloc(vaddr_t addr, size_t size, size_t redzone)
 		printf("%s: 0x%lx+%zu-%zu\n", __func__, addr, size, redzone);
 	/* Redzone starts past the object's partial granule (kept aligned). */
 	rzbeg = kasan_redzone_start(size);
-	kasan_markmem(addr + rzbeg, redzone - rzbeg, 0);
-	kasan_markmem(addr, size, 1);
+	kasan_markmem(addr + rzbeg, redzone - rzbeg, 0, code);
+	kasan_markmem(addr, size, 1, 0);
 }
 
 void
-kasan_free(vaddr_t addr, size_t sz_with_redz)
+kasan_free(vaddr_t addr, size_t sz_with_redz, uint8_t code)
 {
 	if (sz_with_redz == 0)
 		return;
 	if (kasan_unsupported(addr))
 		return;
 
-	kasan_markmem(addr, sz_with_redz, 0);
+	kasan_markmem(addr, sz_with_redz, 0, code);
 }
 
 /*
