@@ -231,16 +231,18 @@ vers.o: ${SYSTEM_DEP:Ngap.o}
 
 .if ${SYSTEM_OBJ:Mkcov.o} && ${COMPILER_VERSION:Mclang}
 kcov.o: $S/dev/kcov.c
-	${NORMAL_C} -fno-sanitize-coverage=trace-pc,trace-cmp
+	${NORMAL_C} -fno-sanitize-coverage=trace-pc,trace-cmp -fno-sanitize=kernel-address
 .endif
 
-# The KASAN runtime must not itself be instrumented: every check would
-# recurse into another check.
+# The KASAN runtime must carry neither KASAN instrumentation (it would
+# recurse into itself) nor kcov instrumentation (mutual recursion with
+# the kcov runtime, which is KASAN-free above: __asan_load ->
+# __sanitizer_cov_trace_pc -> __asan_load -> ... overflows the stack).
 .if ${SYSTEM_OBJ:Mkasan.o} && ${COMPILER_VERSION:Mclang}
 kasan.o: $S/arch/amd64/amd64/kasan.c
-	${NORMAL_C} -fno-sanitize=kernel-address
+	${NORMAL_C} -fno-sanitize=kernel-address -fno-sanitize-coverage=trace-pc,trace-cmp
 subr_kasan.o: $S/kern/subr_kasan.c
-	${NORMAL_C} -fno-sanitize=kernel-address
+	${NORMAL_C} -fno-sanitize=kernel-address -fno-sanitize-coverage=trace-pc,trace-cmp
 .endif
 
 HARDFLOAT_CFLAGS= -msse -msse2
