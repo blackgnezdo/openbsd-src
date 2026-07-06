@@ -400,10 +400,20 @@ extern int (*mountroot)(void);
 
 #include <lib/libkern/libkern.h>
 
+#ifdef KASAN
+void	*kasan_memset(void *, int, size_t);
+int	kasan_memcmp(const void *, const void *, size_t);
+void	*kasan_memcpy(void *, const void *, size_t);
+#define bzero(b, n)		kasan_memset((b), 0, (n))
+#define memcmp(b1, b2, n)	kasan_memcmp((b1), (b2), (n))
+#define memcpy(d, s, n)		kasan_memcpy((d), (s), (n))
+#define memset(b, c, n)		kasan_memset((b), (c), (n))
+#else
 #define bzero(b, n)		__builtin_bzero((b), (n))
 #define memcmp(b1, b2, n)	__builtin_memcmp((b1), (b2), (n))
 #define memcpy(d, s, n)		__builtin_memcpy((d), (s), (n))
 #define memset(b, c, n)		__builtin_memset((b), (c), (n))
+#endif
 #if (defined(__GNUC__) && __GNUC__ >= 4)
 #define memmove(d, s, n)	__builtin_memmove((d), (s), (n))
 #endif
