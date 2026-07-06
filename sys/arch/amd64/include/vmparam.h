@@ -98,7 +98,11 @@
 #define VM_MIN_STACK_ADDRESS	0x0000600000000000
 #endif
 #define VM_MIN_KERNEL_ADDRESS	0xffff800000000000
+#ifndef KASAN
 #define VM_MAX_KERNEL_ADDRESS	0xffff808000000000
+#else
+#define VM_MAX_KERNEL_ADDRESS	0xffff800100000000
+#endif
 
 /* map PIE into approximately the first quarter of user va space */
 #define VM_PIE_MIN_ADDR		VM_MIN_ADDRESS
