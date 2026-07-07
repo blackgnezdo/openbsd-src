@@ -754,6 +754,8 @@ kasan_describe_global(vaddr_t bad)
 	    g->size, (const char *)g->name);
 	if (g->location != NULL)
 		printf(" (%s:%d)", g->location->filename, g->location->line_no);
+	else if (g->module_name != NULL)
+		printf(" (%s)", (const char *)g->module_name);
 	printf("\n");
 }
 
