@@ -610,7 +610,8 @@ static const struct kasan_test kasan_tests[] = {
 	{ "pool_uaf",       KT_REPORT, 0, 0xFD, "pool use-after-free",
 	    "in pool 'kttst'",                           kt_pool_uaf    },
 	{ "stack_redzone",  KT_REPORT, 1, 0xF1, "stack redzone",   "", kasan_stack_test   },
-	{ "global_oob",     KT_REPORT, 1, 0xFA, "global redzone",  "", kt_global_oob      },
+	{ "global_oob",     KT_REPORT, 1, 0xFA, "global redzone",
+	    "right of the 64-byte global 'kt_global_buf'", kt_global_oob      },
 };
 
 /*
