@@ -462,6 +462,57 @@ kasan_describe_heap(vaddr_t bad)
 	}
 }
 
+/*
+ * The registered __asan_global arrays, one record per compilation unit
+ * (its ctor passes the whole array in one call).  The compiler already
+ * delivers each global's name, size and file:line; retaining the arrays
+ * lets a report name the global instead of printing a bare image address.
+ * Static because registration runs from kasan_ctors(), before any
+ * allocator is up.  On overflow later units just go undescribed.
+ */
+#define KASAN_NGLOBREC	4096
+static struct {
+	const struct __asan_global	*gr_globals;
+	size_t				 gr_n;
+} kasan_globrec[KASAN_NGLOBREC];
+static size_t kasan_nglobrec;
+
+static const struct __asan_global *
+kasan_find_global(vaddr_t addr)
+{
+	const struct __asan_global *g;
+	size_t i, j;
+
+	for (i = 0; i < kasan_nglobrec; i++) {
+		for (j = 0; j < kasan_globrec[i].gr_n; j++) {
+			g = &kasan_globrec[i].gr_globals[j];
+			if (addr >= (vaddr_t)g->beg &&
+			    addr < (vaddr_t)g->beg + g->size_with_redzone)
+				return (g);
+		}
+	}
+	return (NULL);
+}
+
+static void
+kasan_describe_global(vaddr_t bad)
+{
+	const struct __asan_global *g;
+	vaddr_t beg;
+
+	if ((g = kasan_find_global(bad)) == NULL)
+		return;
+	beg = (vaddr_t)g->beg;
+	printf("KASAN: 0x%lx is %lu bytes %s the %zu-byte global '%s'",
+	    bad,
+	    bad < beg + g->size ? bad - beg : bad - (beg + g->size),
+	    bad < beg + g->size ? "inside" : "to the right of",
+	    g->size, (const char *)g->name);
+	if (g->location != NULL)
+		printf(" (%s:%d)", g->location->filename, g->location->line_no);
+	printf("\n");
+}
+
 static void
 kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 {
@@ -489,6 +540,8 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 
 	if (bad >= VM_MIN_KERNEL_ADDRESS && bad < VM_MAX_KERNEL_ADDRESS)
 		kasan_describe_heap(bad);
+	else
+		kasan_describe_global(bad);
 
 #ifdef DDB
 	/*
@@ -698,6 +751,11 @@ __asan_register_globals(struct __asan_global *globals, size_t size)
 	size_t i;
 	for (i = 0; i < size; i++) {
 		kasan_register_global(&globals[i]);
+	}
+	if (kasan_nglobrec < KASAN_NGLOBREC) {
+		kasan_globrec[kasan_nglobrec].gr_globals = globals;
+		kasan_globrec[kasan_nglobrec].gr_n = size;
+		kasan_nglobrec++;
 	}
 }
 
