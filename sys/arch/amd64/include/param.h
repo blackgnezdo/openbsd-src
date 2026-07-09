@@ -63,7 +63,20 @@
 #define	PGSHIFT		PAGE_SHIFT		/* LOG2(PAGE_SIZE) */
 #define	PGOFSET		PAGE_MASK		/* byte offset into page */
 
+#ifdef KASAN
+/*
+ * KASAN pads every stack frame with redzones, so deep call chains (a drm/X
+ * ioctl, say) sit much closer to the u-area guard page -- and a KASAN report
+ * firing from there does enough extra work (symbolize, heap lookup, provenance
+ * unwind) to cross it, double-faulting mid-report.  Double the kernel stack so
+ * the instrumented kernel has the headroom the base kernel does.  KASAN is a
+ * debug-only kernel, so the extra per-thread u-area is not a concern.  (-DKASAN
+ * reaches locore0.S via CPPFLAGS, so this stays consistent with assembly.)
+ */
+#define	UPAGES		12			/* pages of u-area */
+#else
 #define	UPAGES		6			/* pages of u-area */
+#endif
 #define	USPACE		(UPAGES * PAGE_SIZE)	/* total size of u-area */
 #define	USPACE_ALIGN	0			/* u-area alignment 0-none */
 #define __HAVE_USPACE_GUARD
