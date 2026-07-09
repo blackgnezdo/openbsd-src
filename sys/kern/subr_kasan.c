@@ -522,7 +522,7 @@ kasan_depot_intern(const struct stacktrace *st)
 }
 
 static void
-kasan_depot_print(unsigned int id)
+kasan_depot_print(unsigned int id, int (*pr)(const char *, ...))
 {
 	struct stacktrace st;
 	vaddr_t hdr;
@@ -537,7 +537,7 @@ kasan_depot_print(unsigned int id)
 		return;
 	for (i = 0; i < st.st_count; i++)
 		st.st_pc[i] = kasan_depot_arena[id + 1 + i];
-	stacktrace_print(&st, printf);
+	stacktrace_print(&st, pr);
 }
 
 /*
@@ -597,7 +597,7 @@ kasan_track_free(vaddr_t base)
 
 /* Print the recorded traces for the object at base, if any. */
 static void
-kasan_print_provenance(vaddr_t base)
+kasan_print_provenance(vaddr_t base, int (*pr)(const char *, ...))
 {
 	struct kasan_track *t = kasan_track_slot(base);
 	unsigned int aid, fid;
@@ -611,12 +611,12 @@ kasan_print_provenance(vaddr_t base)
 	if (t->kt_base != base)		/* rewritten underneath; drop the ids */
 		return;
 	if (aid != 0) {
-		printf("KASAN: allocated at:\n");
-		kasan_depot_print(aid);
+		pr("KASAN: allocated at:\n");
+		kasan_depot_print(aid, pr);
 	}
 	if (fid != 0) {
-		printf("KASAN: freed at:\n");
-		kasan_depot_print(fid);
+		pr("KASAN: freed at:\n");
+		kasan_depot_print(fid, pr);
 	}
 }
 
@@ -633,7 +633,7 @@ kasan_track_free(vaddr_t base)
 }
 
 static void
-kasan_print_provenance(vaddr_t base)
+kasan_print_provenance(vaddr_t base, int (*pr)(const char *, ...))
 {
 }
 
@@ -680,7 +680,7 @@ kasan_shadow_descr(uint8_t code)
  * shadow dump below shows the valid extent.
  */
 static void
-kasan_describe_heap(vaddr_t bad)
+kasan_describe_heap(vaddr_t bad, int (*pr)(const char *, ...))
 {
 	struct pool *pp;
 	vaddr_t base;
@@ -690,19 +690,19 @@ kasan_describe_heap(vaddr_t bad)
 	 * (pool pages live in the same kmem_map range). */
 	if ((pp = pool_kasan_lookup(bad, &base)) != NULL) {
 		if (base != 0) {
-			printf("KASAN: 0x%lx is %lu bytes inside the %u-byte "
+			pr("KASAN: 0x%lx is %lu bytes inside the %u-byte "
 			    "item [0x%lx..0x%lx) in pool '%s'\n", bad,
 			    bad - base, pp->pr_size, base,
 			    base + pp->pr_size, pp->pr_wchan);
-			kasan_print_provenance(base);
+			kasan_print_provenance(base, pr);
 		} else
-			printf("KASAN: 0x%lx is in the header/slack of a "
+			pr("KASAN: 0x%lx is in the header/slack of a "
 			    "page in pool '%s'\n", bad, pp->pr_wchan);
 	} else if (malloc_kasan_lookup(bad, &base, &size)) {
-		printf("KASAN: 0x%lx is %lu bytes inside the %zu-byte malloc "
+		pr("KASAN: 0x%lx is %lu bytes inside the %zu-byte malloc "
 		    "slot [0x%lx..0x%lx)\n", bad, bad - base, size, base,
 		    base + size);
-		kasan_print_provenance(base);
+		kasan_print_provenance(base, pr);
 	}
 }
 
@@ -739,7 +739,7 @@ kasan_find_global(vaddr_t addr)
 }
 
 static void
-kasan_describe_global(vaddr_t bad)
+kasan_describe_global(vaddr_t bad, int (*pr)(const char *, ...))
 {
 	const struct __asan_global *g;
 	vaddr_t beg;
@@ -747,24 +747,30 @@ kasan_describe_global(vaddr_t bad)
 	if ((g = kasan_find_global(bad)) == NULL)
 		return;
 	beg = (vaddr_t)g->beg;
-	printf("KASAN: 0x%lx is %lu bytes %s the %zu-byte global '%s'",
+	pr("KASAN: 0x%lx is %lu bytes %s the %zu-byte global '%s'",
 	    bad,
 	    bad < beg + g->size ? bad - beg : bad - (beg + g->size),
 	    bad < beg + g->size ? "inside" : "to the right of",
 	    g->size, (const char *)g->name);
 	if (g->location != NULL)
-		printf(" (%s:%d)", g->location->filename, g->location->line_no);
+		pr(" (%s:%d)", g->location->filename, g->location->line_no);
 	else if (g->module_name != NULL)
-		printf(" (%s)", (const char *)g->module_name);
-	printf("\n");
+		pr(" (%s)", (const char *)g->module_name);
+	pr("\n");
 }
 
+/*
+ * Emit a full report through pr().  Everything here re-reads live shadow,
+ * heap and depot state from the fault address, so it can run either at fault
+ * time (pr = printf) or later from ddb (pr = db_printf) and show the same
+ * thing -- see kasan_report() and db_kasan_report_cmd().  st is the call
+ * trace captured at fault time, or NULL to omit it.  *codep, if non-NULL,
+ * receives the first bad byte's shadow code (for the KASAN_TEST harness).
+ */
 static void
-kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
+kasan_report_print(int (*pr)(const char *, ...), vaddr_t addr, size_t size,
+    int op, vaddr_t rip, struct stacktrace *st, uint8_t *codep)
 {
-#ifdef DDB
-	struct stacktrace st;
-#endif
 	vaddr_t bad = addr;
 	size_t i;
 	uint8_t code;
@@ -778,16 +784,18 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 		}
 	}
 	code = *kasan_addr_to_shad(bad);
+	if (codep != NULL)
+		*codep = code;
 
-	printf("KASAN: invalid %s of %zu byte%s at 0x%lx from pc 0x%lx\n",
+	pr("KASAN: invalid %s of %zu byte%s at 0x%lx from pc 0x%lx\n",
 	    (op ? "write" : "read"), size, (size > 1 ? "s" : ""), addr, rip);
-	printf("KASAN: first bad byte at 0x%lx (+%lu); shadow 0x%02x: %s\n",
+	pr("KASAN: first bad byte at 0x%lx (+%lu); shadow 0x%02x: %s\n",
 	    bad, (unsigned long)(bad - addr), code, kasan_shadow_descr(code));
 
 	if (bad >= VM_MIN_KERNEL_ADDRESS && bad < VM_MAX_KERNEL_ADDRESS)
-		kasan_describe_heap(bad);
+		kasan_describe_heap(bad, pr);
 	else
-		kasan_describe_global(bad);
+		kasan_describe_global(bad, pr);
 
 #ifdef DDB
 	/*
@@ -796,12 +804,13 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 	 * pc out of a hex dump.  Nested shadow checks are suppressed by
 	 * kasan_reporting, so walking and printing here is safe.
 	 */
-	printf("KASAN: pc: ");
-	db_printsym(rip, DB_STGY_PROC, printf);
-	printf("\n");
-	stacktrace_save_at(&st, 1);
-	printf("KASAN: call trace:\n");
-	stacktrace_print(&st, printf);
+	pr("KASAN: pc: ");
+	db_printsym(rip, DB_STGY_PROC, pr);
+	pr("\n");
+	if (st != NULL) {
+		pr("KASAN: call trace:\n");
+		stacktrace_print(st, pr);
+	}
 #endif
 
 	/*
@@ -813,13 +822,52 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 	 */
 	if (bad >= VM_MIN_KERNEL_ADDRESS && bad < VM_MAX_KERNEL_ADDRESS)
 		kasan_shadow_dump(bad, VM_MIN_KERNEL_ADDRESS,
-		    VM_MAX_KERNEL_ADDRESS, printf);
+		    VM_MAX_KERNEL_ADDRESS, pr);
 	else
 		kasan_shadow_dump(bad, kasan_image_start, kasan_image_end,
-		    printf);
-	printf("KASAN: legend: 00 valid; 01..07 partial; fb malloc redzone; "
+		    pr);
+	pr("KASAN: legend: 00 valid; 01..07 partial; fb malloc redzone; "
 	    "fc malloc freed; fd pool freed; fe kmem; fa global; "
 	    "f1..f4/f8 stack/scope\n");
+}
+
+#ifdef DDB
+/*
+ * Snapshot of the most recent report so `ddb> show kasan` can replay it with
+ * the standard ddb pager -- a live report scrolls off the console behind the
+ * panic trace, and there is no scrollback in ddb.  Just the inputs to
+ * kasan_report_print(); the shadow/heap/depot state it reads is still live at
+ * the ddb prompt.
+ */
+static struct {
+	int			valid;
+	vaddr_t			addr;
+	size_t			size;
+	int			op;
+	vaddr_t			rip;
+	struct stacktrace	st;
+} kasan_last_report;
+#endif
+
+static void
+kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
+{
+	uint8_t code;
+#ifdef DDB
+	struct stacktrace st;
+
+	stacktrace_save_at(&st, 1);
+	kasan_report_print(printf, addr, size, op, rip, &st, &code);
+
+	kasan_last_report.addr = addr;
+	kasan_last_report.size = size;
+	kasan_last_report.op = op;
+	kasan_last_report.rip = rip;
+	kasan_last_report.st = st;
+	kasan_last_report.valid = 1;
+#else
+	kasan_report_print(printf, addr, size, op, rip, NULL, &code);
+#endif
 
 #ifdef KASAN_TEST
 	/* Record the result for the test harness to read at the
@@ -831,6 +879,25 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 	kasan_test_fired = 1;
 #endif
 }
+
+#ifdef DDB
+/*
+ * ddb> show kasan -- replay the last report through db_printf, which
+ * paginates.  Best-effort: a stale snapshot just reprints whatever the shadow
+ * now says for that address.
+ */
+void
+db_kasan_report_cmd(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
+{
+	if (!kasan_last_report.valid) {
+		db_printf("kasan: no report recorded this boot\n");
+		return;
+	}
+	kasan_report_print(db_printf, kasan_last_report.addr,
+	    kasan_last_report.size, kasan_last_report.op,
+	    kasan_last_report.rip, &kasan_last_report.st, NULL);
+}
+#endif
 
 static void
 kasan_shadow_fill(vaddr_t addr, size_t size, uint8_t val)

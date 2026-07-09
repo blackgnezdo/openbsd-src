@@ -113,6 +113,9 @@ void	db_boot_reboot_cmd(db_expr_t, int, db_expr_t, char *);
 void	db_boot_poweroff_cmd(db_expr_t, int, db_expr_t, char *);
 void	db_stack_trace_cmd(db_expr_t, int, db_expr_t, char *);
 void	db_dmesg_cmd(db_expr_t, int, db_expr_t, char *);
+#ifdef KASAN
+void	db_kasan_report_cmd(db_expr_t, int, db_expr_t, char *);
+#endif
 void	db_show_panic_cmd(db_expr_t, int, db_expr_t, char *);
 void	db_bcstats_print_cmd(db_expr_t, int, db_expr_t, char *);
 void	db_ctf_show_struct(db_expr_t, int, db_expr_t, char *);
@@ -618,6 +621,9 @@ const struct db_command db_show_cmds[] = {
 	{ "breaks",	db_listbreak_cmd,	0,	NULL },
 	{ "buf",	db_buf_print_cmd,	0,	NULL },
 	{ "extents",	db_extent_print_cmd,	0,	NULL },
+#ifdef KASAN
+	{ "kasan",	db_kasan_report_cmd,	0,	NULL },
+#endif
 #ifdef WITNESS
 	{ "locks",	db_witness_list,	0,	NULL },
 #endif
