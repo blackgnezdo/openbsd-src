@@ -14,4 +14,11 @@ option NO_PROPOLICE
 makeoptions DEBUG="-g"
 makeoptions COPTIMIZE="-Og -g -fno-omit-frame-pointer"
 
+# A KASAN report is long and is printed first in a fault, so the panic
+# backtrace and the next boot's device probe can wrap it out of the default
+# 128K message buffer before it can be read from dmesg after the reboot.
+# Enlarge the ring (param.h's MSGBUFSIZE is -D-overridable) so the report
+# survives into the following boot.
+makeoptions COPTS="-DMSGBUFSIZE=0x100000"	# 1MB message buffer
+
 cpu*		at mainbus?
