@@ -107,6 +107,13 @@ bioioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		break;
 
 	default:
+		/*
+		 * Delegated commands all carry a struct bio-headed argument;
+		 * a shorter one (e.g. FIOGETOWN's int via fcntl(2)) would
+		 * read bio_cookie past the end of the ioctl buffer.
+		 */
+		if (IOCPARM_LEN(cmd) < sizeof(struct bio))
+			return (ENOTTY);
 		bio = (struct bio *)addr;
 		bm = bio_validate(bio->bio_cookie);
 		if (bm == NULL)
