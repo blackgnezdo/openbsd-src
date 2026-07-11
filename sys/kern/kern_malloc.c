@@ -570,6 +570,52 @@ free(void *addr, int type, size_t freedsize)
 #endif
 }
 
+#ifdef KASAN
+/*
+ * Find the malloc(9) bucket slot containing addr, for the KASAN report.
+ * Reads the kmemusage bookkeeping unlocked on the report path; a miss is
+ * fine, faulting or panicking is not.  Only a chunk's first page has
+ * ku_indx set -- later pages of a multi-page chunk keep 0, which is below
+ * MINBUCKET -- so walk back to the chunk head before doing slot math.
+ * The slot size includes the trailing KASAN redzone.
+ */
+int
+malloc_kasan_lookup(vaddr_t addr, vaddr_t *basep, size_t *sizep)
+{
+	struct kmemusage *kup = NULL;
+	vaddr_t pg;
+	size_t allocsize, chunk;
+	int indx;
+
+	if (addr < (vaddr_t)kmembase || addr >= (vaddr_t)kmemlimit)
+		return (0);
+
+	for (pg = trunc_page(addr); pg >= (vaddr_t)kmembase; pg -= PAGE_SIZE) {
+		kup = btokup(pg);
+		if (kup->ku_indx != 0)
+			break;
+	}
+	if (pg < (vaddr_t)kmembase)
+		return (0);
+	indx = kup->ku_indx;
+	if (indx < MINBUCKET || indx >= MINBUCKET + 16)
+		return (0);
+	allocsize = 1UL << indx;
+	if (allocsize > MAXALLOCSAVE) {
+		/* One large object spanning ku_pagecnt pages. */
+		allocsize = ptoa((size_t)kup->ku_pagecnt);
+		chunk = allocsize;
+	} else
+		chunk = round_page(allocsize);
+	/* A head whose chunk does not cover addr is stale or foreign. */
+	if (chunk == 0 || addr >= pg + chunk)
+		return (0);
+	*basep = pg + (addr - pg) / allocsize * allocsize;
+	*sizep = allocsize;
+	return (1);
+}
+#endif /* KASAN */
+
 /*
  * Compute the number of pages that kmem_map will map, that is,
  * the size of the kernel malloc arena.
