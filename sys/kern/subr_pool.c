@@ -713,6 +713,10 @@ pool_get(struct pool *pp, int flags)
 #ifdef MULTIPROCESSOR
 good:
 #endif
+#ifdef KASAN
+	/* One site covers the cache fast path and the slow path alike. */
+	kasan_track_alloc((vaddr_t)v);
+#endif
 	if (ISSET(flags, PR_ZERO))
 		memset(v, 0, pp->pr_size);
 
@@ -891,6 +895,11 @@ pool_put(struct pool *pp, void *v)
 #endif
 
 	TRACEPOINT(uvm, pool_put, pp, v);
+
+#ifdef KASAN
+	/* Record here so a cache-GC'd item keeps its caller's free trace. */
+	kasan_track_free((vaddr_t)v);
+#endif
 
 #ifdef MULTIPROCESSOR
 	if (pp->pr_cache != NULL && TAILQ_EMPTY(&pp->pr_requests)) {
