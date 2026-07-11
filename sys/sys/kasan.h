@@ -29,6 +29,15 @@ void	 kasan_add_redzone(size_t *);
 void	 kasan_alloc(vaddr_t, size_t, size_t, uint8_t);
 void	 kasan_free(vaddr_t, size_t, uint8_t);
 
+/*
+ * Report-time object lookups, implemented by the allocators.  Unlocked and
+ * fault-safe: called between "KASAN: invalid ..." and the panic to attribute
+ * the bad address to a pool item or malloc slot; a miss just omits the line.
+ */
+struct pool;
+struct pool	*pool_kasan_lookup(vaddr_t, vaddr_t *);
+int		 malloc_kasan_lookup(vaddr_t, vaddr_t *, size_t *);
+
 #ifdef KASAN_TEST
 void	 kasan_test_run(void);
 #endif

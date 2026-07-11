@@ -2,6 +2,8 @@
 
 #include <sys/param.h>
 #include <sys/atomic.h>
+#include <sys/malloc.h>
+#include <sys/pool.h>
 #include <sys/proc.h>
 #include <sys/stacktrace.h>
 #include <sys/systm.h>
@@ -427,6 +429,39 @@ kasan_shadow_descr(uint8_t code)
 	}
 }
 
+/*
+ * Attribute a heap address to its object -- a pool item or a malloc slot --
+ * so the report names the object's bounds and the offset into it without a
+ * by-hand gdb session.  Best effort on the way to a panic: both lookups are
+ * unlocked and fault-safe, and a miss just omits the line.  The printed size
+ * is the slot/item size, which includes the trailing KASAN redzone; the
+ * shadow dump below shows the valid extent.
+ */
+static void
+kasan_describe_heap(vaddr_t bad)
+{
+	struct pool *pp;
+	vaddr_t base;
+	size_t size;
+
+	/* Pool first: a page-header match beats malloc's page bookkeeping
+	 * (pool pages live in the same kmem_map range). */
+	if ((pp = pool_kasan_lookup(bad, &base)) != NULL) {
+		if (base != 0)
+			printf("KASAN: 0x%lx is %lu bytes inside the %u-byte "
+			    "item [0x%lx..0x%lx) in pool '%s'\n", bad,
+			    bad - base, pp->pr_size, base,
+			    base + pp->pr_size, pp->pr_wchan);
+		else
+			printf("KASAN: 0x%lx is in the header/slack of a "
+			    "page in pool '%s'\n", bad, pp->pr_wchan);
+	} else if (malloc_kasan_lookup(bad, &base, &size)) {
+		printf("KASAN: 0x%lx is %lu bytes inside the %zu-byte malloc "
+		    "slot [0x%lx..0x%lx)\n", bad, bad - base, size, base,
+		    base + size);
+	}
+}
+
 static void
 kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 {
@@ -451,6 +486,9 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 	    (op ? "write" : "read"), size, (size > 1 ? "s" : ""), addr, rip);
 	printf("KASAN: first bad byte at 0x%lx (+%lu); shadow 0x%02x: %s\n",
 	    bad, (unsigned long)(bad - addr), code, kasan_shadow_descr(code));
+
+	if (bad >= VM_MIN_KERNEL_ADDRESS && bad < VM_MAX_KERNEL_ADDRESS)
+		kasan_describe_heap(bad);
 
 #ifdef DDB
 	/*
