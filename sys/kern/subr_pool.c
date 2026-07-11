@@ -334,6 +334,89 @@ pr_find_pagehead(struct pool *pp, void *v)
 	return (ph);
 }
 
+#ifdef KASAN
+/*
+ * Find the pool and item containing addr, for the KASAN report.  Runs
+ * unlocked on the report path, likely on the way to a panic, so it must not
+ * fault, sleep, or panic itself: the walk is bounded, an in-page header
+ * derived from a non-pool address points at arbitrary memory so it is
+ * pmap-probed before being read and cross-checked before being trusted,
+ * and every pr_find_pagehead() panic becomes a miss.  Returns the item's
+ * base in *basep, or 0 if addr is in the page's color/slack/header area.
+ */
+struct pool *
+pool_kasan_lookup(vaddr_t addr, vaddr_t *basep)
+{
+	struct pool_page_header *ph, key;
+	struct pool *pp;
+	caddr_t page, item;
+	paddr_t pa;
+	int npools = 0;
+
+	SIMPLEQ_FOREACH(pp, &pool_head, pr_poollist) {
+		if (++npools > 1024)
+			break;
+		if (pp->pr_size == 0)
+			continue;
+		if (POOL_INPGHDR(pp)) {
+			page = (caddr_t)(addr & pp->pr_pgmask);
+			ph = (struct pool_page_header *)
+			    (page + pp->pr_phoffset);
+			if (!pmap_extract(pmap_kernel(), (vaddr_t)ph, &pa) ||
+			    !pmap_extract(pmap_kernel(),
+			    (vaddr_t)ph + sizeof(*ph) - 1, &pa))
+				continue;
+			if (ph->ph_page != page)
+				continue;
+		} else {
+			struct pool_page_header *n;
+			int c, depth;
+
+			/*
+			 * Hand-rolled, depth-bounded RBT_NFIND: the tree is
+			 * mutated under pr_lock which the report path cannot
+			 * take, and a descent through a mid-rotation tree
+			 * could cycle forever.  A red-black tree's height is
+			 * at most 2*log2(n), so 64 levels exceeds any intact
+			 * tree; the bound only cuts a torn walk short.
+			 * (phtree orders by *descending* ph_page, so NFIND
+			 * yields the highest ph_page <= addr.)
+			 */
+			key.ph_page = (caddr_t)addr;
+			ph = NULL;
+			n = RBT_ROOT(phtree, &pp->pr_phtree);
+			for (depth = 0; n != NULL && depth < 64; depth++) {
+				c = phtree_compare(&key, n);
+				if (c == 0) {
+					ph = n;
+					break;
+				} else if (c < 0) {
+					ph = n;
+					n = RBT_LEFT(phtree, n);
+				} else
+					n = RBT_RIGHT(phtree, n);
+			}
+			if (ph == NULL || ph->ph_page > (caddr_t)addr ||
+			    ph->ph_page + pp->pr_pgsize <= (caddr_t)addr)
+				continue;
+			page = ph->ph_page;
+		}
+		if (ph->ph_colored < page ||
+		    ph->ph_colored >= page + pp->pr_pgsize)
+			continue;
+
+		item = ph->ph_colored + ((caddr_t)addr - ph->ph_colored) /
+		    pp->pr_size * pp->pr_size;
+		if ((caddr_t)addr < ph->ph_colored || item >=
+		    ph->ph_colored + pp->pr_itemsperpage * pp->pr_size)
+			item = NULL;
+		*basep = (vaddr_t)item;
+		return (pp);
+	}
+	return (NULL);
+}
+#endif /* KASAN */
+
 /*
  * Initialize the given pool resource structure.
  *
