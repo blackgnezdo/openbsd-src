@@ -387,6 +387,7 @@ out:
 	 * poisoned.
 	 */
 	kasan_alloc((vaddr_t)va, osize, size, KASAN_MALLOC_REDZONE);
+	kasan_track_alloc((vaddr_t)va);
 
 	if ((flags & M_ZERO) && va != NULL)
 		memset(va, 0, osize);
@@ -562,6 +563,13 @@ free(void *addr, int type, size_t freedsize)
 	    KASAN_MALLOC_FREE);
 	kasan_free((vaddr_t)addr + sizeof(struct kmem_freelist),
 	    size - sizeof(struct kmem_freelist), KASAN_MALLOC_FREE);
+	/*
+	 * Record the free trace before the mutex drops: after that another
+	 * CPU can pull this address off the freelist and kasan_track_alloc()
+	 * it, and a late track_free would stamp a stale "freed at" onto the
+	 * live object.  (pool_put() records before publication too.)
+	 */
+	kasan_track_free((vaddr_t)addr);
 #endif
 	mtx_leave(&malloc_mtx);
 #ifdef KMEMSTATS
