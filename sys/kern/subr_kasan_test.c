@@ -577,6 +577,10 @@ struct kasan_test {
 	const char	*kt_where;	/* substring of the object-description
 					   line ("KASAN: 0x... is ..."), or ""
 					   if the case expects none */
+	const char	*kt_alloc_by;	/* fn expected in the "allocated at:"
+					   trace, or "" for no expectation */
+	const char	*kt_freed_by;	/* fn expected in the "freed at:"
+					   trace, or "" for no expectation */
 	void		(*kt_fn)(void);
 };
 
@@ -586,32 +590,40 @@ struct kasan_test {
  */
 static const struct kasan_test kasan_tests[] = {
 	/* Positive: valid traffic, expect a clean run. */
-	{ "malloc_test",    KT_CLEAN,  0, 0x00, "",               "", malloc_test        },
-	{ "pool_test",      KT_CLEAN,  0, 0x00, "",               "", pool_test          },
-	{ "poolcache_test", KT_CLEAN,  0, 0x00, "",               "", kasan_poolcache_test },
-	{ "freelist_link",  KT_CLEAN,  0, 0x00, "",               "", kt_freelist_link   },
+	{ "malloc_test",    KT_CLEAN,  0, 0x00, "", "", "", "", malloc_test  },
+	{ "pool_test",      KT_CLEAN,  0, 0x00, "", "", "", "", pool_test    },
+	{ "poolcache_test", KT_CLEAN,  0, 0x00, "", "", "", "",
+	    kasan_poolcache_test },
+	{ "freelist_link",  KT_CLEAN,  0, 0x00, "", "", "", "",
+	    kt_freelist_link },
 	/* Negative: one deliberate bad access each, expect the listed report. */
 	{ "heap_oob_read",  KT_REPORT, 0, 0xFB, "malloc redzone",
-	    "64 bytes inside the 128-byte malloc slot",  kt_heap_oob_read   },
+	    "64 bytes inside the 128-byte malloc slot",
+	    "kt_heap_oob_read", "",                      kt_heap_oob_read   },
 	{ "heap_oob_write", KT_REPORT, 1, 0xFB, "malloc redzone",
-	    "64 bytes inside the 128-byte malloc slot",  kt_heap_oob_write  },
+	    "64 bytes inside the 128-byte malloc slot",
+	    "kt_heap_oob_write", "",                     kt_heap_oob_write  },
 	{ "heap_uaf",       KT_REPORT, 0, 0xFC, "malloc use-after-free",
-	    "0 bytes inside the 128-byte malloc slot",   kt_heap_uaf  },
+	    "0 bytes inside the 128-byte malloc slot",
+	    "kt_heap_uaf", "kt_heap_uaf",                kt_heap_uaf  },
 	{ "partial_gran",   KT_REPORT, 0, 0x05, "partial granule",
-	    "13 bytes inside the 32-byte malloc slot",   kt_partial_granule },
+	    "13 bytes inside the 32-byte malloc slot",
+	    "kt_partial_granule", "",                    kt_partial_granule },
 	{ "width2",         KT_REPORT, 0, 0xFB, "malloc redzone",
-	    "128-byte malloc slot",                      kt_width2          },
+	    "128-byte malloc slot", "kt_width2", "",     kt_width2          },
 	{ "width4",         KT_REPORT, 0, 0xFB, "malloc redzone",
-	    "128-byte malloc slot",                      kt_width4          },
+	    "128-byte malloc slot", "kt_width4", "",     kt_width4          },
 	{ "width8",         KT_REPORT, 0, 0xFB, "malloc redzone",
-	    "128-byte malloc slot",                      kt_width8          },
+	    "128-byte malloc slot", "kt_width8", "",     kt_width8          },
 	{ "width16",        KT_REPORT, 0, 0xFB, "malloc redzone",
-	    "128-byte malloc slot",                      kt_width16         },
+	    "128-byte malloc slot", "kt_width16", "",    kt_width16         },
 	{ "pool_uaf",       KT_REPORT, 0, 0xFD, "pool use-after-free",
-	    "in pool 'kttst'",                           kt_pool_uaf    },
-	{ "stack_redzone",  KT_REPORT, 1, 0xF1, "stack redzone",   "", kasan_stack_test   },
+	    "in pool 'kttst'", "kt_pool_uaf", "kt_pool_uaf", kt_pool_uaf    },
+	{ "stack_redzone",  KT_REPORT, 1, 0xF1, "stack redzone", "", "", "",
+	    kasan_stack_test   },
 	{ "global_oob",     KT_REPORT, 1, 0xFA, "global redzone",
-	    "right of the 64-byte global 'kt_global_buf'", kt_global_oob      },
+	    "right of the 64-byte global 'kt_global_buf'", "", "",
+	    kt_global_oob      },
 };
 
 /*
@@ -638,9 +650,11 @@ kasan_test_run(void)
 		t = &kasan_tests[i];
 		if (t->kt_expect == KT_REPORT)
 			printf("KASAN-TEST: case %u %s expect op=%s code=0x%02x "
-			    "descr=\"%s\" where=\"%s\"\n", i, t->kt_name,
+			    "descr=\"%s\" where=\"%s\" alloc=\"%s\" "
+			    "free=\"%s\"\n", i, t->kt_name,
 			    t->kt_op ? "write" : "read", t->kt_code,
-			    t->kt_descr, t->kt_where);
+			    t->kt_descr, t->kt_where, t->kt_alloc_by,
+			    t->kt_freed_by);
 		else
 			printf("KASAN-TEST: case %u %s expect clean\n", i,
 			    t->kt_name);

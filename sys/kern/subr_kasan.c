@@ -46,6 +46,13 @@ void pmap_tlb_shootwait(void);
 #endif
 
 static int kasan_enabled;
+/*
+ * Set while emitting a report.  The report path (kasan_report and ddb's
+ * panic handlers) touches plenty of poisoned/freed memory itself; without
+ * this guard each such access re-reports and re-panics, spinning out
+ * endless nested reports instead of the one we care about.
+ */
+static int kasan_reporting;
 /* Set to 1 (e.g. from ddb) to log every shadow map/alloc operation. */
 int kasan_debug = 0;
 static uint8_t kasan_early_pages[USPACE + 3 * PAGE_SIZE] __aligned(PAGE_SIZE);
@@ -397,6 +404,241 @@ kasan_init(void)
 	kasan_ctors();
 }
 
+/*
+ * Alloc/free provenance.  Every malloc/pool hand-out and free records its
+ * call trace, so a report -- above all a use-after-free -- can print where
+ * the object was allocated and freed, not just where it was misused.
+ *
+ * Traces are interned into a static arena (identical traces share one
+ * entry; an id is the entry's arena offset, 0 = none) through a lock-free
+ * open-addressed hash, and a direct-mapped table keyed by the object's
+ * base address holds each object's latest alloc/free trace ids.  All of it
+ * is best-effort by design: a full arena or hash stops interning and a
+ * table collision overwrites the older object's provenance -- the report
+ * then just prints less.  What must never happen is printing *another*
+ * object's traces under a matching base, so slot rewrites clear kt_base
+ * first and set it last (fenced) and the reader re-checks kt_base around
+ * the id loads.  Static storage because recording starts with the first
+ * pool_get during autoconf, long before the allocators could feed us.
+ */
+#ifdef DDB
+
+/* Arena entry: one header word (hash | count<<32), then count pc words. */
+#define KASAN_DEPOT_NHASH	(1U << 16)	/* hash slots (256KB) */
+#define KASAN_DEPOT_NWORDS	(1U << 19)	/* arena words (4MB) */
+#define KASAN_DEPOT_PROBES	8
+
+static vaddr_t kasan_depot_arena[KASAN_DEPOT_NWORDS];
+static volatile unsigned int kasan_depot_next = 1;	/* 0 = "no trace" */
+static volatile unsigned int kasan_depot_hash[KASAN_DEPOT_NHASH];
+
+#define KASAN_TRACK_BITS	18			/* 4MB table */
+#define KASAN_NTRACK		(1U << KASAN_TRACK_BITS)
+
+struct kasan_track {
+	volatile vaddr_t	kt_base;	/* object base, 0 = empty */
+	volatile unsigned int	kt_alloc;	/* alloc trace id */
+	volatile unsigned int	kt_free;	/* free trace id, 0 = live */
+};
+static struct kasan_track kasan_track_tab[KASAN_NTRACK];
+
+static inline struct kasan_track *
+kasan_track_slot(vaddr_t base)
+{
+	uint64_t h = (uint64_t)base * 0x9E3779B97F4A7C15ULL;
+
+	return &kasan_track_tab[(h >> (64 - KASAN_TRACK_BITS)) &
+	    (KASAN_NTRACK - 1)];
+}
+
+static uint32_t
+kasan_depot_hashtrace(const struct stacktrace *st)
+{
+	uint32_t h = 2166136261U;
+	size_t i, b;
+
+	for (i = 0; i < st->st_count; i++) {
+		for (b = 0; b < sizeof(vaddr_t); b++) {
+			h ^= (st->st_pc[i] >> (b * 8)) & 0xff;
+			h *= 16777619U;
+		}
+	}
+	return (h != 0 ? h : 1);
+}
+
+static int
+kasan_depot_match(unsigned int id, uint32_t h, const struct stacktrace *st)
+{
+	vaddr_t hdr = kasan_depot_arena[id];
+
+	return ((uint32_t)hdr == h && (hdr >> 32) == st->st_count &&
+	    __builtin_memcmp((void *)&kasan_depot_arena[id + 1], st->st_pc,
+	    st->st_count * sizeof(vaddr_t)) == 0);
+}
+
+static unsigned int
+kasan_depot_intern(const struct stacktrace *st)
+{
+	uint32_t h;
+	unsigned int slot, id, off, need, i;
+
+	if (st->st_count == 0 || st->st_count > STACKTRACE_MAX)
+		return 0;
+	h = kasan_depot_hashtrace(st);
+	need = 1 + st->st_count;
+	off = 0;
+
+	slot = h & (KASAN_DEPOT_NHASH - 1);
+	for (i = 0; i < KASAN_DEPOT_PROBES; i++) {
+		id = kasan_depot_hash[slot];
+		if (id == 0) {
+			if (off == 0) {
+				/* The racy pre-check keeps a full arena from
+				 * ever advancing (and wrapping) the cursor. */
+				if (kasan_depot_next + need >
+				    KASAN_DEPOT_NWORDS)
+					return 0;	/* arena full */
+				off = atomic_add_int_nv(&kasan_depot_next,
+				    need) - need;
+				if (off + need > KASAN_DEPOT_NWORDS)
+					return 0;	/* lost the last slice */
+				kasan_depot_arena[off] = (vaddr_t)h |
+				    ((vaddr_t)st->st_count << 32);
+				__builtin_memcpy(&kasan_depot_arena[off + 1],
+				    st->st_pc,
+				    st->st_count * sizeof(vaddr_t));
+				membar_producer();
+			}
+			if (atomic_cas_uint(&kasan_depot_hash[slot], 0,
+			    off) == 0)
+				return off;
+			id = kasan_depot_hash[slot];	/* lost the race */
+		}
+		if (kasan_depot_match(id, h, st))
+			return id;	/* off, if claimed, is just leaked */
+		slot = (slot + 1) & (KASAN_DEPOT_NHASH - 1);
+	}
+	return 0;	/* probe window exhausted */
+}
+
+static void
+kasan_depot_print(unsigned int id)
+{
+	struct stacktrace st;
+	vaddr_t hdr;
+	size_t i;
+
+	if (id == 0 || id >= KASAN_DEPOT_NWORDS)
+		return;
+	hdr = kasan_depot_arena[id];
+	st.st_count = hdr >> 32;
+	if (st.st_count == 0 || st.st_count > STACKTRACE_MAX ||
+	    id + 1 + st.st_count > KASAN_DEPOT_NWORDS)
+		return;
+	for (i = 0; i < st.st_count; i++)
+		st.st_pc[i] = kasan_depot_arena[id + 1 + i];
+	stacktrace_print(&st, printf);
+}
+
+/*
+ * The allocators call these with the object base on every hand-out and
+ * free (skip=1 hides this frame, so #0 is malloc/pool_get itself).
+ */
+void
+kasan_track_alloc(vaddr_t base)
+{
+	struct stacktrace st;
+	struct kasan_track *t;
+	unsigned int id;
+
+	if (!kasan_enabled || kasan_reporting)
+		return;
+	stacktrace_save_at(&st, 1);
+	id = kasan_depot_intern(&st);
+	t = kasan_track_slot(base);
+	/*
+	 * Clear kt_base while the ids change and set it last, fenced: a
+	 * report racing this rewrite either misses the slot or reads ids
+	 * that belong to the base it matched, never the evicted object's.
+	 */
+	t->kt_base = 0;
+	membar_producer();
+	t->kt_alloc = id;
+	t->kt_free = 0;
+	membar_producer();
+	t->kt_base = base;
+}
+
+void
+kasan_track_free(vaddr_t base)
+{
+	struct stacktrace st;
+	struct kasan_track *t;
+	unsigned int id;
+
+	if (!kasan_enabled || kasan_reporting)
+		return;
+	stacktrace_save_at(&st, 1);
+	id = kasan_depot_intern(&st);
+	t = kasan_track_slot(base);
+	if (t->kt_base == base) {
+		/* Same object: adding the free id is a single store. */
+		t->kt_free = id;
+	} else {
+		/* Collision evicted the alloc trace; publish as track_alloc. */
+		t->kt_base = 0;
+		membar_producer();
+		t->kt_alloc = 0;
+		t->kt_free = id;
+		membar_producer();
+		t->kt_base = base;
+	}
+}
+
+/* Print the recorded traces for the object at base, if any. */
+static void
+kasan_print_provenance(vaddr_t base)
+{
+	struct kasan_track *t = kasan_track_slot(base);
+	unsigned int aid, fid;
+
+	if (t->kt_base != base)
+		return;
+	membar_consumer();
+	aid = t->kt_alloc;
+	fid = t->kt_free;
+	membar_consumer();
+	if (t->kt_base != base)		/* rewritten underneath; drop the ids */
+		return;
+	if (aid != 0) {
+		printf("KASAN: allocated at:\n");
+		kasan_depot_print(aid);
+	}
+	if (fid != 0) {
+		printf("KASAN: freed at:\n");
+		kasan_depot_print(fid);
+	}
+}
+
+#else /* !DDB: no stacktrace_save_at; provenance recording is a no-op */
+
+void
+kasan_track_alloc(vaddr_t base)
+{
+}
+
+void
+kasan_track_free(vaddr_t base)
+{
+}
+
+static void
+kasan_print_provenance(vaddr_t base)
+{
+}
+
+#endif /* DDB */
+
 static const char *
 kasan_shadow_descr(uint8_t code)
 {
@@ -447,18 +689,20 @@ kasan_describe_heap(vaddr_t bad)
 	/* Pool first: a page-header match beats malloc's page bookkeeping
 	 * (pool pages live in the same kmem_map range). */
 	if ((pp = pool_kasan_lookup(bad, &base)) != NULL) {
-		if (base != 0)
+		if (base != 0) {
 			printf("KASAN: 0x%lx is %lu bytes inside the %u-byte "
 			    "item [0x%lx..0x%lx) in pool '%s'\n", bad,
 			    bad - base, pp->pr_size, base,
 			    base + pp->pr_size, pp->pr_wchan);
-		else
+			kasan_print_provenance(base);
+		} else
 			printf("KASAN: 0x%lx is in the header/slack of a "
 			    "page in pool '%s'\n", bad, pp->pr_wchan);
 	} else if (malloc_kasan_lookup(bad, &base, &size)) {
 		printf("KASAN: 0x%lx is %lu bytes inside the %zu-byte malloc "
 		    "slot [0x%lx..0x%lx)\n", bad, bad - base, size, base,
 		    base + size);
+		kasan_print_provenance(base);
 	}
 }
 
@@ -651,13 +895,6 @@ kasan_free(vaddr_t addr, size_t sz_with_redz, uint8_t code)
 	kasan_markmem(addr, sz_with_redz, 0, code);
 }
 
-/*
- * Set while emitting a report.  The report path (kasan_report, db_stack_dump,
- * and ddb's panic handlers) touches plenty of poisoned/freed memory itself;
- * without this guard each such access re-reports and re-panics, spinning out
- * endless nested reports instead of the one we care about.
- */
-static int kasan_reporting;
 static inline void
 kasan_shadow_check(vaddr_t addr, size_t size, int op, vaddr_t retaddr)
 {

@@ -30,6 +30,14 @@ void	 kasan_alloc(vaddr_t, size_t, size_t, uint8_t);
 void	 kasan_free(vaddr_t, size_t, uint8_t);
 
 /*
+ * Alloc/free provenance: the allocators call these with the object base on
+ * every hand-out and free, so a report can print where the object was
+ * allocated and freed.
+ */
+void	 kasan_track_alloc(vaddr_t);
+void	 kasan_track_free(vaddr_t);
+
+/*
  * Report-time object lookups, implemented by the allocators.  Unlocked and
  * fault-safe: called between "KASAN: invalid ..." and the panic to attribute
  * the bad address to a pool item or malloc slot; a miss just omits the line.
