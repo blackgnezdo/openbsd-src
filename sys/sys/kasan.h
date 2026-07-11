@@ -22,6 +22,10 @@ void	 kasan_add_redzone(size_t *);
 void	 kasan_alloc(vaddr_t, size_t, size_t);
 void	 kasan_free(vaddr_t, size_t);
 
+#ifdef KASAN_TEST
+void	 kasan_test_run(void);
+#endif
+
 struct __asan_global;
 
 void __asan_register_globals(struct __asan_global *, size_t);
