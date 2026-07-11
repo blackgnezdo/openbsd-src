@@ -771,6 +771,7 @@ file kern/subr_extent.c
 file kern/subr_suspend.c		suspend
 file kern/subr_hibernate.c		hibernate
 file kern/subr_kasan.c			kasan
+file kern/subr_kasan_test.c		kasan_test
 file kern/subr_kubsan.c			kubsan
 file kern/subr_log.c
 file kern/subr_percpu.c

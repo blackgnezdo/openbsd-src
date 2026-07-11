@@ -19,6 +19,16 @@
 
 #define __RET_ADDR	(vaddr_t)__builtin_return_address(0)
 
+#ifdef KASAN_TEST
+/* Result of the most recent report, consumed by the test harness; the storage
+ * lives in kern/subr_kasan_test.c. */
+extern volatile int kasan_test_fired;
+extern volatile int kasan_last_op;
+extern volatile uint8_t kasan_last_code;
+extern volatile size_t kasan_last_size;
+extern volatile unsigned long kasan_last_addr;
+#endif
+
 vaddr_t pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 /* TLB shootdown for the leaf COW in kasan_enter_shad(); see pmap.c. */
 void pmap_tlb_shootpage(struct pmap *, vaddr_t, int);
@@ -427,6 +437,16 @@ kasan_report(vaddr_t addr, size_t size, int op, vaddr_t rip)
 	    (op ? "write" : "read"), size, (size > 1 ? "s" : ""), addr, rip);
 	printf("KASAN: first bad byte at 0x%lx (+%lu); shadow 0x%02x: %s\n",
 	    bad, (unsigned long)(bad - addr), code, kasan_shadow_descr(code));
+
+#ifdef KASAN_TEST
+	/* Record the result for the test harness to read at the
+	 * kasan_test_caseend() breakpoint (subr_kasan_test.c). */
+	kasan_last_addr = addr;
+	kasan_last_size = size;
+	kasan_last_op = op;
+	kasan_last_code = code;
+	kasan_test_fired = 1;
+#endif
 }
 
 static void
@@ -538,7 +558,15 @@ kasan_shadow_check(vaddr_t addr, size_t size, int op, vaddr_t retaddr)
 	if (!valid) {
 		kasan_reporting = 1;
 		kasan_report(addr, size, op, retaddr);
-#ifdef DDB
+#ifdef KASAN_TEST
+		/* Test build: don't panic.  kasan_report() recorded the result
+		 * for the negative-test harness; fall through to clear
+		 * kasan_reporting and resume so the next case runs.  Safe only
+		 * because every battery access is a tiny overrun into mapped
+		 * memory (see subr_kasan_test.c).  Clearing kasan_reporting is
+		 * mandatory: a stuck flag would suppress every later case into a
+		 * false MISS. */
+#elif defined(DDB)
 		db_stack_dump();
 		panic("Caught invalid memory access at %lx size %zu op %d",
 		    addr, size, op);
