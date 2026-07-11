@@ -74,6 +74,10 @@
 #include <sys/smr.h>
 #include <sys/evcount.h>
 
+#ifdef KASAN
+#include <sys/kasan.h>
+#endif
+
 #include <sys/syscallargs.h>
 
 #include <uvm/uvm_extern.h>
@@ -448,6 +452,14 @@ main(void *framep)
 		tsleep_nsec(&config_pending, PWAIT, "cfpend", INFSLP);
 
 	dostartuphooks();
+
+#ifdef KASAN_TEST
+	/*
+	 * The self-test suite needs the live per-CPU pool caches, so it
+	 * runs here rather than in uvm_init().
+	 */
+	kasan_test_run();
+#endif
 
 #if NVSCSI > 0
 	config_rootfound("vscsi", NULL);
