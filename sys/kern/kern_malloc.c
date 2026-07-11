@@ -120,6 +120,62 @@ char *memname[] = INITKMEMNAMES;
 char *memall;					/* [I] */
 #endif
 
+#ifdef KASAN
+/*
+ * Debug free-quarantine (isolation aid, not a shipping feature).
+ *
+ * A freed M_PINSYSCALL slot is normally returned to the bucket freelist and
+ * is immediately reusable.  A later malloc() from the same 2048-byte bucket
+ * (e.g. parsepledges' M_TEMP scratch) then reuses it and overwrites its KASAN
+ * free-stack -- kasan_track_free() is keyed by base address -- so a
+ * use-after-free read of a *dangling pin table* reports the reuser's free
+ * stack, not the real pin-table free (the pinsyscall UAF's "freed at
+ * parsepledges" red herring).  To isolate that bug, hold recently-freed pin
+ * tables in a bounded FIFO: fully poisoned and withheld from reuse, so the
+ * dangling read still faults as a UAF and the recorded "freed at" trace stays
+ * the true one.  The oldest entry is really freed when the ring wraps.
+ * Patchable to 0 from ddb to disable.
+ */
+int kasan_quarantine_enabled = 1;
+#define KASAN_QUAR_N	1024
+static struct kasan_quar_ent {
+	void	*kq_addr;
+	size_t	 kq_size;
+	int	 kq_type;
+} kasan_quar_ring[KASAN_QUAR_N];		/* [malloc_mtx] */
+static unsigned int kasan_quar_cur;		/* [malloc_mtx] */
+
+/*
+ * Push addr into the quarantine.  Poisons the whole slot and re-records its
+ * free stack under the pointer's own base before any reuse can clobber them.
+ * Returns the evicted oldest entry via *ep (kq_addr == NULL if the ring was
+ * not yet full) for the caller to really free once malloc_mtx is dropped.
+ */
+static void
+kasan_quarantine_push(void *addr, int type, size_t freedsize,
+    struct kasan_quar_ent *ep)
+{
+	vaddr_t base;
+	size_t slot;
+	unsigned int i;
+
+	ep->kq_addr = NULL;
+
+	if (malloc_kasan_lookup((vaddr_t)addr, &base, &slot)) {
+		kasan_free(base, slot, KASAN_MALLOC_FREE);
+		kasan_track_free(base);
+	}
+
+	mtx_enter(&malloc_mtx);
+	i = kasan_quar_cur++ % KASAN_QUAR_N;
+	*ep = kasan_quar_ring[i];		/* evicted, or {NULL, ...} */
+	kasan_quar_ring[i].kq_addr = addr;
+	kasan_quar_ring[i].kq_type = type;
+	kasan_quar_ring[i].kq_size = freedsize;
+	mtx_leave(&malloc_mtx);
+}
+#endif /* KASAN */
+
 /*
  * Normally the freelist structure is used only to hold the list pointer
  * for free objects.  However, when running with diagnostics, the first
@@ -404,8 +460,8 @@ out:
 /*
  * Free a block of memory allocated by malloc.
  */
-void
-free(void *addr, int type, size_t freedsize)
+static void
+dofree(void *addr, int type, size_t freedsize)
 {
 	struct kmembuckets *kbp;
 	struct kmemusage *kup;
@@ -576,6 +632,22 @@ free(void *addr, int type, size_t freedsize)
 	if (wake)
 		wakeup(ksp);
 #endif
+}
+
+void
+free(void *addr, int type, size_t freedsize)
+{
+#ifdef KASAN
+	if (addr != NULL && kasan_quarantine_enabled && type == M_PINSYSCALL) {
+		struct kasan_quar_ent ev;
+
+		kasan_quarantine_push(addr, type, freedsize, &ev);
+		if (ev.kq_addr != NULL)
+			dofree(ev.kq_addr, ev.kq_type, ev.kq_size);
+		return;
+	}
+#endif
+	dofree(addr, type, freedsize);
 }
 
 #ifdef KASAN
