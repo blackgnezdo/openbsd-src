@@ -85,6 +85,12 @@ SECTIONS
 	{
 		__rodata_start = ABSOLUTE(.);
 		*(.rodata .rodata.*)
+		. = ALIGN(64);
+		__CTOR_LIST__ = .;
+		*(.ctors)
+		*(.init_array .init_array.*)
+		__CTOR_END__ = .;
+		*(.fini_array .fini_array.*)
 		. = ALIGN(8);
 		__nofault_start = ABSOLUTE(.);
 		*(.nofault.*) *(.nofault)
