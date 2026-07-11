@@ -50,6 +50,19 @@
 #include <ddb/db_output.h>
 #endif
 
+#ifdef KASAN
+#include <sys/kasan.h>
+#endif
+
+/*
+ * KASAN and the DIAGNOSTIC poison/freelist checks both hunt memory bugs;
+ * KASAN detects a superset and the DIAGNOSTIC code would read redzones,
+ * so run only one of them.
+ */
+#if defined(DIAGNOSTIC) && !defined(KASAN)
+#define CHEAP_MEMORY_DEBUG
+#endif
+
 /*
  * Locks used to protect data:
  *	I	Immutable data
@@ -102,7 +115,7 @@ struct kmemusage *kmemusage;
 char *kmembase, *kmemlimit;
 char buckstring[16 * sizeof("123456,")];	/* [I] */
 int buckstring_init = 0;
-#if defined(KMEMSTATS) || defined(DIAGNOSTIC)
+#if defined(KMEMSTATS) || defined(CHEAP_MEMORY_DEBUG)
 char *memname[] = INITKMEMNAMES;
 char *memall;					/* [I] */
 #endif
@@ -122,7 +135,7 @@ struct kmem_freelist {
 	XSIMPLEQ_ENTRY(kmem_freelist) kf_flist;
 };
 
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 /*
  * This structure provides a set of masks to catch unaligned frees.
  */
@@ -133,7 +146,7 @@ const long addrmask[] = { 0,
 	0x00001fff, 0x00003fff, 0x00007fff, 0x0000ffff,
 };
 
-#endif /* DIAGNOSTIC */
+#endif /* CHEAP_MEMORY_DEBUG */
 
 #ifndef SMALL_KERNEL
 struct timeval malloc_errintvl = { 5, 0 };
@@ -153,9 +166,12 @@ malloc(size_t size, int type, int flags)
 	long indx, npg, allocsize;
 	caddr_t va, cp;
 	int s;
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 	int freshalloc;
 	char *savedtype;
+#endif
+#ifdef KASAN
+	size_t osize = size;
 #endif
 #ifdef KMEMSTATS
 	struct kmemstats *ksp = &kmemstats[type];
@@ -164,10 +180,13 @@ malloc(size_t size, int type, int flags)
 	if (((unsigned long)type) <= 1 || ((unsigned long)type) >= M_LAST)
 		panic("malloc: bogus type %d", type);
 #endif
+#ifdef KASAN
+	kasan_add_redzone(&size);
+#endif
 
 	KASSERT(flags & (M_WAITOK | M_NOWAIT));
 
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 	if ((flags & M_NOWAIT) == 0) {
 		extern int pool_debug;
 		assertwaitok();
@@ -202,7 +221,7 @@ malloc(size_t size, int type, int flags)
 			mtx_leave(&malloc_mtx);
 			return (NULL);
 		}
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 		if (ISSET(flags, M_WAITOK) && curproc == &proc0)
 			panic("%s: cannot sleep for memory during boot",
 			    __func__);
@@ -257,7 +276,7 @@ malloc(size_t size, int type, int flags)
 #endif
 		kup = btokup(va);
 		kup->ku_indx = indx;
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 		freshalloc = 1;
 #endif
 		if (allocsize > MAXALLOCSAVE) {
@@ -271,14 +290,20 @@ malloc(size_t size, int type, int flags)
 		cp = va + (npg * PAGE_SIZE) - allocsize;
 		for (;;) {
 			freep = (struct kmem_freelist *)cp;
-#ifdef DIAGNOSTIC
+#ifdef KASAN
+			kasan_alloc((vaddr_t)freep,
+			    sizeof(*freep), sizeof(*freep));
+			freep->kf_type = M_FREE;
+#else
+#ifdef CHEAP_MEMORY_DEBUG
 			/*
 			 * Copy in known text to detect modification
 			 * after freeing.
 			 */
 			poison_mem(cp, allocsize);
 			freep->kf_type = M_FREE;
-#endif /* DIAGNOSTIC */
+#endif /* CHEAP_MEMORY_DEBUG */
+#endif /* !KASAN */
 			XSIMPLEQ_INSERT_HEAD(&kbp->kb_freelist, freep,
 			    kf_flist);
 			if (cp <= va)
@@ -286,14 +311,17 @@ malloc(size_t size, int type, int flags)
 			cp -= allocsize;
 		}
 	} else {
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 		freshalloc = 0;
 #endif
 	}
 	freep = XSIMPLEQ_FIRST(&kbp->kb_freelist);
+#ifdef KASAN
+	kasan_alloc((vaddr_t)freep, sizeof(*freep), sizeof(*freep));
+#endif
 	XSIMPLEQ_REMOVE_HEAD(&kbp->kb_freelist, kf_flist);
 	va = (caddr_t)freep;
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 	savedtype = (unsigned)freep->kf_type < M_LAST ?
 		memname[freep->kf_type] : "???";
 	if (freshalloc == 0 && XSIMPLEQ_FIRST(&kbp->kb_freelist)) {
@@ -331,7 +359,7 @@ malloc(size_t size, int type, int flags)
 	}
 
 	freep->kf_spare0 = 0;
-#endif /* DIAGNOSTIC */
+#endif /* CHEAP_MEMORY_DEBUG */
 #ifdef KMEMSTATS
 	kup = btokup(va);
 	if (kup->ku_indx != indx)
@@ -351,8 +379,20 @@ out:
 #endif
 	mtx_leave(&malloc_mtx);
 
+#ifdef KASAN
+	/*
+	 * Validate the object before any access; the M_ZERO write below is
+	 * instrumented and the carve left everything past the freelist link
+	 * poisoned.
+	 */
+	kasan_alloc((vaddr_t)va, osize, size);
+
+	if ((flags & M_ZERO) && va != NULL)
+		memset(va, 0, osize);
+#else
 	if ((flags & M_ZERO) && va != NULL)
 		memset(va, 0, size);
+#endif
 
 	TRACEPOINT(uvm, malloc, type, va, size, flags);
 
@@ -370,7 +410,7 @@ free(void *addr, int type, size_t freedsize)
 	struct kmem_freelist *freep;
 	long size;
 	int s;
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 	long alloc;
 #endif
 #ifdef KMEMSTATS
@@ -381,7 +421,13 @@ free(void *addr, int type, size_t freedsize)
 	if (addr == NULL)
 		return;
 
-#ifdef DIAGNOSTIC
+#ifdef KASAN
+	/* Match the redzone malloc() added so the sizes below agree. */
+	if (freedsize != 0)
+		kasan_add_redzone(&freedsize);
+#endif
+
+#ifdef CHEAP_MEMORY_DEBUG
 	if (addr < (void *)kmembase || addr >= (void *)kmemlimit)
 		panic("free: non-malloced addr %p type %s", addr,
 		    memname[type]);
@@ -395,7 +441,7 @@ free(void *addr, int type, size_t freedsize)
 	kbp = &bucket[kup->ku_indx];
 	if (size > MAXALLOCSAVE)
 		size = kup->ku_pagecnt << PAGE_SHIFT;
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 #if 0
 	if (freedsize == 0) {
 		static int zerowarnings;
@@ -424,7 +470,7 @@ free(void *addr, int type, size_t freedsize)
 	if (((u_long)addr & alloc) != 0)
 		panic("free: unaligned addr %p, size %ld, type %s, mask %ld",
 			addr, size, memname[type], alloc);
-#endif /* DIAGNOSTIC */
+#endif /* CHEAP_MEMORY_DEBUG */
 	if (size > MAXALLOCSAVE) {
 		u_short pagecnt = kup->ku_pagecnt;
 
@@ -448,7 +494,7 @@ free(void *addr, int type, size_t freedsize)
 		return;
 	}
 	freep = (struct kmem_freelist *)addr;
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 	/*
 	 * Check for multiple frees. Use a quick check to see if
 	 * it looks free before laboriously searching the freelist.
@@ -472,7 +518,7 @@ free(void *addr, int type, size_t freedsize)
 	freep->kf_spare0 = poison_value(freep);
 
 	freep->kf_type = type;
-#endif /* DIAGNOSTIC */
+#endif /* CHEAP_MEMORY_DEBUG */
 #ifdef KMEMSTATS
 	kup->ku_freecnt++;
 	if (kup->ku_freecnt >= kbp->kb_elmpercl) {
@@ -487,7 +533,33 @@ free(void *addr, int type, size_t freedsize)
 	    ksp->ks_memuse < ksp->ks_limit;
 	ksp->ks_inuse--;
 #endif
+#ifdef KASAN
+	/*
+	 * INSERT_TAIL writes freep's own link, which may sit in redzone past
+	 * a small allocation, so unpoison the freelist node first. The other
+	 * write target, *sqx_last, needs no work: it is either the previous
+	 * tail's link -- kept valid below for as long as that object sits on
+	 * the freelist -- or, on an empty list, the head in the global
+	 * bucket[] array, always valid and untracked.
+	 */
+	kasan_alloc((vaddr_t)freep, sizeof(*freep), sizeof(*freep));
+#endif
 	XSIMPLEQ_INSERT_TAIL(&kbp->kb_freelist, freep, kf_flist);
+#ifdef KASAN
+	/*
+	 * Poison the freed object before dropping malloc_mtx, skipping its
+	 * freelist link granule. Both matter: the on-freelist links are
+	 * written and read under the mutex (INSERT_TAIL above, malloc()'s
+	 * REMOVE_HEAD), so a trailing out-of-mutex poison races with another
+	 * CPU's free()/malloc() touching this object's link or revalidating
+	 * the object after reallocating it (seen live: syzbot ktrgenio, a
+	 * late poison of the tail landing between the next free()'s shadow
+	 * setup and its INSERT_TAIL link write).
+	 */
+	kasan_free((vaddr_t)addr, offsetof(struct kmem_freelist, kf_flist));
+	kasan_free((vaddr_t)addr + sizeof(struct kmem_freelist),
+	    size - sizeof(struct kmem_freelist));
+#endif
 	mtx_leave(&malloc_mtx);
 #ifdef KMEMSTATS
 	if (wake)
@@ -548,11 +620,11 @@ kmeminit(void)
 	vaddr_t base, limit;
 	long indx;
 
-#if defined(KMEMSTATS) || defined(DIAGNOSTIC)
+#if defined(KMEMSTATS) || defined(CHEAP_MEMORY_DEBUG)
 	int i, siz, totlen;
 #endif
 
-#ifdef DIAGNOSTIC
+#ifdef CHEAP_MEMORY_DEBUG
 	if (sizeof(struct kmem_freelist) > (1 << MINBUCKET))
 		panic("kmeminit: minbucket too small/struct freelist too big");
 #endif
@@ -600,7 +672,7 @@ kmeminit(void)
 	if (siz)
 		buckstring[siz - 1] = '\0';
 #endif
-#if defined(KMEMSTATS) || defined(DIAGNOSTIC)
+#if defined(KMEMSTATS) || defined(CHEAP_MEMORY_DEBUG)
 	/* Figure out how large a buffer we need */
 	for (totlen = 0, i = 0; i < M_LAST; i++) {
 		if (memname[i])
@@ -662,7 +734,7 @@ sysctl_malloc(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 #else
 		return (EOPNOTSUPP);
 #endif
-#if defined(KMEMSTATS) || defined(DIAGNOSTIC)
+#if defined(KMEMSTATS) || defined(CHEAP_MEMORY_DEBUG)
 	case KERN_MALLOC_KMEMNAMES:
 		return (sysctl_rdstring(oldp, oldlenp, newp, memall));
 #endif
