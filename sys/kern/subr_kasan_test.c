@@ -538,6 +538,32 @@ kt_pool_uaf(void)
 	pool_destroy(&kt_pool);
 }
 
+/* Pool describe misattribution (syzbot a1a3c17d): pools sharing page geometry
+ * all pass pool_kasan_lookup's in-page header probe on each other's pages, and
+ * the newest-first walk let an empty pool claim the page and mislabel the
+ * report.  The decoy is initialized after the real pool (so the walk visits it
+ * first) and never allocates; the report must still name the owner. */
+static struct pool kt_owner_pool, kt_decoy_pool;
+static void
+kt_pool_decoy(void)
+{
+	char *p;
+	volatile int idx = 64;
+	volatile char sink;
+
+	pool_init(&kt_owner_pool, 128, 0, IPL_NONE, 0, "ktowner", NULL);
+	p = pool_get(&kt_owner_pool, PR_WAITOK);
+	if ((vaddr_t)p < VM_MIN_KERNEL_ADDRESS ||
+	    (vaddr_t)p >= VM_MAX_KERNEL_ADDRESS)
+		panic("kt_pool_decoy: item %p not in KASAN-monitored range", p);
+	pool_init(&kt_decoy_pool, 128, 0, IPL_NONE, 0, "ktdecoy", NULL);
+	pool_put(&kt_owner_pool, p);
+	sink = p[idx];				/* must describe 'ktowner' */
+	(void)sink;
+	pool_destroy(&kt_decoy_pool);
+	pool_destroy(&kt_owner_pool);
+}
+
 /*
  * Stack redzone: overrun a 64-byte stack buffer by one byte into the
  * compiler's inline stack redzone (shadow 0xf1/0xf2/0xf3).  The volatile index
@@ -619,6 +645,9 @@ static const struct kasan_test kasan_tests[] = {
 	    "128-byte malloc slot", "kt_width16", "",    kt_width16         },
 	{ "pool_uaf",       KT_REPORT, 0, 0xFD, "pool use-after-free",
 	    "in pool 'kttst'", "kt_pool_uaf", "kt_pool_uaf", kt_pool_uaf    },
+	{ "pool_decoy",     KT_REPORT, 0, 0xFD, "pool use-after-free",
+	    "in pool 'ktowner'", "kt_pool_decoy", "kt_pool_decoy",
+	    kt_pool_decoy  },
 	{ "stack_redzone",  KT_REPORT, 1, 0xF1, "stack redzone", "", "", "",
 	    kasan_stack_test   },
 	{ "global_oob",     KT_REPORT, 1, 0xFA, "global redzone",
