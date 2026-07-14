@@ -153,6 +153,9 @@ struct pool_page_header {
 	caddr_t			ph_colored;	/* page's colored address */
 	unsigned long		ph_magic;
 	uint64_t		ph_timestamp;
+#ifdef KASAN
+	struct pool	       *ph_pool;	/* owning pool, for reports */
+#endif
 };
 #define POOL_MAGICBIT (1 << 3) /* keep away from perturbed low bits */
 #ifdef KASAN
@@ -401,6 +404,16 @@ pool_kasan_lookup(vaddr_t addr, vaddr_t *basep)
 				continue;
 			page = ph->ph_page;
 		}
+		/*
+		 * Every pool with the same pgmask+phoffset geometry passes
+		 * the in-page header probe above on any of their pages
+		 * (ph_page is the header's own page either way), and the
+		 * walk would hand the page to whichever comes first --
+		 * even one that owns no pages at all.  Only the recorded
+		 * owner may claim it.
+		 */
+		if (ph->ph_pool != pp)
+			continue;
 		if (ph->ph_colored < page ||
 		    ph->ph_colored >= page + pp->pr_pgsize)
 			continue;
@@ -1072,6 +1085,9 @@ pool_p_alloc(struct pool *pp, int flags, int *slowdown)
 	addr += pp->pr_align * (pp->pr_npagealloc % pp->pr_maxcolors);
 	ph->ph_colored = addr;
 	ph->ph_nmissing = 0;
+#ifdef KASAN
+	ph->ph_pool = pp;
+#endif
 	arc4random_buf(&ph->ph_magic, sizeof(ph->ph_magic));
 #ifdef DIAGNOSTIC
 	/* use a bit in ph_magic to record if we poison page items */
