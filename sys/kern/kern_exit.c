@@ -75,6 +75,35 @@ void	process_zap(struct process *);
 void	proc_free(struct proc *);
 void	unveil_destroy(struct process *ps);
 
+
+/*
+ * Reaper exit-window guard.  See <sys/kasan.h>.  kasan_reaper_pr names the
+ * process the single reaper kthread is mid-exit on; process_zap() panics if a
+ * concurrent lock-free dowait6() tries to free that same pr.
+ */
+struct process * volatile kasan_reaper_pr;
+
+void
+kasan_reap_enter(struct process *pr)
+{
+	kasan_reaper_pr = pr;
+}
+
+void
+kasan_reap_leave(void)
+{
+	kasan_reaper_pr = NULL;
+}
+
+void
+kasan_reap_check(struct process *pr)
+{
+	if (pr == kasan_reaper_pr)
+		panic("kasan: process_zap freed pid %d while the reaper is still "
+		    "in its exit path (dowait6/reaper race, syzbot a1a3c17d)",
+		    pr->ps_pid);
+}
+
 /*
  * exit --
  *	Death of process.
@@ -504,6 +533,12 @@ reaper(void *arg)
 			uvm_exit(pr);
 
 			KERNEL_LOCK();
+			/*
+			 * From here until we are done touching pr a lock-free
+			 * dowait6() may reap it out from under us once PS_ZOMBIE
+			 * is visible; flag it so process_zap() catches that.
+			 */
+			kasan_reap_enter(pr);
 			if ((pr->ps_flags & PS_NOZOMBIE) == 0) {
 				/* Process is now a true zombie. */
 				atomic_setbits_int(&pr->ps_flags, PS_ZOMBIE);
@@ -511,6 +546,17 @@ reaper(void *arg)
 
 			/* Notify listeners of our demise and clean up. */
 			knote_processexit(pr);
+
+			/*
+			 * Clear the guard now that the sleeping window is over
+			 * and BEFORE we wake any parent: a parent that
+			 * legitimately reaps after being woken must not read
+			 * kasan_reaper_pr == pr and misfire.  Covers the
+			 * reported knote_processexit() window with no false
+			 * positive; KASAN still backstops the later
+			 * prsignal/wakeup accesses of pr.
+			 */
+			kasan_reap_leave();
 
 			if (pr->ps_flags & PS_ZOMBIE) {
 				/* Post SIGCHLD and wake up parent. */
@@ -863,6 +909,9 @@ process_zap(struct process *pr)
 {
 	struct vnode *otvp;
 	struct proc *p = pr->ps_mainproc;
+
+	/* Must not free a process the reaper is still inside its exit path. */
+	kasan_reap_check(pr);
 
 	/*
 	 * Finally finished with old proc entry.

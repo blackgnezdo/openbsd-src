@@ -285,9 +285,13 @@ sleep_setup(const volatile void *ident, int prio, const char *wmesg)
 {
 	struct proc *p = curproc;
 
-#ifdef DIAGNOSTIC
+#if defined(DIAGNOSTIC) || defined(KASAN)
 	if (p->p_flag & P_CANTSLEEP)
-		panic("sleep: %s failed insomnia", p->p_p->ps_comm);
+		panic("sleep: %s[%d] slept inside a no-sleep walk bracket "
+		    "(raw pointer held across sleep, wmesg \"%s\")",
+		    p->p_p->ps_comm, p->p_p->ps_pid, wmesg);
+#endif
+#ifdef DIAGNOSTIC
 	if (p->p_flag & P_SINTR)
 		panic("sleep: stale P_SINTR");
 	if (ident == NULL)

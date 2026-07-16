@@ -50,6 +50,28 @@
 #include <sys/syscall.h>
 #include <sys/syscallargs.h>
 
+
+/*
+ * No-sleep walk brackets.  See <sys/kasan.h>.  A raw process-tree / list walk
+ * that sleeps while holding an unreferenced pointer has dropped KERNEL_LOCK and
+ * exposed the walked object to a concurrent free; setting P_CANTSLEEP turns that
+ * latent MP use-after-free into a deterministic single-cpu panic in sleep_setup.
+ */
+int kasan_walk_nosleep = 1;
+
+void
+kasan_walk_enter(struct proc *p)
+{
+	if (kasan_walk_nosleep)
+		atomic_setbits_int(&p->p_flag, P_CANTSLEEP);
+}
+
+void
+kasan_walk_leave(struct proc *p)
+{
+	atomic_clearbits_int(&p->p_flag, P_CANTSLEEP);
+}
+
 void	ktrinitheaderraw(struct ktr_header *, uint, pid_t, pid_t);
 void	ktrinitheader(struct ktr_header *, struct proc *, int);
 int	ktrstart(struct proc *, struct vnode *, struct ucred *);
@@ -462,6 +484,8 @@ doktrace(struct vnode *vp, int ops, int facs, pid_t pid, struct proc *p)
 	 * Clear all uses of the tracefile
 	 */
 	if (ops == KTROP_CLEARFILE) {
+		/* Raw allprocess walk; ktrcleartrace()->vrele() can sleep. */
+		kasan_walk_enter(p);
 		LIST_FOREACH(pr, &allprocess, ps_list) {
 			if (pr->ps_tracevp == vp) {
 				if (ktrcanset(p, pr))
@@ -470,6 +494,7 @@ doktrace(struct vnode *vp, int ops, int facs, pid_t pid, struct proc *p)
 					error = EPERM;
 			}
 		}
+		kasan_walk_leave(p);
 		goto done;
 	}
 	/*
@@ -592,6 +617,13 @@ ktrsetchildren(struct proc *curp, struct process *top, int ops, int facs,
 	int ret = 0;
 
 	pr = top;
+	/*
+	 * The subtree is walked by raw struct process * links holding no
+	 * reference; ktrops()->ktrsettrace()->vrele() can sleep and drop
+	 * KERNEL_LOCK, letting a concurrent reaper free a node under us
+	 * (syzbot ebaa4253).  Bracket the walk so such a sleep panics here.
+	 */
+	kasan_walk_enter(curp);
 	for (;;) {
 		ret |= ktrops(curp, pr, ops, facs, vp, cred);
 		/*
@@ -602,8 +634,10 @@ ktrsetchildren(struct proc *curp, struct process *top, int ops, int facs,
 		if (!LIST_EMPTY(&pr->ps_children))
 			pr = LIST_FIRST(&pr->ps_children);
 		else for (;;) {
-			if (pr == top)
+			if (pr == top) {
+				kasan_walk_leave(curp);
 				return (ret);
+			}
 			if (LIST_NEXT(pr, ps_sibling) != NULL) {
 				pr = LIST_NEXT(pr, ps_sibling);
 				break;

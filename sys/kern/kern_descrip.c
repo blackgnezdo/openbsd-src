@@ -1217,6 +1217,13 @@ fdfree(struct proc *p)
 	if (fdp->fd_rdir)
 		vrele(fdp->fd_rdir);
 	KASSERT(atomic_load_int(&fdp->fd_nuserevents) == 0);
+	/*
+	 * A kqueue caches a raw kq_fdp back-pointer to this filedesc without
+	 * holding a reference; freeing the table with a kqueue still attached
+	 * leaves that pointer dangling (KQRELE UAF, syzbot 63aa5c5f, reachable
+	 * when sysctl(KERN_FILE) holds an extra file ref past fdfree).
+	 */
+	KASSERT(LIST_EMPTY(&fdp->fd_kqlist));
 	pool_put(&fdesc_pool, fdp);
 }
 
