@@ -2669,6 +2669,94 @@ sysctl_diskinit(int update, struct proc *p)
 }
 
 #if defined(SYSVMSG) || defined(SYSVSEM) || defined(SYSVSHM)
+/*
+ * Copy out a SysV IPC "info" object: a fixed header followed by an array of
+ * up to `count` fixed-size id records.  Handles the where==NULL size probe,
+ * header-only queries and truncation to whole records.  `idsoff` is the
+ * offsetof() of the record array, so it carries any padding the compiler
+ * inserts after the header -- callers must pass it rather than the header
+ * size, or the array is misplaced and the final record overruns the buffer.
+ * `fill` populates the fitting records; it runs under KERNEL_LOCK and leaves
+ * absent slots zeroed.
+ */
+static int
+sysvipc_infoout(void *where, size_t *sizep, const void *hdr, size_t hdrlen,
+    size_t idsoff, size_t elemsize, size_t count,
+    void (*fill)(void *, size_t))
+{
+	uint8_t *info;
+	size_t infolen, nfit;
+	int error, error1 = 0;
+
+	infolen = idsoff + count * elemsize;
+
+	if (where == NULL) {
+		*sizep = infolen;
+		return (0);
+	}
+	if (*sizep < hdrlen) {
+		*sizep = 0;
+		return (ENOMEM);
+	}
+	if (*sizep != hdrlen && *sizep < infolen)
+		error1 = ENOMEM;
+
+	infolen = MIN(*sizep, infolen);
+
+	/* Whole records that fit after the (possibly padded) header. */
+	nfit = infolen > idsoff ? (infolen - idsoff) / elemsize : 0;
+	nfit = MIN(nfit, count);
+
+	info = malloc(infolen, M_TEMP, M_WAITOK | M_ZERO);
+	memcpy(info, hdr, hdrlen);
+	if (nfit > 0) {
+		KERNEL_LOCK();
+		fill(info, nfit);
+		KERNEL_UNLOCK();
+	}
+
+	*sizep = MIN(idsoff + nfit * elemsize, infolen);
+	error = copyout(info, where, *sizep);
+	free(info, M_TEMP, infolen);
+
+	/* If copyout succeeded, report any truncation. */
+	return (error ? error : error1);
+}
+
+#ifdef SYSVSEM
+static void
+sysvipc_fill_sem(void *v, size_t nfit)
+{
+	struct sem_sysctl_info *info = v;
+	size_t i;
+
+	for (i = 0; i < nfit; i++) {
+		if (sema[i] == NULL)
+			continue;
+		info->semids[i].sem_perm = sema[i]->sem_perm;
+		info->semids[i].sem_nsems = sema[i]->sem_nsems;
+		info->semids[i].sem_otime = sema[i]->sem_otime;
+		info->semids[i].sem_ctime = sema[i]->sem_ctime;
+	}
+}
+#endif
+
+#ifdef SYSVSHM
+static void
+sysvipc_fill_shm(void *v, size_t nfit)
+{
+	struct shm_sysctl_info *info = v;
+	size_t i;
+
+	for (i = 0; i < nfit; i++) {
+		if (shmsegs[i] == NULL)
+			continue;
+		memcpy(&info->shmids[i], shmsegs[i], sizeof(info->shmids[0]));
+		info->shmids[i].shm_internal = NULL;
+	}
+}
+#endif
+
 int
 sysctl_sysvipc(int *name, u_int namelen, void *where, size_t *sizep)
 {
@@ -2678,119 +2766,45 @@ sysctl_sysvipc(int *name, u_int namelen, void *where, size_t *sizep)
 	switch (*name) {
 #ifdef SYSVMSG
 	case KERN_SYSVIPC_MSG_INFO:
-		return (sysctl_sysvmsg(name, namelen, where, sizep));
+		/*
+		 * ipcs(1) expects to iterate over at least msginfo.msgmni
+		 * queues even when they are absent, and que_ix is 1-based
+		 * (see que_create()) and can reach msginfo.msgmni, so the
+		 * msgids[] array holds msginfo.msgmni + 1 entries.
+		 */
+		return (sysvipc_infoout(where, sizep, &msginfo,
+		    sizeof(msginfo), offsetof(struct msg_sysctl_info, msgids),
+		    sizeof(struct msqid_ds), msginfo.msgmni + 1,
+		    sysvipc_fill_msg));
 #endif
 #ifdef SYSVSEM
 	case KERN_SYSVIPC_SEM_INFO: {
 		struct seminfo seminfo_tmp;
-		struct sem_sysctl_info *info;
-		size_t infolen, avail, i;
-		int error, error1 = 0;
 
 		rw_enter_read(&sysvsem_lock);
 		memcpy(&seminfo_tmp, &seminfo, sizeof(seminfo_tmp));
 		rw_exit_read(&sysvsem_lock);
 
-		infolen = sizeof(seminfo_tmp) +
-		    seminfo_tmp.semmni * sizeof(info->semids[0]);
-
-		if (where == NULL) {
-			*sizep = infolen;
-			return (0);
-		}
-		if (*sizep < sizeof(info->seminfo)) {
-			*sizep = 0;
-			return (ENOMEM);
-		}
-
-		avail = infolen = min(*sizep, infolen);
-		info = malloc(infolen, M_TEMP, M_WAITOK | M_ZERO);
-
-		memcpy(&info->seminfo, &seminfo_tmp, sizeof(info->seminfo));
-		avail -= sizeof(info->seminfo);
-
-		if (avail > 0) {
-			KERNEL_LOCK();
-			for (i = 0; i < seminfo_tmp.semmni; i++) {
-				if (avail < sizeof(info->semids[0])) {
-					error1 = ENOMEM;
-					break;
-				}
-				if (sema[i] != NULL) {
-					info->semids[i].sem_perm =
-					    sema[i]->sem_perm;
-					info->semids[i].sem_nsems =
-					    sema[i]->sem_nsems;
-					info->semids[i].sem_otime =
-					    sema[i]->sem_otime;
-					info->semids[i].sem_ctime =
-					    sema[i]->sem_ctime;
-				}
-				avail -= sizeof(info->semids[0]);
-			}
-			KERNEL_UNLOCK();
-		}
-
-		*sizep = infolen - avail;
-		error = copyout(info, where, *sizep);
-		free(info, M_TEMP, infolen);
-
-		/* If copyout succeeded, use return code set earlier. */
-		return (error ? error : error1);
+		return (sysvipc_infoout(where, sizep,
+		    &seminfo_tmp, sizeof(seminfo_tmp),
+		    offsetof(struct sem_sysctl_info, semids),
+		    sizeof(struct semid_ds), seminfo_tmp.semmni,
+		    sysvipc_fill_sem));
 	}
 #endif
 #ifdef SYSVSHM
 	case KERN_SYSVIPC_SHM_INFO: {
 		struct shminfo shminfo_tmp;
-		struct shm_sysctl_info *info;
-		size_t infolen, avail, i;
-		int error, error1 = 0;
 
 		rw_enter_read(&sysvshm_lock);
 		memcpy(&shminfo_tmp, &shminfo, sizeof(shminfo_tmp));
 		rw_exit_read(&sysvshm_lock);
 
-		infolen = sizeof(shminfo_tmp) +
-		    shminfo_tmp.shmmni * sizeof(info->shmids[0]);
-
-		if (where == NULL) {
-			*sizep = infolen;
-			return (0);
-		}
-		if (*sizep < sizeof(info->shminfo)) {
-			*sizep = 0;
-			return (ENOMEM);
-		}
-
-		avail = infolen = min(*sizep, infolen); 
-		info = malloc(infolen, M_TEMP, M_WAITOK | M_ZERO);
-
-		memcpy(&info->shminfo, &shminfo_tmp, sizeof(info->shminfo));
-		avail -= sizeof(info->shminfo);
-
-		if (avail) {
-			KERNEL_LOCK();
-			for (i = 0; i < shminfo_tmp.shmmni; i++) {
-				if (avail < sizeof(info->shmids[0])) {
-					error1 = ENOMEM;
-					break;
-				}
-				if (shmsegs[i]) {
-					memcpy(&info->shmids[i], shmsegs[i],
-					    sizeof(info->shmids[0]));
-					info->shmids[i].shm_internal = NULL;
-				}
-				avail -= sizeof(info->shmids[0]);
-			}
-			KERNEL_UNLOCK();
-		}
-
-		*sizep = infolen - avail;
-		error = copyout(info, where, *sizep);
-		free(info, M_TEMP, infolen);
-
-		/* If copyout succeeded, use return code set earlier. */
-		return (error ? error : error1);
+		return (sysvipc_infoout(where, sizep,
+		    &shminfo_tmp, sizeof(shminfo_tmp),
+		    offsetof(struct shm_sysctl_info, shmids),
+		    sizeof(struct shmid_ds), shminfo_tmp.shmmni,
+		    sysvipc_fill_shm));
 	}
 #endif
 	default:
