@@ -681,69 +681,22 @@ msg_copyout(struct msg *msg, char *ubuf, size_t *len, int msgflg)
 	return (0);
 }
 
-int
-sysctl_sysvmsg(int *name, u_int namelen, void *where, size_t *sizep)
+/*
+ * Fill the msgids[] slots that fit, for sysctl(KERN_SYSVIPC_MSG_INFO) in
+ * kern_sysctl.c.  The previous array-based implementation exported the queue
+ * indices and userland (ipcs(1)) relies on them, so the queue is placed at
+ * its 1-based que_ix; absent slots stay zeroed.  msg_queues is private here,
+ * so this callback stays in this file.  Runs under KERNEL_LOCK (taken by
+ * sysvipc_infoout()).
+ */
+void
+sysvipc_fill_msg(void *v, size_t nfit)
 {
-	struct msg_sysctl_info *info;
+	struct msg_sysctl_info *info = v;
 	struct que *que;
-	size_t infolen;
-	int error;
 
-	switch (*name) {
-	case KERN_SYSVIPC_MSG_INFO:
-
-		if (namelen != 1)
-			return (ENOTDIR);
-
-		/*
-		 * The userland ipcs(1) utility expects to be able
-		 * to iterate over at least msginfo.msgmni queues,
-		 * even if those queues don't exist. This is an
-		 * artifact of the previous implementation of
-		 * message queues; for now, emulate this behavior
-		 * until a more thorough fix can be made.
-		 */
-		infolen = sizeof(msginfo) +
-		    msginfo.msgmni * sizeof(struct msqid_ds);
-		if (where == NULL) {
-			*sizep = infolen;
-			return (0);
-		}
-
-		/*
-		 * More special-casing due to previous implementation:
-		 * if the caller just wants the msginfo struct, then
-		 * sizep will point to the value sizeof(struct msginfo).
-		 * In that case, only copy out the msginfo struct to
-		 * the caller.
-		 */
-		if (*sizep == sizeof(struct msginfo))
-			return (copyout(&msginfo, where, sizeof(msginfo)));
-		if (*sizep < infolen)
-			return (ENOMEM);
-
-		info = malloc(infolen, M_TEMP, M_WAIT|M_ZERO);
-
-		memcpy(&info->msginfo, &msginfo, sizeof(struct msginfo));
-
-		KERNEL_LOCK();
-		/*
-		 * Special case #3: the previous array-based implementation
-		 * exported the array indices and userland has come to rely
-		 * upon these indices, so keep behavior consistent.
-		 */
-		TAILQ_FOREACH(que, &msg_queues, que_next)
-			memcpy(&info->msgids[que->que_ix], &que->msqid_ds,
-			    sizeof(struct msqid_ds));
-		KERNEL_UNLOCK();
-
-		error = copyout(info, where, infolen);
-
-		free(info, M_TEMP, infolen);
-
-		return (error);
-
-	default:
-		return (EINVAL);
+	TAILQ_FOREACH(que, &msg_queues, que_next) {
+		if ((size_t)que->que_ix < nfit)
+			info->msgids[que->que_ix] = que->msqid_ds;
 	}
 }
