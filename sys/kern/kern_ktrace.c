@@ -462,13 +462,26 @@ doktrace(struct vnode *vp, int ops, int facs, pid_t pid, struct proc *p)
 	 * Clear all uses of the tracefile
 	 */
 	if (ops == KTROP_CLEARFILE) {
+		/*
+		 * ktrcleartrace()->vrele() may sleep, dropping KERNEL_LOCK.
+		 * Pin the process across that sleep with a ps_refcnt hold so
+		 * exit1() blocks in refcnt_finalize() until we release, keeping
+		 * it live and on allprocess (LIST_FOREACH then reads its link
+		 * safely).  System, embryo and exiting processes carry no stable
+		 * ps_refcnt to pin (proc0 and post-finalize exiters read zero),
+		 * so they are neither pinned nor cleared; the walk stays under
+		 * KERNEL_LOCK across them.
+		 */
 		LIST_FOREACH(pr, &allprocess, ps_list) {
-			if (pr->ps_tracevp == vp) {
-				if (ktrcanset(p, pr))
-					ktrcleartrace(pr);
-				else
-					error = EPERM;
-			}
+			if (pr->ps_tracevp != vp ||
+			    ISSET(pr->ps_flags, PS_SYSTEM|PS_EMBRYO|PS_EXITING))
+				continue;
+			refcnt_take(&pr->ps_refcnt);
+			if (ktrcanset(p, pr))
+				ktrcleartrace(pr);
+			else
+				error = EPERM;
+			refcnt_rele_wake(&pr->ps_refcnt);
 		}
 		goto done;
 	}
@@ -588,28 +601,55 @@ int
 ktrsetchildren(struct proc *curp, struct process *top, int ops, int facs,
     struct vnode *vp, struct ucred *cred)
 {
-	struct process *pr;
+	struct process *pr, *next;
 	int ret = 0;
 
+	/*
+	 * The subtree is walked by raw struct process * links holding no
+	 * reference, and ktrops()->ktrsettrace()->vrele() may sleep, dropping
+	 * KERNEL_LOCK.  Pin the process across that sleep with a ps_refcnt
+	 * hold so exit1() blocks in refcnt_finalize() until we release,
+	 * leaving it and the links we read on return live.  System, embryo
+	 * and exiting processes carry no stable ps_refcnt to pin (proc0 and
+	 * post-finalize exiters read zero), so they are neither pinned nor
+	 * traced; the walk stays under KERNEL_LOCK across them, so their
+	 * links are still read safely to advance.
+	 */
 	pr = top;
 	for (;;) {
-		ret |= ktrops(curp, pr, ops, facs, vp, cred);
+		int pinned = 0;
+
+		if (!ISSET(pr->ps_flags, PS_SYSTEM|PS_EMBRYO|PS_EXITING)) {
+			refcnt_take(&pr->ps_refcnt);
+			pinned = 1;
+			ret |= ktrops(curp, pr, ops, facs, vp, cred);
+		}
 		/*
 		 * If this process has children, descend to them next,
 		 * otherwise do any siblings, and if done with this level,
 		 * follow back up the tree (but not past top).
 		 */
 		if (!LIST_EMPTY(&pr->ps_children))
-			pr = LIST_FIRST(&pr->ps_children);
-		else for (;;) {
-			if (pr == top)
-				return (ret);
-			if (LIST_NEXT(pr, ps_sibling) != NULL) {
-				pr = LIST_NEXT(pr, ps_sibling);
-				break;
+			next = LIST_FIRST(&pr->ps_children);
+		else {
+			struct process *cur = pr;
+
+			next = NULL;
+			for (;;) {
+				if (cur == top)
+					break;
+				if (LIST_NEXT(cur, ps_sibling) != NULL) {
+					next = LIST_NEXT(cur, ps_sibling);
+					break;
+				}
+				cur = cur->ps_pptr;
 			}
-			pr = pr->ps_pptr;
 		}
+		if (pinned)
+			refcnt_rele_wake(&pr->ps_refcnt);
+		if (next == NULL)
+			return (ret);
+		pr = next;
 	}
 	/*NOTREACHED*/
 }
