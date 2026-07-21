@@ -693,7 +693,7 @@ cd9660_vget_internal(struct mount *mp, cdino_t ino, struct vnode **vpp,
 	struct iso_mnt *imp;
 	struct iso_node *ip;
 	struct buf *bp;
-	struct vnode *vp, *nvp;
+	struct vnode *vp;
 	dev_t dev;
 	int error;
 
@@ -858,22 +858,7 @@ retry:
 		 * if device, look at device number table for translation
 		 */
 		vp->v_op = &cd9660_specvops;
-		if ((nvp = checkalias(vp, ip->inode.iso_rdev, mp)) != NULL) {
-			/*
-			 * Discard unneeded vnode, but save its iso_node.
-			 * Note that the lock is carried over in the iso_node
-			 */
-			nvp->v_data = vp->v_data;
-			vp->v_data = NULL;
-			vp->v_op = &spec_vops;
-			vrele(vp);
-			vgone(vp);
-			/*
-			 * Reinitialize aliased inode.
-			 */
-			vp = nvp;
-			ip->i_vnode = vp;
-		}
+		checkalias(vp, ip->inode.iso_rdev);
 		break;
 	case VLNK:
 	case VNON:

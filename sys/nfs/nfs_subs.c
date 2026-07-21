@@ -945,7 +945,6 @@ nfs_loadattrcache(struct vnode **vpp, struct mbuf **mdp, caddr_t *dposp,
 	enum vtype vtyp;
 	mode_t vmode;
 	struct timespec mtime;
-	struct vnode *nvp;
 	int v3 = NFS_ISV3(vp);
 	uid_t uid;
 	gid_t gid;
@@ -997,25 +996,7 @@ nfs_loadattrcache(struct vnode **vpp, struct mbuf **mdp, caddr_t *dposp,
 		}
 		if (vp->v_type == VCHR || vp->v_type == VBLK) {
 			vp->v_op = &nfs_specvops;
-			nvp = checkalias(vp, (dev_t)rdev, vp->v_mount);
-			if (nvp) {
-				/*
-				 * Discard unneeded vnode, but save its nfsnode.
-				 * Since the nfsnode does not have a lock, its
-				 * vnode lock has to be carried over.
-				 */
-
-				nvp->v_data = vp->v_data;
-				vp->v_data = NULL;
-				vp->v_op = &spec_vops;
-				vrele(vp);
-				vgone(vp);
-				/*
-				 * Reinitialize aliased node.
-				 */
-				np->n_vnode = nvp;
-				*vpp = vp = nvp;
-			}
+			checkalias(vp, (dev_t)rdev);
 		}
 		np->n_mtime = mtime;
 	}

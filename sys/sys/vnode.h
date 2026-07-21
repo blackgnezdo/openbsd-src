@@ -576,7 +576,7 @@ struct vnode;
 /* vfs_subr */
 int	bdevvp(dev_t, struct vnode **);
 int	cdevvp(dev_t, struct vnode **);
-struct vnode *checkalias(struct vnode *, dev_t, struct mount *);
+void checkalias(struct vnode *, dev_t);
 int	getnewvnode(enum vtagtype, struct mount *, const struct vops *,
 	    struct vnode **);
 int	vaccess(enum vtype, mode_t, uid_t, gid_t, mode_t, struct ucred *);

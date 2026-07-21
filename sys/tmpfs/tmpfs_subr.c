@@ -271,7 +271,7 @@ tmpfs_free_node(tmpfs_mount_t *tmp, tmpfs_node_t *node)
 int
 tmpfs_vnode_get(struct mount *mp, tmpfs_node_t *node, struct vnode **vpp)
 {
-	struct vnode *vp, *nvp;
+	struct vnode *vp;
 	/* kmutex_t *slock; */
 	int error;
 again:
@@ -321,15 +321,7 @@ again:
 	case VBLK:
 	case VCHR:
 		vp->v_op = &tmpfs_specvops;
-		if ((nvp = checkalias(vp, node->tn_spec.tn_dev.tn_rdev, mp))) {
-			nvp->v_data = vp->v_data;
-			vp->v_data = NULL;
-			vp->v_op = &spec_vops;
-			vrele(vp);
-			vgone(vp);
-			vp = nvp;
-			node->tn_vnode = vp;
-		}
+		checkalias(vp, node->tn_spec.tn_dev.tn_rdev);
 		break;
 	case VDIR:
 		vp->v_flag |= node->tn_spec.tn_dir.tn_parent == node ?
