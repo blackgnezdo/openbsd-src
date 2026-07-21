@@ -222,7 +222,7 @@ int
 ffs_vinit(struct mount *mntp, struct vnode **vpp)
 {
 	struct inode *ip;
-	struct vnode *vp, *nvp;
+	struct vnode *vp;
 	struct timeval mtv;
 
 	vp = *vpp;
@@ -231,26 +231,7 @@ ffs_vinit(struct mount *mntp, struct vnode **vpp)
 	case VCHR:
 	case VBLK:
 		vp->v_op = &ffs_specvops;
-		if ((nvp = checkalias(vp, DIP(ip, rdev), mntp)) != NULL) {
-			/*
-			 * Discard unneeded vnode, but save its inode.
-			 * Note that the lock is carried over in the inode
-			 * to the replacement vnode.
-			 */
-			nvp->v_data = vp->v_data;
-			vp->v_data = NULL;
-			vp->v_op = &spec_vops;
-#ifdef VFSLCKDEBUG
-			vp->v_flag &= ~VLOCKSWORK;
-#endif
-			vrele(vp);
-			vgone(vp);
-			/*
-			 * Reinitialize aliased inode.
-			 */
-			vp = nvp;
-			ip->i_vnode = vp;
-		}
+		checkalias(vp, DIP(ip, rdev));
 		break;
 	case VFIFO:
 #ifdef FIFO
