@@ -69,6 +69,8 @@
 #include <sys/kcov.h>
 #endif
 
+extern struct	mutex kqueue_ps_list_lock;
+
 void	proc_finish_wait(struct proc *, struct process *);
 void	process_clear_orphan(struct process *);
 void	process_zap(struct process *);
@@ -503,14 +505,17 @@ reaper(void *arg)
 			/* Release the rest of the process's vmspace */
 			uvm_exit(pr);
 
-			KERNEL_LOCK();
+			/* lock needed for knote call below */
+			mtx_enter(&kqueue_ps_list_lock);
+
+			mtx_enter(&pr->ps_mtx);
 			if ((pr->ps_flags & PS_NOZOMBIE) == 0) {
 				/* Process is now a true zombie. */
 				atomic_setbits_int(&pr->ps_flags, PS_ZOMBIE);
 			}
 
 			/* Notify listeners of our demise and clean up. */
-			knote_processexit(pr);
+			knote_locked(&pr->ps_klist, NOTE_EXIT);
 
 			if (pr->ps_flags & PS_ZOMBIE) {
 				/* Post SIGCHLD and wake up parent. */
@@ -518,11 +523,17 @@ reaper(void *arg)
 				atomic_setbits_int(&pr->ps_pptr->ps_flags,
 				    PS_WAITEVENT);
 				wakeup(pr->ps_pptr);
+				mtx_leave(&pr->ps_mtx);
+				mtx_leave(&kqueue_ps_list_lock);
 			} else {
+				mtx_leave(&pr->ps_mtx);
+				mtx_leave(&kqueue_ps_list_lock);
+
 				/* No one will wait for us, just zap it. */
+				KERNEL_LOCK();
 				process_zap(pr);
+				KERNEL_UNLOCK();
 			}
-			KERNEL_UNLOCK();
 		}
 	}
 }
@@ -863,6 +874,9 @@ process_zap(struct process *pr)
 {
 	struct vnode *otvp;
 	struct proc *p = pr->ps_mainproc;
+
+	/* remove knotes still hanging off the process */
+	klist_invalidate(&pr->ps_klist);
 
 	/*
 	 * Finally finished with old proc entry.
