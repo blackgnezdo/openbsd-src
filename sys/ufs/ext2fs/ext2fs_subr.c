@@ -117,7 +117,7 @@ int
 ext2fs_vinit(struct mount *mp, struct vnode **vpp)
 {
 	struct inode *ip;
-	struct vnode *vp, *nvp;
+	struct vnode *vp;
 	struct timeval tv;
 
 	vp = *vpp;
@@ -128,26 +128,7 @@ ext2fs_vinit(struct mount *mp, struct vnode **vpp)
 	case VCHR:
 	case VBLK:
 		vp->v_op = &ext2fs_specvops;
-
-		nvp = checkalias(vp, letoh32(ip->i_e2din->e2di_rdev), mp);
-		if (nvp != NULL) {
-			/*
-			 * Discard unneeded vnode, but save its inode. Note
-			 * that the lock is carried over in the inode to the
-			 * replacement vnode.
-			 */
-			nvp->v_data = vp->v_data;
-			vp->v_data = NULL;
-			vp->v_op = &spec_vops;
-#ifdef VFSLCKDEBUG
-			vp->v_flag &= ~VLOCKSWORK;
-#endif
-			vrele(vp);
-			vgone(vp);
-			/* Reinitialize aliased vnode. */
-			vp = nvp;
-			ip->i_vnode = vp;
-		}
+		checkalias(vp, letoh32(ip->i_e2din->e2di_rdev));
 
 		break;
 
