@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.709 2026/07/15 11:59:27 claudio Exp $ */
+/*	$OpenBSD: rde.c,v 1.711 2026/07/24 05:01:01 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -471,8 +471,8 @@ rde_dispatch_imsg_session(struct imsgbuf *imsgbuf)
 	u_int			 aid;
 
 	while (imsgbuf) {
-		if ((n = imsg_get(imsgbuf, &imsg)) == -1)
-			fatal("rde_dispatch_imsg_session: imsg_get error");
+		if ((n = imsgbuf_get(imsgbuf, &imsg)) == -1)
+			fatal("rde_dispatch_imsg_session: imsgbuf_get error");
 		if (n == 0)
 			break;
 
@@ -850,13 +850,11 @@ badnetdel:
 			    -1, NULL, 0);
 			break;
 		case IMSG_CTL_LOG_VERBOSE:
-			/* already checked by SE */
 			if (imsg_get_data(&imsg, &verbose, sizeof(verbose)) ==
-			    -1) {
+			    -1)
 				log_warnx("rde_dispatch: wrong imsg len");
-				break;
-			}
-			log_setverbose(verbose);
+			else
+				log_setverbose(verbose);
 			break;
 		case IMSG_CTL_END:
 			imsg_compose(ibuf_se_ctl, IMSG_CTL_END, 0, pid,
@@ -921,8 +919,8 @@ rde_dispatch_imsg_parent(struct imsgbuf *imsgbuf)
 	uint16_t		 rid;
 
 	while (imsgbuf) {
-		if ((n = imsg_get(imsgbuf, &imsg)) == -1)
-			fatal("rde_dispatch_imsg_parent: imsg_get error");
+		if ((n = imsgbuf_get(imsgbuf, &imsg)) == -1)
+			fatal("rde_dispatch_imsg_parent: imsgbuf_get error");
 		if (n == 0)
 			break;
 
@@ -1338,8 +1336,8 @@ rde_dispatch_imsg_rtr(struct imsgbuf *imsgbuf)
 	int			 n;
 
 	while (imsgbuf) {
-		if ((n = imsg_get(imsgbuf, &imsg)) == -1)
-			fatal("rde_dispatch_imsg_parent: imsg_get error");
+		if ((n = imsgbuf_get(imsgbuf, &imsg)) == -1)
+			fatal("rde_dispatch_imsg_parent: imsgbuf_get error");
 		if (n == 0)
 			break;
 
