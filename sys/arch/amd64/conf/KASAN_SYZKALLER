@@ -1,3 +1,13 @@
+#	$OpenBSD$
+#
+# The fuzzing kernel: KASAN plus kcov and the lock-debug options.  Kept
+# semantically identical to syzkaller's dashboard/config/openbsd/kasan, which
+# is what the syzbot fleet actually builds.
+#
+# The header is not decoration: config(8) rejects an *included* file whose
+# first line is itself an include ("syntax error" on line 1), so without these
+# comments KASAN_GATE cannot include this file.
+
 include "arch/amd64/conf/KASAN"
 
 pseudo-device kcov 1
