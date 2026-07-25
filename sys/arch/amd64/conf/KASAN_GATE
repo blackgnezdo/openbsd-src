@@ -1,0 +1,20 @@
+#	$OpenBSD$
+#
+# Self-test half of the merge gate: the in-kernel battery running under the
+# config the syzbot fleet actually fuzzes (KASAN_SYZKALLER is semantically
+# identical to dashboard/config/openbsd/kasan), rather than under plain KASAN
+# as the older KASAN_TEST config did.  Booting the fleet's own config matters:
+# the kcov<->KASAN instrumentation recursion was a boot-time triple fault that
+# existed ONLY in the combined config.
+#
+# This kernel cannot also serve the gate's boot-to-login: check -- option
+# KASAN_TEST makes subr_kasan_test.c call vmkill_now() as soon as the battery
+# finishes, terminating the machine.  kasan-cycle boots KASAN_SYZKALLER for
+# that half; kasan-negtest boots this one.
+#
+# option KASAN_TEST also makes reports record-and-continue rather than panic,
+# so the whole battery runs in one boot; never use this kernel for fuzzing.
+
+include "arch/amd64/conf/KASAN_SYZKALLER"
+
+option KASAN_TEST
