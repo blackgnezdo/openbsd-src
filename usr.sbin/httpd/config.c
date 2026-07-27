@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.75 2026/07/25 05:48:39 rsadowski Exp $	*/
+/*	$OpenBSD: config.c,v 1.77 2026/07/26 14:46:32 rsadowski Exp $	*/
 
 /*
  * Copyright (c) 2011 - 2015 Reyk Floeter <reyk@openbsd.org>
@@ -34,7 +34,7 @@
 #include "log.h"
 
 int	 config_getserver_config(struct httpd *, struct server *,
-	    struct imsg *);
+    struct imsg *);
 int	 config_getserver_auth(struct httpd *, struct server_config *);
 
 int
@@ -233,7 +233,7 @@ config_setserver(struct httpd *env, struct server *srv)
 		memcpy(&s, &srv->srv_conf, sizeof(s));
 
 		/* since s is a local, it is safe to clear its pointers directly */
-		clear_config_server_ptrs(&s); 
+		clear_config_server_ptrs(&s);
 
 		c = 0;
 		iov[c].iov_base = &s;
@@ -358,56 +358,52 @@ config_settls(struct httpd *env, struct server *srv, enum tls_config_type type,
 int
 config_getserver_fcgiparams(struct httpd *env, struct imsg *imsg)
 {
-	struct server_config	*srv_conf;
-	struct fastcgi_param	*fp;
-	uint32_t		 id;
-	size_t			 c, nc, len;
-	uint8_t			*p = imsg->data;
+	struct server_config		*srv_conf;
+	struct fastcgi_param		*fp;
+	struct fastcgi_param_imsg	 fpmsg;
+	struct ibuf			 ibuf;
 
-	len = sizeof(nc) + sizeof(id);
-	if (IMSG_DATA_SIZE(imsg) < len) {
-		log_debug("%s: invalid message length", __func__);
+	if (imsg_get_ibuf(imsg, &ibuf) == -1 ||
+	    ibuf_get(&ibuf, &fpmsg, sizeof(fpmsg)) == -1) {
+		log_debug("%s: invalid message", __func__);
 		return (-1);
 	}
 
-	memcpy(&nc, p, sizeof(nc));	/* number of params */
-	p += sizeof(nc);
-
-	memcpy(&id, p, sizeof(id));	/* server conf id */
-	p += sizeof(id);
-
-	if ((srv_conf = serverconfig_byid(id)) == NULL) {
-		log_debug("%s: server not found", __func__);
-		return(-1);
-	}
-
-	len += nc*sizeof(*fp);
-	if (IMSG_DATA_SIZE(imsg) < len) {
-		log_debug("%s: invalid message length", __func__);
+	if ((srv_conf = serverconfig_byid(fpmsg.id)) == NULL) {
+		log_debug("%s: invalid config id", __func__);
 		return (-1);
 	}
 
-	/* Fetch FCGI parameters */
-	for (c = 0; c < nc; c++) {
-		if ((fp = calloc(1, sizeof(*fp))) == NULL)
-			fatalx("fcgiparams out of memory");
-		memcpy(fp, p, sizeof(*fp));
-		TAILQ_INSERT_HEAD(&srv_conf->fcgiparams, fp, entry);
-
-		p += sizeof(*fp);
+	if (fpmsg.namelen > HTTPD_FCGI_NAME_MAX - 1 ||
+	    fpmsg.vallen > HTTPD_FCGI_VAL_MAX - 1) {
+		log_debug("%s: fastcgi_param too long", __func__);
+		return (-1);
 	}
 
+	if ((fp = calloc(1, sizeof(*fp))) == NULL)
+		fatal("fastcgi_param out of memory");
+
+	fp->name = ibuf_get_string(&ibuf, fpmsg.namelen);
+	fp->value = ibuf_get_string(&ibuf, fpmsg.vallen);
+	if (fp->name == NULL || fp->value == NULL) {
+		free(fp->name);
+		free(fp->value);
+		free(fp);
+		return (-1);
+	}
+
+	TAILQ_INSERT_TAIL(&srv_conf->fcgiparams, fp, entry);
 	return (0);
 }
 
 int
 config_setserver_fcgiparams(struct httpd *env, struct server *srv)
 {
-	struct privsep		*ps = env->sc_ps;
-	struct server_config	*srv_conf = &srv->srv_conf;
-	struct fastcgi_param	 *fp;
-	struct iovec		 *iov;
-	size_t			 c = 0, nc = 0;
+	struct privsep			*ps = env->sc_ps;
+	struct server_config		*srv_conf = &srv->srv_conf;
+	struct fastcgi_param		*fp;
+	struct fastcgi_param_imsg	 fpmsg;
+	struct iovec			 iov[3];
 
 	DPRINTF("%s: sending fcgiparam for \"%s[%u]\" to %s fd %d", __func__,
 	    srv_conf->name, srv_conf->id, ps->ps_title[PROC_SERVER],
@@ -417,28 +413,24 @@ config_setserver_fcgiparams(struct httpd *env, struct server *srv)
 		return (0);
 
 	TAILQ_FOREACH(fp, &srv_conf->fcgiparams, entry) {
-		nc++;
-	}
-	if ((iov = calloc(nc + 2, sizeof(*iov))) == NULL)
-		return (-1);
+		fpmsg.id = srv_conf->id;
+		fpmsg.namelen = strlen(fp->name);
+		fpmsg.vallen = strlen(fp->value);
 
-	iov[c].iov_base = &nc;			/* number of params */
-	iov[c++].iov_len = sizeof(nc);
-	iov[c].iov_base = &srv_conf->id;	/* server config id */
-	iov[c++].iov_len = sizeof(srv_conf->id);
+		iov[0].iov_base = &fpmsg;
+		iov[0].iov_len = sizeof(fpmsg);
+		iov[1].iov_base = fp->name;
+		iov[1].iov_len = fpmsg.namelen;
+		iov[2].iov_base = fp->value;
+		iov[2].iov_len = fpmsg.vallen;
 
-	TAILQ_FOREACH(fp, &srv_conf->fcgiparams, entry) {	/* push FCGI params */
-		iov[c].iov_base = fp;
-		iov[c++].iov_len = sizeof(*fp);
+		if (proc_composev(ps, PROC_SERVER, IMSG_CFG_FCGI, iov, 3) !=
+		    0) {
+			log_warn("%s: failed to compose IMSG_CFG_FCGI "
+			    "for `%s'", __func__, srv_conf->name);
+			return (-1);
+		}
 	}
-	if (proc_composev(ps, PROC_SERVER, IMSG_CFG_FCGI, iov, c) != 0) {
-		log_warn("%s: failed to compose IMSG_CFG_FCGI imsg for "
-		    "`%s'", __func__, srv_conf->name);
-		free(iov);
-		return (-1);
-	}
-	free(iov);
-
 	return (0);
 }
 
@@ -737,7 +729,7 @@ config_getserver_config(struct httpd *env, struct server *srv,
 			srv_conf->return_uri_len = parent->return_uri_len;
 			if (srv_conf->return_uri_len &&
 			    (srv_conf->return_uri =
-			    strdup(parent->return_uri)) == NULL)
+			     strdup(parent->return_uri)) == NULL)
 				goto fail;
 		}
 
@@ -850,6 +842,7 @@ config_getserver(struct httpd *env, struct imsg *imsg)
 	srv->srv_s = fd;
 
 	TAILQ_INIT(&srv->srv_conf.headers);
+	TAILQ_INIT(&srv->srv_conf.fcgiparams);
 
 	if (config_getserver_auth(env, &srv->srv_conf) != 0)
 		goto fail;
@@ -991,7 +984,7 @@ config_getserver_tls(struct httpd *env, struct imsg *imsg)
 
 	default:
 		log_debug("%s: unknown tls config type %i\n",
-		     __func__, tls_conf.tls_type);
+		    __func__, tls_conf.tls_type);
 		goto fail;
 	}
 
@@ -1019,7 +1012,7 @@ config_setmedia(struct httpd *env, struct media_type *media)
 		    media->media_name, ps->ps_title[id]);
 
 		/* Send a cleaned-up copy */
-		memcpy(&mt, media, sizeof(*media)); 
+		memcpy(&mt, media, sizeof(*media));
 		mt.media_encoding = NULL;
 		memset(&mt.media_entry, 0, sizeof(mt.media_entry));
 
@@ -1071,14 +1064,15 @@ config_setauth(struct httpd *env, struct auth *auth)
 		DPRINTF("%s: sending auth \"%s[%u]\" to %s", __func__,
 		    auth->auth_htpasswd, auth->auth_id, ps->ps_title[id]);
 
-
 		/* memcpy to avoid modifying auth directly */
-		memcpy(&auth_payload, auth, sizeof(*auth)); 
+		memcpy(&auth_payload, auth, sizeof(*auth));
 
 		/* clear pointers */
-		memset(&auth_payload.auth_entry, 0, sizeof(auth_payload.auth_entry)); 
+		memset(&auth_payload.auth_entry, 0,
+		    sizeof(auth_payload.auth_entry));
 
-		proc_compose(ps, id, IMSG_CFG_AUTH, &auth_payload, sizeof(auth_payload));
+		proc_compose(ps, id, IMSG_CFG_AUTH, &auth_payload,
+		    sizeof(auth_payload));
 	}
 
 	return (0);
