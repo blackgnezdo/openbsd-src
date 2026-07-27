@@ -2253,8 +2253,8 @@ knote_processfork(struct process *pr, pid_t pid)
 			continue;
 		}
 
+		kq = kn->kn_kq;
 		if (kn->kn_fop->f_event(kn, NOTE_FORK | pid)) {
-			kq = kn->kn_kq;
 			mtx_enter(&kq->kq_lock);
 			knote_activate(kn);
 			mtx_leave(&kq->kq_lock);
