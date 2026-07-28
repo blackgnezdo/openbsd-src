@@ -1,4 +1,4 @@
-#   $OpenBSD: tlsfuzzer.py,v 1.60 2026/07/26 13:05:49 tb Exp $
+#   $OpenBSD: tlsfuzzer.py,v 1.63 2026/07/28 10:32:37 tb Exp $
 #
 # Copyright (c) 2020 Theo Buehler <tb@openbsd.org>
 #
@@ -32,7 +32,15 @@ class Test:
 
     XXX Add client cert support.
     """
-    def __init__(self, name="", args=[], tls12_args=[], tls13_args=[]):
+
+    def __init__(self, name="", args=None, tls12_args=None, tls13_args=None):
+        if args is None:
+            args = []
+        if tls12_args is None:
+            tls12_args = []
+        if tls13_args is None:
+            tls13_args = []
+
         self.name = name
         self.tls12_args = args
         self.tls13_args = args
@@ -48,14 +56,15 @@ class Test:
             return self.tls12_args
 
     def __repr__(self):
-        return "<Test: %s tls12_args: %s tls13_args: %s>" % (
-                self.name, self.tls12_args, self.tls13_args
-            )
+        return f"<Test: {self.name} tls12_args: {self.tls12_args} tls13_args: {self.tls13_args}>"
 
 class TestGroup:
     """A group of Test objects to be run by TestRunner."""
 
-    def __init__(self, title="Tests", tests=[]):
+    def __init__(self, title="Tests", tests=None):
+        if tests is None:
+            tests = []
+
         self.title = title
         self.tests = tests
 
@@ -654,7 +663,7 @@ class TestRunner:
 
     def __init__(
         self, timing=False, verbose=False, host="localhost", port=4433,
-        use_tls1_3=True, dry_run=False, tests=[], scriptdir=tlsfuzzer_scriptdir,
+        use_tls1_3=True, dry_run=False, scriptdir=tlsfuzzer_scriptdir,
     ):
         self.tests = []
 
@@ -671,8 +680,9 @@ class TestRunner:
         self.timing = timing
         self.verbose = verbose
 
-    def add(self, title="tests", tests=[]):
-        # tests.sort(key=lambda test: test.name)
+    def add(self, title="tests", tests=None):
+        if tests is None:
+            tests = []
         self.tests.append(TestGroup(title, tests))
 
     def add_group(self, group):
@@ -897,7 +907,7 @@ def main():
 
     if args:
         (dir, script) = os.path.split(args[0])
-        if dir and not dir == '.':
+        if dir and dir != '.':
             tests.scriptdir = dir
 
         testargs = defaultargs(script, tls_server.has_tls1_3)
