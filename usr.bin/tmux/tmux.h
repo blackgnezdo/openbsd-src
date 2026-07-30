@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1416 2026/07/27 19:15:58 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1418 2026/07/29 17:42:56 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1160,6 +1160,8 @@ struct window_mode {
 	int		 flags;
 #define WINDOW_MODE_HIDE_PANE_STATUS 0x1
 #define WINDOW_MODE_NO_STACK 0x2
+#define WINDOW_MODE_FILL_WINDOW 0x4
+#define WINDOW_MODE_HIDE_SCROLLBARS 0x8
 
 	struct screen	*(*init)(struct window_mode_entry *,
 			     struct cmdq_item *, struct cmd_find_state *,
@@ -3462,6 +3464,7 @@ void	 grid_reflow(struct grid *, u_int);
 void	 grid_wrap_position(struct grid *, u_int, u_int, u_int *, u_int *);
 void	 grid_unwrap_position(struct grid *, u_int *, u_int *, u_int, u_int);
 u_int	 grid_line_length(struct grid *, u_int);
+u_int	 grid_line_limit(struct grid *, u_int);
 int	 grid_in_set(struct grid *, u_int, u_int, const char *);
 
 /* grid-reader.c */

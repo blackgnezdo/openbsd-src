@@ -1,4 +1,4 @@
-/* $OpenBSD: kexmlkem768ecdh.c,v */
+/* $OpenBSD: kexmlkem768ecdh.c,v 1.3 2026/07/30 07:30:41 dtucker Exp $ */
 /*
  * Copyright (c) 2025 Markus Friedl.  All rights reserved.
  *
@@ -38,6 +38,7 @@
 #include "digest.h"
 #include "ssherr.h"
 
+#ifdef WITH_OPENSSL
 int
 kex_kem_mlkem768ecdh_keypair(struct kex *kex)
 {
@@ -301,3 +302,4 @@ kex_kem_mlkem768ecdh_dec(struct kex *kex,
 	sshbuf_free(buf);
 	return r;
 }
+#endif	/* WITH_OPENSSL */
