@@ -1,4 +1,4 @@
-/*	$OpenBSD: engine.c,v 1.40 2026/07/27 13:28:08 claudio Exp $	*/
+/*	$OpenBSD: engine.c,v 1.42 2026/08/04 12:50:43 claudio Exp $	*/
 
 /*
  * Copyright (c) 2017, 2021, 2024 Florian Obser <florian@openbsd.org>
@@ -275,9 +275,8 @@ engine_dispatch_frontend(int fd, short event, void *bula)
 	struct imsgev			*iev = bula;
 	struct imsgbuf			*ibuf = &iev->ibuf;
 	struct imsg			 imsg;
-	struct dhcp6leased_iface		*iface;
-	ssize_t				 n;
-	int				 shut = 0;
+	struct dhcp6leased_iface	*iface;
+	int				 n, shut = 0;
 	int				 verbose;
 	uint32_t			 if_index;
 
@@ -387,8 +386,7 @@ engine_dispatch_main(int fd, short event, void *bula)
 	struct imsgev			*iev = bula;
 	struct imsgbuf			*ibuf = &iev->ibuf;
 	struct imsg_ifinfo		 imsg_ifinfo;
-	ssize_t				 n;
-	int				 shut = 0;
+	int				 n, shut = 0;
 
 	if (event & EV_READ) {
 		if ((n = imsgbuf_read(ibuf)) == -1)
@@ -1751,7 +1749,7 @@ in6_prefixlen2mask(struct in6_addr *maskp, int len)
 	int bytelen, bitlen, i;
 
 	if (0 > len || len > 128) {
-		log_debug("%s: invalid prefix length(%d)\n", __func__, len);
+		log_debug("%s: invalid prefix length(%d)", __func__, len);
 		len = 128;
 	}
 

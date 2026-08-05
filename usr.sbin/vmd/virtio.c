@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio.c,v 1.145 2026/07/29 13:32:18 claudio Exp $	*/
+/*	$OpenBSD: virtio.c,v 1.147 2026/08/04 19:12:14 claudio Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -810,7 +810,7 @@ vmmci_ctl(struct virtio_dev *dev, unsigned int cmd)
 			vcpu_assert_irq(dev->vmm_id, 0, dev->irq);
 		} else {
 			log_debug("%s: RTC sync skipped (guest does not "
-			    "support RTC sync)\n", __func__);
+			    "support RTC sync)", __func__);
 		}
 		break;
 	default:
@@ -1767,7 +1767,7 @@ virtio_dispatch_dev(int fd, short event, void *arg)
 	struct imsgbuf		*ibuf = &iev->ibuf;
 	struct imsg		 imsg;
 	struct viodev_msg	 msg;
-	ssize_t			 n = 0;
+	int			 n;
 	uint32_t		 type;
 
 	if (event & EV_READ) {
