@@ -1,6 +1,6 @@
-/*	$OpenBSD: time.h,v 1.6 2026/08/06 10:25:10 jsg Exp $	*/
+/*	$OpenBSD: workqueue_types.h,v 1.1 2026/08/06 05:31:03 jsg Exp $	*/
 /*
- * Copyright (c) 2013, 2014, 2015 Mark Kettenis
+ * Copyright (c) 2015 Mark Kettenis
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,24 +15,16 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef _LINUX_TIME_H
-#define _LINUX_TIME_H
+#ifndef _LINUX_WORKQUEUE_TYPES_H
+#define _LINUX_WORKQUEUE_TYPES_H
 
-#include <sys/time.h>
-#include <linux/math64.h>
+#include <sys/task.h>
 
-#define NSEC_PER_USEC	1000L
-#define NSEC_PER_MSEC	1000000L
-#define NSEC_PER_SEC	1000000000L
-
-#define USEC_PER_MSEC	1000L
-#define USEC_PER_SEC	1000000L
-
-#define MSEC_PER_SEC	1000L
-
-struct timespec64 {
-	time_t	tv_sec;
-	long	tv_nsec;
+struct work_struct {
+	struct task task;
+	struct taskq *tq;
 };
+
+typedef void (*work_func_t)(struct work_struct *);
 
 #endif
