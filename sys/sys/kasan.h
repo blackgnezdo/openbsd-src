@@ -25,6 +25,14 @@
 #define KASAN_STACK_PARTIAL	0xF4
 #define KASAN_USE_AFTER_SCOPE	0xF8
 
+/*
+ * Marks a function whose accesses are not shadow-checked, for an allocator
+ * to reach bookkeeping it keeps inside an object it has already poisoned.
+ * Applied per function at IR generation, so it survives inlining into an
+ * instrumented caller.  Keep it to the accessors themselves.
+ */
+#define __kasan_exempt	__attribute__((no_sanitize("kernel-address")))
+
 void	 kasan_add_redzone(size_t *);
 void	 kasan_alloc(vaddr_t, size_t, size_t, uint8_t);
 void	 kasan_free(vaddr_t, size_t, uint8_t);

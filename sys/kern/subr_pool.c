@@ -48,6 +48,8 @@
 
 #ifdef KASAN
 #include <sys/kasan.h>
+#else
+#define __kasan_exempt
 #endif
 
 /*
@@ -159,14 +161,70 @@ struct pool_page_header {
 };
 #define POOL_MAGICBIT (1 << 3) /* keep away from perturbed low bits */
 #ifdef KASAN
-/*
- * KASAN poisons free items itself; the pool's own body poisoning would
- * read/write the redzone and is redundant, so disable it.
- */
 #define POOL_PHPOISON(ph) 0
 #else
 #define POOL_PHPOISON(ph) ISSET((ph)->ph_magic, POOL_MAGICBIT)
 #endif
+
+/*
+ * A free item is poisoned end to end; these reach the magic and the free
+ * list link inside it.  pi_magic stays despite the poison: it encodes the
+ * item's own address, so it catches a link pointing a byte or three off,
+ * which an eight-byte shadow granule cannot.
+ */
+static __inline __kasan_exempt void
+pool_item_magic_set(struct pool_page_header *ph, struct pool_item *pi)
+{
+	pi->pi_magic = POOL_IMAGIC(ph, pi);
+}
+
+static __inline __kasan_exempt u_long
+pool_item_magic(struct pool_item *pi)
+{
+	return (pi->pi_magic);
+}
+
+/* ph_items itself is never poisoned, so the head-only operations are not
+ * exempt. */
+static __inline void
+pool_freelist_init(struct pool_page_header *ph)
+{
+	XSIMPLEQ_INIT(&ph->ph_items);
+}
+
+static __inline struct pool_item *
+pool_freelist_first(struct pool_page_header *ph)
+{
+	return (XSIMPLEQ_FIRST(&ph->ph_items));
+}
+
+static __inline __kasan_exempt struct pool_item *
+pool_freelist_next(struct pool_page_header *ph, struct pool_item *pi)
+{
+	return (XSIMPLEQ_NEXT(&ph->ph_items, pi, pi_list));
+}
+
+static __inline __kasan_exempt void
+pool_freelist_insert_head(struct pool_page_header *ph, struct pool_item *pi)
+{
+	XSIMPLEQ_INSERT_HEAD(&ph->ph_items, pi, pi_list);
+}
+
+static __inline __kasan_exempt void
+pool_freelist_insert_tail(struct pool_page_header *ph, struct pool_item *pi)
+{
+	XSIMPLEQ_INSERT_TAIL(&ph->ph_items, pi, pi_list);
+}
+
+static __inline __kasan_exempt void
+pool_freelist_remove_head(struct pool_page_header *ph)
+{
+	XSIMPLEQ_REMOVE_HEAD(&ph->ph_items, pi_list);
+}
+
+#define POOL_FREELIST_FOREACH(pi, ph)					\
+	for ((pi) = pool_freelist_first(ph); (pi) != NULL;		\
+	    (pi) = pool_freelist_next((ph), (pi)))
 
 #ifdef MULTIPROCESSOR
 #define POOL_CACHE_LIST_MIN	8		/* minimum list length */
@@ -184,11 +242,58 @@ struct pool_cache_item {
 #define POOL_CACHE_ITEM_NITEMS_MASK	0x7ffffffUL
 #define POOL_CACHE_ITEM_NITEMS_POISON	0x8000000UL
 
-#define POOL_CACHE_ITEM_NITEMS(_ci)					\
-    ((_ci)->ci_nitems & POOL_CACHE_ITEM_NITEMS_MASK)
+/* An item in a per-CPU magazine is poisoned too; its links, count and magic
+ * live inside it. */
+static __inline __kasan_exempt struct pool_cache_item *
+pool_cache_item_next(struct pool_cache_item *ci)
+{
+	return (ci->ci_next);
+}
 
-#define POOL_CACHE_ITEM_POISONED(_ci)					\
-    ISSET((_ci)->ci_nitems, POOL_CACHE_ITEM_NITEMS_POISON)
+static __inline __kasan_exempt unsigned long
+pool_cache_item_nitems(struct pool_cache_item *ci)
+{
+	return (ci->ci_nitems & POOL_CACHE_ITEM_NITEMS_MASK);
+}
+
+static __inline __kasan_exempt int
+pool_cache_item_poisoned(struct pool_cache_item *ci)
+{
+	return (ISSET(ci->ci_nitems, POOL_CACHE_ITEM_NITEMS_POISON));
+}
+
+static __inline __kasan_exempt void
+pool_cache_item_link(struct pool_cache_item *ci,
+    struct pool_cache_item *next, unsigned long nitems)
+{
+	ci->ci_next = next;
+	ci->ci_nitems = nitems;
+}
+
+static __inline struct pool_cache_item *
+pool_cache_lists_first(struct pool *pp)
+{
+	return (TAILQ_FIRST(&pp->pr_cache_lists));
+}
+
+static __inline __kasan_exempt struct pool_cache_item *
+pool_cache_lists_next(struct pool_cache_item *pl)
+{
+	return (TAILQ_NEXT(pl, ci_nextl));
+}
+
+static __inline __kasan_exempt void
+pool_cache_lists_remove(struct pool *pp, struct pool_cache_item *pl)
+{
+	TAILQ_REMOVE(&pp->pr_cache_lists, pl, ci_nextl);
+}
+
+static __inline __kasan_exempt void
+pool_cache_lists_insert_tail(struct pool *pp, struct pool_cache_item *ci)
+{
+	TAILQ_INSERT_TAIL(&pp->pr_cache_lists, ci, ci_nextl);
+}
+
 
 struct pool_cache {
 	struct pool_cache_item	*pc_actv;	/* active list of items */
@@ -834,18 +939,18 @@ pool_do_get(struct pool *pp, int flags, int *slowdown)
 	}
 
 	ph = pp->pr_curpage;
-	pi = XSIMPLEQ_FIRST(&ph->ph_items);
+	pi = pool_freelist_first(ph);
 	if (__predict_false(pi == NULL))
 		panic("%s: %s: page empty", __func__, pp->pr_wchan);
 
-	if (__predict_false(pi->pi_magic != POOL_IMAGIC(ph, pi))) {
+	if (__predict_false(pool_item_magic(pi) != POOL_IMAGIC(ph, pi))) {
 		panic("%s: %s free list modified: "
 		    "page %p; item addr %p; offset 0x%x=0x%lx != 0x%lx",
 		    __func__, pp->pr_wchan, ph->ph_page, pi,
-		    0, pi->pi_magic, POOL_IMAGIC(ph, pi));
+		    0, pool_item_magic(pi), POOL_IMAGIC(ph, pi));
 	}
 
-	XSIMPLEQ_REMOVE_HEAD(&ph->ph_items, pi_list);
+	pool_freelist_remove_head(ph);
 
 #ifdef DIAGNOSTIC
 	if (pool_debug && POOL_PHPOISON(ph)) {
@@ -967,7 +1072,7 @@ pool_do_put(struct pool *pp, void *v)
 #ifdef DIAGNOSTIC
 	if (pool_debug) {
 		struct pool_item *qi;
-		XSIMPLEQ_FOREACH(qi, &ph->ph_items, pi_list) {
+		POOL_FREELIST_FOREACH(qi, ph) {
 			if (pi == qi) {
 				panic("%s: %s: double pool_put: %p", __func__,
 				    pp->pr_wchan, pi);
@@ -976,16 +1081,14 @@ pool_do_put(struct pool *pp, void *v)
 	}
 #endif /* DIAGNOSTIC */
 
-	pi->pi_magic = POOL_IMAGIC(ph, pi);
-	XSIMPLEQ_INSERT_HEAD(&ph->ph_items, pi, pi_list);
+	pool_item_magic_set(ph, pi);
+	pool_freelist_insert_head(ph, pi);
 #ifdef DIAGNOSTIC
 	if (POOL_PHPOISON(ph))
 		poison_mem(pi + 1, pp->pr_size - sizeof(*pi));
 #endif /* DIAGNOSTIC */
 #ifdef KASAN
-	/* Freed item: keep the freelist link valid, redzone the body. */
-	kasan_alloc((vaddr_t)pi, sizeof(*pi), pp->pr_size,
-	    KASAN_POOL_FREE);
+	kasan_free((vaddr_t)pi, pp->pr_size, KASAN_POOL_FREE);
 #endif
 
 	if (ph->ph_nmissing-- == pp->pr_itemsperpage) {
@@ -1080,7 +1183,7 @@ pool_p_alloc(struct pool *pp, int flags, int *slowdown)
 		}
 	}
 
-	XSIMPLEQ_INIT(&ph->ph_items);
+	pool_freelist_init(ph);
 	ph->ph_page = addr;
 	addr += pp->pr_align * (pp->pr_npagealloc % pp->pr_maxcolors);
 	ph->ph_colored = addr;
@@ -1101,25 +1204,23 @@ pool_p_alloc(struct pool *pp, int flags, int *slowdown)
 	o = 32;
 	while (n--) {
 		pi = (struct pool_item *)addr;
-		pi->pi_magic = POOL_IMAGIC(ph, pi);
+		pool_item_magic_set(ph, pi);
 
 		if (o == 32) {
 			order = arc4random();
 			o = 0;
 		}
 		if (ISSET(order, 1U << o++))
-			XSIMPLEQ_INSERT_TAIL(&ph->ph_items, pi, pi_list);
+			pool_freelist_insert_tail(ph, pi);
 		else
-			XSIMPLEQ_INSERT_HEAD(&ph->ph_items, pi, pi_list);
+			pool_freelist_insert_head(ph, pi);
 
 #ifdef DIAGNOSTIC
 		if (POOL_PHPOISON(ph))
 			poison_mem(pi + 1, pp->pr_size - sizeof(*pi));
 #endif /* DIAGNOSTIC */
 #ifdef KASAN
-		/* Carved free item: keep the link valid, redzone the body. */
-		kasan_alloc((vaddr_t)pi, sizeof(*pi), pp->pr_size,
-	    KASAN_POOL_FREE);
+		kasan_free((vaddr_t)pi, pp->pr_size, KASAN_POOL_FREE);
 #endif
 
 		addr += pp->pr_size;
@@ -1136,12 +1237,12 @@ pool_p_free(struct pool *pp, struct pool_page_header *ph)
 	pl_assert_unlocked(pp, &pp->pr_lock);
 	KASSERT(ph->ph_nmissing == 0);
 
-	XSIMPLEQ_FOREACH(pi, &ph->ph_items, pi_list) {
-		if (__predict_false(pi->pi_magic != POOL_IMAGIC(ph, pi))) {
+	POOL_FREELIST_FOREACH(pi, ph) {
+		if (__predict_false(pool_item_magic(pi) != POOL_IMAGIC(ph, pi))) {
 			panic("%s: %s free list modified: "
 			    "page %p; item addr %p; offset 0x%x=0x%lx",
 			    __func__, pp->pr_wchan, ph->ph_page, pi,
-			    0, pi->pi_magic);
+			    0, pool_item_magic(pi));
 		}
 
 #ifdef DIAGNOSTIC
@@ -1347,10 +1448,10 @@ pool_print_pagelist(struct pool_pagelist *pl,
 	TAILQ_FOREACH(ph, pl, ph_entry) {
 		(*pr)("\t\tpage %p, color %p, nmissing %d\n",
 		    ph->ph_page, ph->ph_colored, ph->ph_nmissing);
-		XSIMPLEQ_FOREACH(pi, &ph->ph_items, pi_list) {
-			if (pi->pi_magic != POOL_IMAGIC(ph, pi)) {
+		POOL_FREELIST_FOREACH(pi, ph) {
+			if (pool_item_magic(pi) != POOL_IMAGIC(ph, pi)) {
 				(*pr)("\t\t\titem %p, magic 0x%lx\n",
-				    pi, pi->pi_magic);
+				    pi, pool_item_magic(pi));
 			}
 		}
 	}
@@ -1495,9 +1596,9 @@ pool_chk_page(struct pool *pp, struct pool_page_header *ph, int expected)
 		return 1;
 	}
 
-	for (pi = XSIMPLEQ_FIRST(&ph->ph_items), n = 0;
+	for (pi = pool_freelist_first(ph), n = 0;
 	     pi != NULL;
-	     pi = XSIMPLEQ_NEXT(&ph->ph_items, pi, pi_list), n++) {
+	     pi = pool_freelist_next(ph, pi), n++) {
 		if ((caddr_t)pi < ph->ph_page ||
 		    (caddr_t)pi >= ph->ph_page + pp->pr_pgsize) {
 			printf("%s: ", label);
@@ -1507,13 +1608,13 @@ pool_chk_page(struct pool *pp, struct pool_page_header *ph, int expected)
 			return (1);
 		}
 
-		if (pi->pi_magic != POOL_IMAGIC(ph, pi)) {
+		if (pool_item_magic(pi) != POOL_IMAGIC(ph, pi)) {
 			printf("%s: ", label);
 			printf("pool(%p:%s): free list modified: "
 			    "page %p; item ordinal %d; addr %p "
 			    "(p %p); offset 0x%x=0x%lx\n",
 			    pp, pp->pr_wchan, ph->ph_page, n, pi, page,
-			    0, pi->pi_magic);
+			    0, pool_item_magic(pi));
 		}
 
 #ifdef DIAGNOSTIC
@@ -1593,7 +1694,7 @@ pool_walk(struct pool *pp, int full,
 		n = ph->ph_nmissing;
 
 		do {
-			XSIMPLEQ_FOREACH(pi, &ph->ph_items, pi_list) {
+			POOL_FREELIST_FOREACH(pi, ph) {
 				if (cp == (caddr_t)pi)
 					break;
 			}
@@ -1942,7 +2043,7 @@ pool_cache_init(struct pool *pp)
 	pp->pr_cache = cm;
 }
 
-static inline void
+static inline __kasan_exempt void
 pool_cache_item_magic(struct pool *pp, struct pool_cache_item *ci)
 {
 	unsigned long *entry = (unsigned long *)&ci->ci_nextl;
@@ -1951,7 +2052,7 @@ pool_cache_item_magic(struct pool *pp, struct pool_cache_item *ci)
 	entry[1] = pp->pr_cache_magic[1] ^ (u_long)ci->ci_next;
 }
 
-static inline void
+static inline __kasan_exempt void
 pool_cache_item_magic_check(struct pool *pp, struct pool_cache_item *ci)
 {
 	unsigned long *entry;
@@ -1996,10 +2097,10 @@ pool_cache_list_alloc(struct pool *pp, struct pool_cache *pc)
 	struct pool_cache_item *pl;
 
 	pool_list_enter(pp);
-	pl = TAILQ_FIRST(&pp->pr_cache_lists);
+	pl = pool_cache_lists_first(pp);
 	if (pl != NULL) {
-		TAILQ_REMOVE(&pp->pr_cache_lists, pl, ci_nextl);
-		pp->pr_cache_nitems -= POOL_CACHE_ITEM_NITEMS(pl);
+		pool_cache_lists_remove(pp, pl);
+		pp->pr_cache_nitems -= pool_cache_item_nitems(pl);
 
 		pool_cache_item_magic(pp, pl);
 
@@ -2023,8 +2124,8 @@ pool_cache_list_free(struct pool *pp, struct pool_cache *pc,
 	if (TAILQ_EMPTY(&pp->pr_cache_lists))
 		pp->pr_cache_timestamp = getnsecuptime();
 
-	pp->pr_cache_nitems += POOL_CACHE_ITEM_NITEMS(ci);
-	TAILQ_INSERT_TAIL(&pp->pr_cache_lists, ci, ci_nextl);
+	pp->pr_cache_nitems += pool_cache_item_nitems(ci);
+	pool_cache_lists_insert_tail(pp, ci);
 
 	pc->pc_nlput++;
 
@@ -2076,19 +2177,13 @@ pool_cache_get(struct pool *pp)
 	pool_cache_item_magic_check(pp, ci);
 
 #ifdef KASAN
-	/*
-	 * The per-CPU cache fast path bypasses pool_do_get(), so revalidate
-	 * the item here -- and before the DIAGNOSTIC poison_check below, which
-	 * reads the item body that pool_cache_put() redzoned.  kasan_alloc()
-	 * only flips shadow (the poison pattern in memory is left intact), so
-	 * poison_check() still verifies it.
-	 */
+	/* The cache fast path bypasses pool_do_get(), so revalidate here. */
 	kasan_alloc((vaddr_t)ci, pp->pr_size, pp->pr_size,
 	    KASAN_POOL_FREE);
 #endif
 
 #ifdef DIAGNOSTIC
-	if (pool_debug && POOL_CACHE_ITEM_POISONED(ci)) {
+	if (pool_debug && pool_cache_item_poisoned(ci)) {
 		size_t pidx;
 		uint32_t pval;
 
@@ -2105,8 +2200,8 @@ pool_cache_get(struct pool *pp)
 	}
 #endif
 
-	pc->pc_actv = ci->ci_next;
-	pc->pc_nactv = POOL_CACHE_ITEM_NITEMS(ci) - 1;
+	pc->pc_actv = pool_cache_item_next(ci);
+	pc->pc_nactv = pool_cache_item_nitems(ci) - 1;
 	pc->pc_nget++;
 	pc->pc_nout++;
 
@@ -2121,7 +2216,7 @@ pool_cache_put(struct pool *pp, void *v)
 {
 	struct pool_cache *pc;
 	struct pool_cache_item *ci = v;
-	unsigned long nitems;
+	unsigned long nitems, stored;
 	int s;
 #ifdef DIAGNOSTIC
 	int poison = pool_debug && pp->pr_size > sizeof(*ci);
@@ -2144,23 +2239,15 @@ pool_cache_put(struct pool *pp, void *v)
 		nitems = 0;
 	}
 
-	ci->ci_next = pc->pc_actv;
-	ci->ci_nitems = ++nitems;
+	stored = ++nitems;
 #ifdef DIAGNOSTIC
-	ci->ci_nitems |= poison ? POOL_CACHE_ITEM_NITEMS_POISON : 0;
+	stored |= poison ? POOL_CACHE_ITEM_NITEMS_POISON : 0;
 #endif
-	pool_cache_item_magic(pp, ci);
 
+	pool_cache_item_link(ci, pc->pc_actv, stored);
+	pool_cache_item_magic(pp, ci);
 #ifdef KASAN
-	/*
-	 * Mirror pool_do_put() for the cache fast path: keep the cache header
-	 * (ci_next/ci_nitems/magic in ci_nextl) valid so the magazine can link
-	 * and magic-check the item, and redzone the body so a use-after-free is
-	 * caught.  pool_cache_get() revalidates the whole item on hand-out.
-	 */
-	if (pp->pr_size > sizeof(struct pool_cache_item))
-		kasan_alloc((vaddr_t)ci, sizeof(struct pool_cache_item),
-		    pp->pr_size, KASAN_POOL_FREE);
+	kasan_free((vaddr_t)ci, pp->pr_size, KASAN_POOL_FREE);
 #endif
 
 	pc->pc_actv = ci;
@@ -2180,11 +2267,11 @@ pool_cache_list_put(struct pool *pp, struct pool_cache_item *pl)
 	if (pl == NULL)
 		return (NULL);
 
-	rpl = TAILQ_NEXT(pl, ci_nextl);
+	rpl = pool_cache_lists_next(pl);
 
 	pl_enter(pp, &pp->pr_lock);
 	do {
-		next = pl->ci_next;
+		next = pool_cache_item_next(pl);
 		pool_do_put(pp, pl);
 		pl = next;
 	} while (pl != NULL);
@@ -2213,7 +2300,7 @@ pool_cache_destroy(struct pool *pp)
 
 	cpumem_put(&pool_caches, cm);
 
-	pl = TAILQ_FIRST(&pp->pr_cache_lists);
+	pl = pool_cache_lists_first(pp);
 	while (pl != NULL)
 		pl = pool_cache_list_put(pp, pl);
 }
@@ -2228,10 +2315,10 @@ pool_cache_gc(struct pool *pp)
 	    pl_enter_try(pp, &pp->pr_cache_lock)) {
 		struct pool_cache_item *pl = NULL;
 
-		pl = TAILQ_FIRST(&pp->pr_cache_lists);
+		pl = pool_cache_lists_first(pp);
 		if (pl != NULL) {
-			TAILQ_REMOVE(&pp->pr_cache_lists, pl, ci_nextl);
-			pp->pr_cache_nitems -= POOL_CACHE_ITEM_NITEMS(pl);
+			pool_cache_lists_remove(pp, pl);
+			pp->pr_cache_nitems -= pool_cache_item_nitems(pl);
 			pp->pr_cache_timestamp = getnsecuptime();
 
 			pp->pr_cache_ngc++;
