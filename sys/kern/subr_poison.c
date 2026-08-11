@@ -17,6 +17,12 @@
 
 #include <sys/param.h>
 
+#ifdef KASAN
+#include <sys/kasan.h>
+#else
+#define __kasan_exempt
+#endif
+
 /*
  * The POISON is used as known text to copy into free objects so
  * that modifications after frees can be detected.
@@ -53,7 +59,8 @@ poison_value(void *v)
 	return 0;
 }
 
-void
+/* Both only touch an object its allocator has already freed and poisoned. */
+void __kasan_exempt
 poison_mem(void *v, size_t len)
 {
 	uint32_t *ip = v;
@@ -69,7 +76,7 @@ poison_mem(void *v, size_t len)
 		ip[i] = poison;
 }
 
-int
+int __kasan_exempt
 poison_check(void *v, size_t len, size_t *pidx, uint32_t *pval)
 {
 	uint32_t *ip = v;

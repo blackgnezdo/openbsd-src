@@ -160,11 +160,7 @@ struct pool_page_header {
 #endif
 };
 #define POOL_MAGICBIT (1 << 3) /* keep away from perturbed low bits */
-#ifdef KASAN
-#define POOL_PHPOISON(ph) 0
-#else
 #define POOL_PHPOISON(ph) ISSET((ph)->ph_magic, POOL_MAGICBIT)
-#endif
 
 /*
  * A free item is poisoned end to end; these reach the magic and the free

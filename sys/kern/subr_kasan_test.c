@@ -382,23 +382,42 @@ kasan_poolcache_test(void)
  * Freelist tail link: a freed malloc object carries the bucket freelist's
  * XSIMPLEQ link in its own body at offset 8 (struct kmem_freelist.kf_flist,
  * kern_malloc.c), and free()/malloc() write and read that link through
- * *sqx_last / REMOVE_HEAD while the object sits on the freelist.  So the
- * link granule must stay valid for as long as the object is freed; the rest
- * of the body is poisoned 0xFC.  Regression test for the syzbot ktrgenio
- * crash (extid f028f6e8): the 8-byte link access below is byte-identical to
- * what a second free()'s INSERT_TAIL does to the tail.
+ * *sqx_last / REMOVE_HEAD while the object sits on the freelist, which is
+ * poisoned end to end.  Three frees into one bucket make each INSERT_TAIL
+ * write the previous tail's link inside a poisoned object; only the
+ * __kasan_exempt accessors keep that clean.  Regression test for the syzbot
+ * ktrgenio crash (extid f028f6e8).
  */
 static void
 kt_freelist_link(void)
 {
 	char *q = malloc(64, KT_MTYPE, M_WAITOK);
 	char *p = malloc(64, KT_MTYPE, M_WAITOK);
-	volatile uint64_t *link;
+	char *r = malloc(64, KT_MTYPE, M_WAITOK);
+
+	free(q, KT_MTYPE, 64);		/* keep the bucket freelist non-empty */
+	free(p, KT_MTYPE, 64);		/* INSERT_TAIL writes q's link */
+	free(r, KT_MTYPE, 64);		/* and this one writes p's */
+}
+
+/*
+ * The same granule reached by something that is not the allocator.  The link
+ * must be left intact -- a malloc bucket is shared with the whole kernel --
+ * so the word is read and stored straight back; clang folds the store check
+ * into the load check, hence op=read.
+ */
+static void
+kt_malloc_uaf_link(void)
+{
+	char *q = malloc(64, KT_MTYPE, M_WAITOK);
+	char *p = malloc(64, KT_MTYPE, M_WAITOK);
+	volatile unsigned long *link;
 
 	free(q, KT_MTYPE, 64);		/* keep the bucket freelist non-empty */
 	free(p, KT_MTYPE, 64);		/* p is now the freelist tail */
-	link = (volatile uint64_t *)(p + 8);	/* kf_flist link granule */
-	*link = *link;			/* INSERT_TAIL's *sqx_last access */
+
+	link = (volatile unsigned long *)(p + 8);	/* kf_flist */
+	*link = *link;			/* freed link access -> 0xFC */
 }
 
 /* Heap out-of-bounds read: 1 byte past a 64-byte object lands in its 0xFB
@@ -676,6 +695,9 @@ static const struct kasan_test kasan_tests[] = {
 	{ "heap_uaf",       KT_REPORT, 0, 0xFC, "malloc use-after-free",
 	    "0 bytes inside the 128-byte malloc slot",
 	    "kt_heap_uaf", "kt_heap_uaf",                kt_heap_uaf  },
+	{ "malloc_uaf_link", KT_REPORT, 0, 0xFC, "malloc use-after-free",
+	    "8 bytes inside the 128-byte malloc slot",
+	    "kt_malloc_uaf_link", "kt_malloc_uaf_link",  kt_malloc_uaf_link },
 	{ "partial_gran",   KT_REPORT, 0, 0x05, "partial granule",
 	    "13 bytes inside the 32-byte malloc slot",
 	    "kt_partial_granule", "",                    kt_partial_granule },
