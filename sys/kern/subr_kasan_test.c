@@ -384,18 +384,9 @@ kasan_poolcache_test(void)
  * kern_malloc.c), and free()/malloc() write and read that link through
  * *sqx_last / REMOVE_HEAD while the object sits on the freelist.  So the
  * link granule must stay valid for as long as the object is freed; the rest
- * of the body is poisoned 0xFC.
- *
- * Regression test for the syzbot ktrgenio crash (extid f028f6e8, fault at
- * kern_malloc.c INSERT_TAIL): free() used to poison the WHOLE object with a
- * trailing kasan_free() after dropping malloc_mtx, so on MP a late poison
- * landed between the next free()'s tail-link unpoison and its INSERT_TAIL
- * write, which then trapped on shadow 0xFC.  A single CPU can't schedule
- * that interleaving, but it can perform the racing access itself: the 8-byte
- * link access below is byte-identical to what a second free()'s INSERT_TAIL
- * does to the tail.  Pre-fix it reports (op=write size=8 at obj+8, shadow
- * 0xFC -- the exact syzbot signature); with the link granule kept valid it
- * runs clean.
+ * of the body is poisoned 0xFC.  Regression test for the syzbot ktrgenio
+ * crash (extid f028f6e8): the 8-byte link access below is byte-identical to
+ * what a second free()'s INSERT_TAIL does to the tail.
  */
 static void
 kt_freelist_link(void)
@@ -591,6 +582,59 @@ kt_global_oob(void)
 	kt_global_buf[idx] = 0x41;		/* global redzone -> 0xFA */
 }
 
+/*
+ * Offset 8 of a free pool item is pi_list, which aliases whatever the object
+ * kept there -- so_lock.rwl_owner for struct socket, inp_queue for struct
+ * inpcb.  A store there after the free is the bug this models.
+ *
+ * The corrupted link is left behind: a second item is held allocated so the
+ * page never goes idle and pool_gc_pages() cannot walk it, and the pool is
+ * not destroyed.  The cache case cannot do that -- pool_cache_gc() may flush
+ * a magazine at any time -- so it stores the same value back, which clang
+ * folds into one check, hence op=read.
+ */
+static struct pool kt_link_pool;
+static void
+kt_pool_uaf_link(void)
+{
+	char *p, *pin;
+
+	pool_init(&kt_link_pool, 128, 0, IPL_NONE, 0, "ktlink", NULL);
+	pin = pool_get(&kt_link_pool, PR_WAITOK);	/* pins the page */
+	p = pool_get(&kt_link_pool, PR_WAITOK);
+	if ((vaddr_t)p < VM_MIN_KERNEL_ADDRESS ||
+	    (vaddr_t)p >= VM_MAX_KERNEL_ADDRESS)
+		panic("kt_pool_uaf_link: item %p not in KASAN-monitored range",
+		    p);
+	pool_put(&kt_link_pool, p);		/* poisons the item end to end */
+
+	*(volatile unsigned long *)(p + 8) = 0;	/* pi_list -> 0xFD */
+
+	(void)pin;				/* never freed; see above */
+}
+
+/* The same offset reached through the per-CPU magazine (ci_nitems), or the
+ * plain free list on a kernel without a cache. */
+static struct pool kt_clink_pool;
+static void
+kt_poolcache_uaf_link(void)
+{
+	volatile unsigned long *link;
+	char *p;
+
+	pool_init(&kt_clink_pool, 128, 0, IPL_NONE, 0, "kclink", NULL);
+	pool_cache_init(&kt_clink_pool);
+	p = pool_get(&kt_clink_pool, PR_WAITOK);
+	if ((vaddr_t)p < VM_MIN_KERNEL_ADDRESS ||
+	    (vaddr_t)p >= VM_MAX_KERNEL_ADDRESS)
+		panic("kt_poolcache_uaf_link: item %p not in KASAN-monitored "
+		    "range", p);
+	pool_put(&kt_clink_pool, p);		/* poisons the item end to end */
+
+	link = (volatile unsigned long *)(p + 8);	/* ci_nitems / pi_list */
+	*link = *link;				/* freed header access -> 0xFD */
+}
+
 #define KT_CLEAN	0	/* expect no report (positive test) */
 #define KT_REPORT	1	/* expect a report (negative test) */
 
@@ -648,6 +692,12 @@ static const struct kasan_test kasan_tests[] = {
 	{ "pool_decoy",     KT_REPORT, 0, 0xFD, "pool use-after-free",
 	    "in pool 'ktowner'", "kt_pool_decoy", "kt_pool_decoy",
 	    kt_pool_decoy  },
+	{ "pool_uaf_link",  KT_REPORT, 1, 0xFD, "pool use-after-free",
+	    "8 bytes inside the 128-byte item", "kt_pool_uaf_link",
+	    "kt_pool_uaf_link",                          kt_pool_uaf_link   },
+	{ "poolcache_link", KT_REPORT, 0, 0xFD, "pool use-after-free",
+	    "8 bytes inside the 128-byte item", "kt_poolcache_uaf_link",
+	    "kt_poolcache_uaf_link",                 kt_poolcache_uaf_link  },
 	{ "stack_redzone",  KT_REPORT, 1, 0xF1, "stack redzone", "", "", "",
 	    kasan_stack_test   },
 	{ "global_oob",     KT_REPORT, 1, 0xFA, "global redzone",
