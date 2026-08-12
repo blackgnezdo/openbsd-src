@@ -105,13 +105,15 @@ amap_list_remove(struct vm_amap *amap)
 struct vm_amap_chunk *
 amap_chunk_get(struct vm_amap *amap, int slot, int create, int waitf)
 {
-	int bucket = UVM_AMAP_BUCKET(amap, slot);
-	int baseslot = AMAP_BASE_SLOT(slot);
+	int bucket, baseslot;
 	int n;
 	struct vm_amap_chunk *chunk, *newchunk, *pchunk = NULL;
 
 	if (UVM_AMAP_SMALL(amap))
 		return &amap->am_small;
+
+	bucket = UVM_AMAP_BUCKET(amap, slot);
+	baseslot = AMAP_BASE_SLOT(slot);
 
 	for (chunk = amap->am_buckets[bucket]; chunk != NULL;
 	    chunk = TAILQ_NEXT(chunk, ac_list)) {
@@ -150,12 +152,13 @@ amap_chunk_get(struct vm_amap *amap, int slot, int create, int waitf)
 void
 amap_chunk_free(struct vm_amap *amap, struct vm_amap_chunk *chunk)
 {
-	int bucket = UVM_AMAP_BUCKET(amap, chunk->ac_baseslot);
+	int bucket;
 	struct vm_amap_chunk *nchunk;
 
 	if (UVM_AMAP_SMALL(amap))
 		return;
 
+	bucket = UVM_AMAP_BUCKET(amap, chunk->ac_baseslot);
 	nchunk = TAILQ_NEXT(chunk, ac_list);
 	TAILQ_REMOVE(&amap->am_chunks, chunk, ac_list);
 	if (amap->am_buckets[bucket] == chunk) {
