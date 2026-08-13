@@ -1,4 +1,4 @@
-/*	$OpenBSD: relay.c,v 1.269 2026/08/07 10:21:39 rsadowski Exp $	*/
+/*	$OpenBSD: relay.c,v 1.271 2026/08/12 19:24:02 rsadowski Exp $	*/
 
 /*
  * Copyright (c) 2006 - 2014 Reyk Floeter <reyk@openbsd.org>
@@ -359,14 +359,17 @@ relay_init(struct privsep *ps, struct privsep_proc *p, void *arg)
 void
 relay_session_publish(struct rsession *s)
 {
-	proc_compose(env->sc_ps, PROC_PFE, IMSG_SESS_PUBLISH, s, sizeof(*s));
+	if (proc_compose(env->sc_ps, PROC_PFE, IMSG_SESS_PUBLISH, s,
+	    sizeof(*s)) == -1)
+		log_warn("%s: proc_compose", __func__);
 }
 
 void
 relay_session_unpublish(struct rsession *s)
 {
-	proc_compose(env->sc_ps, PROC_PFE, IMSG_SESS_UNPUBLISH,
-	    &s->se_id, sizeof(s->se_id));
+	if (proc_compose(env->sc_ps, PROC_PFE, IMSG_SESS_UNPUBLISH,
+	    &s->se_id, sizeof(s->se_id)) == -1)
+		log_warn("%s: proc_compose", __func__);
 }
 
 void
@@ -417,8 +420,9 @@ relay_statistics(int fd, short events, void *arg)
 
 		crs.id = rlay->rl_conf.id;
 		crs.proc = ps->ps_instance;
-		proc_compose(env->sc_ps, PROC_PFE, IMSG_STATISTICS,
-		    &crs, sizeof(crs));
+		if (proc_compose(env->sc_ps, PROC_PFE, IMSG_STATISTICS, &crs,
+		    sizeof(crs)) == -1)
+			log_warn("%s: proc_compose", __func__);
 
 		for (con = SPLAY_ROOT(&rlay->rl_sessions);
 		    con != NULL; con = next_con) {
@@ -1132,7 +1136,7 @@ relay_accept(int fd, short event, void *arg)
 
 			event_del(&rlay->rl_ev);
 			evtimer_add(&rlay->rl_evt, &evtpause);
-			DPRINTF("%s: deferring connections", __func__);
+			log_warn("%s: deferring connections", __func__);
 		}
 		return;
 	}
@@ -1233,8 +1237,9 @@ relay_accept(int fd, short event, void *arg)
 		memcpy(&cnl->src, &con->se_in.ss, sizeof(cnl->src));
 		memcpy(&cnl->dst, &con->se_sockname, sizeof(cnl->dst));
 
-		proc_compose(env->sc_ps, PROC_PFE, IMSG_NATLOOK,
-		    cnl, sizeof(*cnl));
+		if (proc_compose(env->sc_ps, PROC_PFE, IMSG_NATLOOK,
+		    cnl, sizeof(*cnl)) == -1)
+			log_warn("%s: proc_compose", __func__);
 
 		/* Schedule timeout */
 		evtimer_set(&con->se_ev, relay_natlook, con);
@@ -1492,8 +1497,9 @@ relay_bindanyreq(struct rsession *con, in_port_t port, int proto)
 	bnd.bnd_port = port;
 	bnd.bnd_proto = proto;
 	bcopy(&con->se_in.ss, &bnd.bnd_ss, sizeof(bnd.bnd_ss));
-	proc_compose(env->sc_ps, PROC_PARENT, IMSG_BINDANY,
-	    &bnd, sizeof(bnd));
+	if (proc_compose(env->sc_ps, PROC_PARENT, IMSG_BINDANY,
+	    &bnd, sizeof(bnd)) == -1)
+		log_warn("%s: proc_compose", __func__);
 
 	/* Schedule timeout */
 	evtimer_set(&con->se_ev, relay_bindany, con);
@@ -1573,6 +1579,9 @@ relay_connect_retry(int fd, short sig, void *arg)
  retry:
 	if ((con->se_out.s = relay_socket_connect(&con->se_out.ss,
 	    con->se_out.port, rlay->rl_proto, bnds)) == -1) {
+		if (errno == ENFILE || errno == EMFILE)
+			log_warn("%s: session %d: deferring forward",
+			    __func__, con->se_id);
 		log_debug("%s: session %d: "
 		    "forward failed: %s, %s", __func__,
 		    con->se_id, strerror(errno),
@@ -1695,8 +1704,8 @@ relay_connect(struct rsession *con)
 	if ((con->se_out.s = relay_socket_connect(&con->se_out.ss,
 	    con->se_out.port, rlay->rl_proto, bnds)) == -1) {
 		if (errno == ENFILE || errno == EMFILE) {
-			log_debug("%s: session %d: forward failed: %s",
-			    __func__, con->se_id, strerror(errno));
+			log_warn("%s: session %d: deferring forward",
+			    __func__, con->se_id);
 			evtimer_set(&con->se_inflightevt, relay_connect_retry,
 			    con);
 			event_del(&rlay->rl_ev);
@@ -1815,8 +1824,9 @@ relay_close(struct rsession *con, const char *msg, int err)
 
 	if (con->se_cnl != NULL) {
 #if 0
-		proc_compose_imsg(env->sc_ps, PROC_PFE, -1, IMSG_KILLSTATES, -1,
-		    cnl, sizeof(*cnl));
+		if (proc_compose_imsg(env->sc_ps, PROC_PFE, -1,
+		    IMSG_KILLSTATES, -1, cnl, sizeof(*cnl)) == -1)
+			log_warn("%s: proc_compose_imsg", __func__);
 #endif
 		free(con->se_cnl);
 	}
@@ -1965,12 +1975,14 @@ relay_dispatch_pfe(int fd, struct privsep_proc *p, struct imsg *imsg)
 			    &rlay->rl_sessions) {
 				memcpy(&se, con, sizeof(se));
 				se.se_cid = cid;
-				proc_compose(env->sc_ps, p->p_id,
-				    IMSG_CTL_SESSION, &se, sizeof(se));
+				if (proc_compose(env->sc_ps, p->p_id,
+				    IMSG_CTL_SESSION, &se, sizeof(se)) == -1)
+					log_warn("%s: proc_compose", __func__);
 			}
 		}
-		proc_compose(env->sc_ps, p->p_id, IMSG_CTL_END,
-		    &cid, sizeof(cid));
+		if (proc_compose(env->sc_ps, p->p_id, IMSG_CTL_END,
+		    &cid, sizeof(cid)) == -1)
+			log_warn("%s: proc_compose", __func__);
 		break;
 	default:
 		return (-1);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: opt.c,v 1.25 2026/08/05 14:44:47 ratchov Exp $	*/
+/*	$OpenBSD: opt.c,v 1.27 2026/08/12 11:03:19 ratchov Exp $	*/
 /*
  * Copyright (c) 2008-2011 Alexandre Ratchov <alex@caoua.org>
  *
@@ -321,35 +321,8 @@ opt_new(struct dev *d, char *name,
     int pmin, int pmax, int rmin, int rmax,
     int maxweight, int mmc, int dup, unsigned int mode)
 {
-	struct opt *o, **po;
+	struct opt *o;
 	char str[64];
-	unsigned int len, num;
-	char c;
-
-	if (name == NULL) {
-		name = d->name;
-		len = strlen(name);
-	} else {
-		for (len = 0; name[len] != '\0'; len++) {
-			if (len == CTL_NAMEMAX - 1) {
-				logx(0, "%s: too long", name);
-				return NULL;
-			}
-			c = name[len];
-			if ((c < 'a' || c > 'z') &&
-			    (c < 'A' || c > 'Z')) {
-				logx(0, "%s: only alphabetic chars allowed", name);
-				return NULL;
-			}
-		}
-	}
-	num = 0;
-	for (po = &opt_list; *po != NULL; po = &(*po)->next)
-		num++;
-	if (num >= OPT_NMAX) {
-		logx(0, "%s: too many opts", name);
-		return NULL;
-	}
 
 	if (opt_byname(name)) {
 		logx(1, "%s: already defined", name);
@@ -366,7 +339,6 @@ opt_new(struct dev *d, char *name,
 	}
 
 	o = xmalloc(sizeof(struct opt));
-	o->num = num;
 	o->dev = d;
 	o->alt_list = NULL;
 	o->refcnt = 0;
@@ -391,10 +363,10 @@ opt_new(struct dev *d, char *name,
 	o->mtc = mmc ? &mtc_array[0] : NULL;
 	o->dup = dup;
 	o->mode = mode;
-	memcpy(o->name, name, len + 1);
+	strlcpy(o->name, name, sizeof(o->name));
 	opt_setalt(o, d);
-	o->next = *po;
-	*po = o;
+	o->next = opt_list;
+	opt_list = o;
 
 	logx(2, "%s: %s%s, vol = %d", o->name, (chans_fmt(str, sizeof(str),
 	    o->mode, o->pmin, o->pmax, o->rmin, o->rmax), str),
@@ -444,18 +416,6 @@ opt_byname(char *name)
 
 	for (o = opt_list; o != NULL; o = o->next) {
 		if (strcmp(name, o->name) == 0)
-			return o;
-	}
-	return NULL;
-}
-
-struct opt *
-opt_bynum(int num)
-{
-	struct opt *o;
-
-	for (o = opt_list; o != NULL; o = o->next) {
-		if (o->num == num)
 			return o;
 	}
 	return NULL;
