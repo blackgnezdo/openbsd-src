@@ -1,4 +1,4 @@
-/*	$OpenBSD: pci.h,v 1.23 2026/08/19 01:34:10 jsg Exp $	*/
+/*	$OpenBSD: pci.h,v 1.26 2026/08/24 03:14:01 jsg Exp $	*/
 /*
  * Copyright (c) 2015 Mark Kettenis
  *
@@ -93,6 +93,7 @@ struct pci_dev {
 #define PCI_MEM64_END	0xffffffffffffffff
 #endif
 
+#define PCI_VENDOR_ID_AMD	PCI_VENDOR_AMD
 #define PCI_VENDOR_ID_APPLE	PCI_VENDOR_APPLE
 #define PCI_VENDOR_ID_ASUSTEK	PCI_VENDOR_ASUSTEK
 #define PCI_VENDOR_ID_ATI	PCI_VENDOR_ATI
@@ -115,6 +116,8 @@ struct pci_dev {
 
 #define pci_dev_put(x)
 
+#define PCI_EXP_TYPE_UPSTREAM	0x5
+#define PCI_EXP_TYPE_DOWNSTREAM	0x6
 #define PCI_EXP_DEVSTA		0x0a
 #define PCI_EXP_DEVSTA_TRPND	(1 << 5)
 #define PCI_EXP_LNKCAP		0x0c
@@ -246,6 +249,16 @@ pci_pcie_cap(struct pci_dev *pdev)
 	    &pos, NULL))
 		return -EINVAL;
 	return pos;
+}
+
+static inline int
+pci_pcie_type(struct pci_dev *pdev)
+{
+	pcireg_t cap = 0;
+
+	pci_get_capability(pdev->pc, pdev->tag, PCI_CAP_PCIEXPRESS,
+	    NULL, &cap);
+	return PCI_PCIE_XCAP_TYPE(cap);
 }
 
 bool pcie_aspm_enabled(struct pci_dev *);
@@ -622,5 +635,11 @@ static inline int
 pcim_enable_device(struct pci_dev *pdev)
 {
 	return 0;
+}
+
+static inline const char *
+pci_name(const struct pci_dev *pdev)
+{
+	return pdev->_dev->dv_xname;
 }
 #endif /* _LINUX_PCI_H_ */
