@@ -1,4 +1,4 @@
-/*	$OpenBSD: pkcs7test.c,v 1.8 2026/08/30 16:55:41 tb Exp $	*/
+/*	$OpenBSD: pkcs7test.c,v 1.11 2026/08/31 09:18:25 tb Exp $	*/
 /*
  * Copyright (c) 2014 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2026 Theo Buehler <tb@openbsd.org>
@@ -109,7 +109,7 @@ fatal(const char *msg, ...)
 	va_list ap;
 
 	va_start(ap, msg);
-	vwarnx("%s", ap);
+	vwarnx(msg, ap);
 	va_end(ap);
 	ERR_print_errors_fp(stderr);
 	exit(1);
@@ -322,7 +322,7 @@ pkcs7_stream_missing_content_nid(int nid)
 	name = OBJ_nid2sn(nid);
 
 	/*
-	 * Create PKCS7 object with Content Type corresponding to nid
+	 * Create a PKCS7 object with Content Type corresponding to nid
 	 * and omit the optional content.
 	 */
 
@@ -452,6 +452,7 @@ pkcs7_stream_signedData_oob(void)
 	}
 
 	failed = 0;
+
  out:
 	PKCS7_free(p7);
 
