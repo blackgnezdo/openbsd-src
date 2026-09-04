@@ -1728,11 +1728,13 @@ uvm_fault_unwire(vm_map_t map, vaddr_t start, vaddr_t end)
  * uvm_fault_unwire_locked(): the guts of uvm_fault_unwire().
  *
  * => map must be at least read-locked.
+ * => deals with partial mappings: if concurrent uvm_fault_wire() unmap punches
+ *    holes they get skipped.
  */
 void
 uvm_fault_unwire_locked(vm_map_t map, vaddr_t start, vaddr_t end)
 {
-	vm_map_entry_t entry, oentry = NULL, next;
+	vm_map_entry_t entry, oentry = NULL;
 	pmap_t pmap = vm_map_pmap(map);
 	vaddr_t va;
 	paddr_t pa;
@@ -1748,22 +1750,24 @@ uvm_fault_unwire_locked(vm_map_t map, vaddr_t start, vaddr_t end)
 	 */
 
 	/*
-	 * find the beginning map entry for the region.
+	 * find the map entry the region starts in, if that address is not
+	 * mapped, find the closest one to walk forward from.
 	 */
 	KASSERT(start >= vm_map_min(map) && end <= vm_map_max(map));
-	if (uvm_map_lookup_entry(map, start, &entry) == FALSE)
-		panic("uvm_fault_unwire_locked: address not in map");
+	if (uvm_map_lookup_entry(map, start, &entry) == FALSE && entry == NULL)
+		entry = RBT_MIN(uvm_map_addr, &map->addr);
 
 	for (va = start; va < end ; va += PAGE_SIZE) {
 		/*
-		 * find the map entry for the current address.
+		 * find the map entry for the current address, skipping
+		 * any gap left behind by an unmap.
 		 */
-		KASSERT(va >= entry->start);
-		while (va >= entry->end) {
-			next = RBT_NEXT(uvm_map_addr, entry);
-			KASSERT(next != NULL && next->start <= entry->end);
-			entry = next;
-		}
+		while (entry != NULL && va >= entry->end)
+			entry = RBT_NEXT(uvm_map_addr, entry);
+		if (entry == NULL)
+			break;
+		if (va < entry->start)
+			continue;
 
 		/*
 		 * lock it.
@@ -1792,7 +1796,7 @@ uvm_fault_unwire_locked(vm_map_t map, vaddr_t start, vaddr_t end)
 	}
 
 	if (oentry != NULL) {
-		uvm_map_unlock_entry(entry);
+		uvm_map_unlock_entry(oentry);
 	}
 }
 
