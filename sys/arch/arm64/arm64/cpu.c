@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.151 2026/09/03 11:54:23 jsg Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.153 2026/09/08 04:10:48 jsg Exp $	*/
 
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
@@ -112,6 +112,7 @@
 #define CPU_PART_NEOVERSE_N3	0xd8e
 #define CPU_PART_CORTEX_A320	0xd8f
 #define CPU_PART_C1_PREMIUM	0xd90
+#define CPU_PART_C2_ULTRA	0xd96
 
 /* Cavium */
 #define CPU_PART_THUNDERX_T88	0x0a1
@@ -167,6 +168,7 @@ struct cpu_cores cpu_cores_arm[] = {
 	{ CPU_PART_C1_PREMIUM, "C1-Premium" },
 	{ CPU_PART_C1_PRO, "C1-Pro" },
 	{ CPU_PART_C1_ULTRA, "C1-Ultra" },
+	{ CPU_PART_C2_ULTRA, "C2-Ultra" },
 	{ CPU_PART_CORTEX_A34, "Cortex-A34" },
 	{ CPU_PART_CORTEX_A35, "Cortex-A35" },
 	{ CPU_PART_CORTEX_A53, "Cortex-A53" },
@@ -1981,6 +1983,11 @@ cpu_boot_secondary(struct cpu_info *ci)
 		__asm volatile("wfe");
 }
 
+#ifdef HIBERNATE
+volatile int cpu_parked __attribute__((section(".hibdata")));
+void cpu_park(struct cpu_info *);
+#endif
+
 void
 cpu_init_secondary(struct cpu_info *ci)
 {
@@ -2004,6 +2011,16 @@ cpu_init_secondary(struct cpu_info *ci)
 
 	while ((ci->ci_flags & CPUF_GO) == 0)
 		__asm volatile("wfe");
+	__asm volatile("dsb sy" ::: "memory");
+
+#ifdef HIBERNATE
+	if (ci->ci_flags & CPUF_PARK) {
+		atomic_setbits_int(&ci->ci_flags, CPUF_PARKED);
+		__asm volatile("dsb sy" ::: "memory");
+		cpu_park(ci);
+		/* NOTREACHED */
+	}
+#endif
 
 	cpu_init();
 
@@ -2250,6 +2267,16 @@ void
 cpu_resume_secondary(struct cpu_info *ci)
 {
 	int timeout = 10000;
+
+#ifdef HIBERNATE
+	if (cpu_parked) {
+		cpu_parked = 0;
+		__asm volatile("dsb sy; sev" ::: "memory");
+
+		/* Wait a bit for APs to unpark themselves */
+		delay(500000);
+	}
+#endif
 
 	if (ci->ci_flags & CPUF_PRESENT)
 		return;
