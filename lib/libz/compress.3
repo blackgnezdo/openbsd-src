@@ -1,4 +1,4 @@
-.\"	$OpenBSD: compress.3,v 1.35 2026/03/23 09:11:44 jsg Exp $
+.\"	$OpenBSD: compress.3,v 1.37 2026/09/10 01:28:12 jsg Exp $
 .\"
 .\"  Copyright (C) 1995-2017 Jean-loup Gailly and Mark Adler
 .\"
@@ -21,7 +21,7 @@
 .\" Converted to mdoc format for the OpenBSD project
 .\" by Jason McIntyre <jmc@openbsd.org>
 .\"
-.Dd $Mdocdate: March 23 2026 $
+.Dd $Mdocdate: September 10 2026 $
 .Dt COMPRESS 3
 .Os
 .Sh NAME
@@ -2838,7 +2838,7 @@ or
 was not provided, or
 .Sq +
 was provided).
-.Fa errno
+.Va errno
 can be checked to determine if the reason
 .Fn gzopen
 failed was that the file could not be opened.
@@ -2851,10 +2851,12 @@ In that case
 .Fn gzopen
 return
 .Dv NULL
-and errno will be
-.Dv EAGAIN
+and
+.Va errno
+will be
+.Er EAGAIN
 or
-.Dv EWOULDBLOCK .
+.Er EWOULDBLOCK .
 The call to
 .Fn gzopen
 with the resulting file descriptor and
@@ -3035,10 +3037,12 @@ to detect this case.
 can be used to read a gzip file on a non-blocking device.
 If the input stalls and there is no uncompressed data to return, then
 .Fn gzread
-will return \-1, and errno will be
-.Dv EAGAIN
+will return \-1, and
+.Va errno
+will be
+.Er EAGAIN
 or
-.Dv EWOULDBLOCK .
+.Er EWOULDBLOCK .
 .Fn gzread
 can then be called again.
 .Pp
@@ -3290,10 +3294,12 @@ points to has been clobbered or not.
 can be used to read a gzip file on a non-blocking device.
 If the input stalls and there is no uncompressed data to return, then
 .Fn gzgetc
-will return \-1, and errno will be
-.Dv EAGAIN
+will return \-1, and
+.Va errno
+will be
+.Er EAGAIN
 or
-.Dv EWOULDBLOCK .
+.Er EWOULDBLOCK .
 .Fn gzread
 can then be called again.
 .It Xo
@@ -3592,7 +3598,9 @@ If an error occurred in the file system and not in the compression library,
 .Fa errnum
 is set to
 .Dv Z_ERRNO
-and the application may consult errno to get the exact error code.
+and the application may consult
+.Va errno
+to get the exact error code.
 .Pp
 The application must not modify the returned string.
 Future calls to this function may invalidate the previously returned string.
