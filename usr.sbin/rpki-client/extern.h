@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.294 2026/09/03 17:19:30 tb Exp $ */
+/*	$OpenBSD: extern.h,v 1.296 2026/09/12 12:46:04 job Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -277,6 +277,7 @@ struct mft {
 	char		*seqnum; /* manifestNumber */
 	char		*aki; /* AKI */
 	char		*sia; /* SIA signedObject */
+	char		*crldp; /* full canonical path rsync://... */
 	char		*crl; /* CRL file name */
 	unsigned char	 mfthash[SHA256_DIGEST_LENGTH];
 	size_t		 mftsize;
@@ -543,6 +544,7 @@ struct crl {
 	RB_ENTRY(crl)	 entry;
 	char		*aki;
 	char		*mftpath;
+	char		*mftcrldp;
 	X509_CRL	*x509_crl;
 	time_t		 thisupdate;	/* do not use before */
 	time_t		 nextupdate;	/* do not use after */
@@ -1021,10 +1023,6 @@ void		 aspa_print(const struct cert *, const struct aspa *);
 void		 tak_print(const struct cert *, const struct tak *);
 void		 spl_print(const struct cert *, const struct spl *);
 
-/* Missing RFC 3779 API */
-IPAddrBlocks *IPAddrBlocks_new(void);
-void IPAddrBlocks_free(IPAddrBlocks *);
-
 /* Output! */
 
 extern int	 outformats;
@@ -1137,5 +1135,9 @@ int	mkpathat(int, const char *);
 /* Compat helpers for OpenSSL < 4 and LibreSSL. */
 int	ASN1_BIT_STRING_get_length(const ASN1_BIT_STRING *, size_t *, int *);
 int	ASN1_BIT_STRING_set1(ASN1_BIT_STRING *, const uint8_t *, size_t, int);
+
+/* Missing RFC 3779 API, needed for OpenSSL < 4.1 and LibreSSL */
+IPAddrBlocks *IPAddrBlocks_new(void);
+void IPAddrBlocks_free(IPAddrBlocks *);
 
 #endif /* ! EXTERN_H */

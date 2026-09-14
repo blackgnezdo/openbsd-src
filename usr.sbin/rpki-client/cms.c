@@ -1,4 +1,4 @@
-/*	$OpenBSD: cms.c,v 1.66 2026/09/07 12:29:27 tb Exp $ */
+/*	$OpenBSD: cms.c,v 1.69 2026/09/11 06:25:00 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -32,7 +32,7 @@
 extern int filemode;
 
 static int
-cms_extract_econtent(const char *fn, CMS_ContentInfo *cms, unsigned char **res,
+cms_extract_econtent(const char *fn, CMS_ContentInfo *cms, const uint8_t **res,
     size_t *rsz)
 {
 	ASN1_OCTET_STRING		**os = NULL;
@@ -53,15 +53,7 @@ cms_extract_econtent(const char *fn, CMS_ContentInfo *cms, unsigned char **res,
 		return 0;
 	}
 
-	/*
-	 * The eContent in os is owned by the cms object and it has to outlive
-	 * it for further processing by the signedObject handlers. Since there
-	 * is no convenient API for this purpose, duplicate it by hand.
-	 */
-	if ((*res = malloc(*rsz)) == NULL)
-		err(1, NULL);
-	memcpy(*res, ASN1_STRING_get0_data(*os), *rsz);
-
+	*res = ASN1_STRING_get0_data(*os);
 	return 1;
 }
 
@@ -302,25 +294,49 @@ cms_check_SignerInfo(const char *fn, CMS_ContentInfo *cms,
 	return 1;
 }
 
-static int
-cms_parse_validate(struct cert **out_cert, const char *fn, int talid,
-    const unsigned char *der, size_t len, const ASN1_OBJECT *oid,
-    unsigned char **res, size_t *rsz, time_t *signtime)
+static const struct signed_obj *
+cms_object_from_rtype(const char *fn, enum rtype rtype)
 {
+	switch (rtype) {
+	case RTYPE_ASPA:
+		return aspa_obj();
+	case RTYPE_MFT:
+		return mft_obj();
+	case RTYPE_ROA:
+		return roa_obj();
+	case RTYPE_RSC:
+		return rsc_obj();
+	case RTYPE_SPL:
+		return spl_obj();
+	case RTYPE_TAK:
+		return tak_obj();
+	default:
+		errx(1, "%s: unsupported signed object", fn);
+	}
+}
+
+static void *
+cms_parse_validate(struct cert **out_cert, const char *fn, enum rtype rtype,
+    int talid, const unsigned char *der, size_t len)
+{
+	void				*obj = NULL, *ret_obj = NULL;
+	const struct signed_obj		*sobj;
 	struct cert			*cert = NULL;
 	const unsigned char		*oder;
 	CMS_ContentInfo			*cms = NULL;
 	STACK_OF(X509)			*certs = NULL;
 	STACK_OF(X509_CRL)		*crls = NULL;
-	int				 rc = 0;
+	const uint8_t			*econtent = NULL;
+	size_t				 econtent_len = 0;
+	time_t				 signtime = 0;
 
 	assert(*out_cert == NULL);
 
-	*signtime = 0;
+	sobj = cms_object_from_rtype(fn, rtype);
 
 	/* just fail for empty buffers, the warning was printed elsewhere */
 	if (der == NULL)
-		return 0;
+		goto out;
 
 	if (len < 2) {
 		warnx("%s: RFC 6488: CMS encoding too short", fn);
@@ -382,75 +398,20 @@ cms_parse_validate(struct cert **out_cert, const char *fn, int talid,
 		goto out;
 
 	/* RFC 6488 section 3 verify the CMS */
-	if (!cms_check_SignerInfo(fn, cms, oid, cert, signtime))
+	if (!cms_check_SignerInfo(fn, cms, sobj->oid(), cert, &signtime))
 		goto out;
 
-	if (*signtime > cert->notafter)
+	if (signtime > cert->notafter)
 		warnx("%s: dating issue: CMS signing-time after X.509 notAfter",
 		    fn);
 
-	if (!cms_extract_econtent(fn, cms, res, rsz))
+	if (!cms_extract_econtent(fn, cms, &econtent, &econtent_len))
 		goto out;
-
-	*out_cert = cert;
-	cert = NULL;
-
-	rc = 1;
- out:
-	cert_free(cert);
-	sk_X509_CRL_pop_free(crls, X509_CRL_free);
-	sk_X509_free(certs);
-	CMS_ContentInfo_free(cms);
-	return rc;
-}
-
-static const struct signed_obj *
-cms_object_from_rtype(const char *fn, enum rtype rtype)
-{
-	switch (rtype) {
-	case RTYPE_ASPA:
-		return aspa_obj();
-	case RTYPE_MFT:
-		return mft_obj();
-	case RTYPE_ROA:
-		return roa_obj();
-	case RTYPE_RSC:
-		return rsc_obj();
-	case RTYPE_SPL:
-		return spl_obj();
-	case RTYPE_TAK:
-		return tak_obj();
-	default:
-		errx(1, "%s: unsupported signed object", fn);
-	}
-}
-
-void *
-signed_object_parse(struct cert **out_cert, const char *fn, enum rtype rtype,
-    int talid, const unsigned char *der, size_t len)
-{
-	const struct signed_obj *sobj;
-	const ASN1_OBJECT *oid;
-	void *obj = NULL;
-	struct cert *cert = NULL;
-	unsigned char *cms = NULL;
-	size_t cmsz = 0;
-	time_t signtime = 0;
-	int rc = 0;
-
-	assert(*out_cert == NULL);
-
-	sobj = cms_object_from_rtype(fn, rtype);
-	oid = sobj->oid();
-
-	if (!cms_parse_validate(&cert, fn, talid, der, len, oid, &cms, &cmsz,
-	    &signtime))
-		return NULL;
 
 	obj = sobj->new(len, signtime);
 	if (!sobj->cert_info(fn, obj, cert))
 		goto out;
-	if (!sobj->parse_econtent(fn, obj, cms, cmsz))
+	if (!sobj->parse_econtent(fn, obj, econtent, econtent_len))
 		goto out;
 	if (!sobj->validate(fn, obj, cert))
 		goto out;
@@ -458,14 +419,21 @@ signed_object_parse(struct cert **out_cert, const char *fn, enum rtype rtype,
 	*out_cert = cert;
 	cert = NULL;
 
-	rc = 1;
+	ret_obj = obj;
+	obj = NULL;
 
  out:
-	if (rc == 0) {
-		sobj->free(obj);
-		obj = NULL;
-	}
+	sobj->free(obj);
 	cert_free(cert);
-	free(cms);
-	return obj;
+	sk_X509_CRL_pop_free(crls, X509_CRL_free);
+	sk_X509_free(certs);
+	CMS_ContentInfo_free(cms);
+	return ret_obj;
+}
+
+void *
+signed_object_parse(struct cert **out_cert, const char *fn, enum rtype rtype,
+    int talid, const unsigned char *der, size_t len)
+{
+	return cms_parse_validate(out_cert, fn, rtype, talid, der, len);
 }

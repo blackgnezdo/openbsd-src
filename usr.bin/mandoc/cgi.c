@@ -1,4 +1,4 @@
-/* $OpenBSD: cgi.c,v 1.124 2026/09/01 13:56:12 schwarze Exp $ */
+/* $OpenBSD: cgi.c,v 1.126 2026/09/13 18:59:42 schwarze Exp $ */
 /*
  * Copyright (c) 2014-2019, 2021, 2022, 2026 Ingo Schwarze <schwarze@usta.de>
  * Copyright (c) 2011, 2012 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -136,6 +136,7 @@ static	const char *const arch_names[] = {
 };
 static	const int arch_MAX = sizeof(arch_names) / sizeof(char *);
 
+static	int head_fd = -1;
 static	int header_fd = -1;
 static	int footer_fd = -1;
 
@@ -412,11 +413,10 @@ resp_begin_html(int code, const char *msg, const char *file)
 			printf("(%.*s)", secsz, sec);
 		fputs(" - ", stdout);
 	}
-	printf("%s</title>\n"
-	       "</head>\n"
-	       "<body>\n",
-	       CUSTOMIZE_TITLE);
-
+	printf("%s</title>\n", CUSTOMIZE_TITLE);
+	(void)resp_copy(NULL, &head_fd);
+	puts("</head>\n"
+	     "<body>");
 	return resp_copy("header", &header_fd);
 }
 
@@ -940,8 +940,13 @@ resp_format(const struct req *req, const char *file, int html_begun)
 	void		*vp;
 	int		 fd;
 	int		 usepath;
+	int		 irc = EXIT_FAILURE;
 
-	if ((fd = open(file, O_RDONLY)) == -1) {
+	mchars_alloc();
+	mp = mparse_alloc(MPARSE_SO | MPARSE_UTF8 | MPARSE_LATIN1 |
+	    MPARSE_VALIDATE, MANDOC_OS_OTHER, req->q.manpath);
+
+	if ((fd = mparse_open(mp, file)) == -1) {
 		if (html_begun) {
 			puts("<p role=\"doc-notice\">"
 			     "Internal Server Error</p>");
@@ -949,12 +954,8 @@ resp_format(const struct req *req, const char *file, int html_begun)
 		} else
 			pg_error_badrequest(
 			    "You specified an invalid manual file.");
-		return EXIT_FAILURE;
+		goto out;
 	}
-
-	mchars_alloc();
-	mp = mparse_alloc(MPARSE_SO | MPARSE_UTF8 | MPARSE_LATIN1 |
-	    MPARSE_VALIDATE, MANDOC_OS_OTHER, req->q.manpath);
 	mparse_readfd(mp, fd, file);
 	close(fd);
 
@@ -966,7 +967,7 @@ resp_format(const struct req *req, const char *file, int html_begun)
 			resp_end_html();
 		} else
 			pg_error_internal();
-		return EXIT_FAILURE;
+		goto out;
 	}
 
 	memset(&conf, 0, sizeof(conf));
@@ -993,11 +994,14 @@ resp_format(const struct req *req, const char *file, int html_begun)
 	resp_end_html();
 
 	html_free(vp);
-	mparse_free(mp);
-	mchars_free();
 	free(conf.man);
 	free(conf.style);
-	return EXIT_SUCCESS;
+	irc = EXIT_SUCCESS;
+
+ out:
+	mparse_free(mp);
+	mchars_free();
+	return irc;
 }
 
 static int
@@ -1222,8 +1226,9 @@ main(void)
 		return EXIT_FAILURE;
 	}
 
-	/* These two files are optional. */
+	/* These three files are optional. */
 
+	head_fd = open("head.html", O_RDONLY);
 	header_fd = open("header.html", O_RDONLY);
 	footer_fd = open("footer.html", O_RDONLY);
 
