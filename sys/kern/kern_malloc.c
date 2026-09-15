@@ -132,11 +132,9 @@ char *memall;					/* [I] */
 int kasan_quarantine_enabled = 1;
 #define KASAN_QUAR_N	1024
 /*
- * Quarantine every type, not just M_PINSYSCALL: the ip_moptions cluster
- * (syzbot f3e2a1ae1dd913e2638c) is a stale 8-byte store into a freed chunk
- * whose previous type is near-uniform over 13 samples, so gating on a type
- * cannot catch it.  Cap the held size so the ring costs at most
- * KASAN_QUAR_N * KASAN_QUAR_MAXSZ; every observed victim is 0x18..0x2d8.
+ * Quarantine every type, not just M_PINSYSCALL: the victim type varies, so a
+ * type gate cannot catch the writer (syzbot f3e2a1ae1dd913e2638c).  The cap
+ * bounds the ring at KASAN_QUAR_N * KASAN_QUAR_MAXSZ.
  */
 #define KASAN_QUAR_MAXSZ 2048
 static struct kasan_quar_ent {

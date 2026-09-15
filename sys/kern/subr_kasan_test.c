@@ -656,24 +656,15 @@ kt_poolcache_uaf_link(void)
 
 
 /*
- * Use-after-free of a chunk that has been through a round of bucket churn.
+ * Use-after-free after a round of bucket churn -- the case that tests the
+ * free-quarantine rather than plain UAF poisoning.  kt_heap_uaf reads its chunk
+ * straight after free(), so it reports either way.  Here the bucket is drained
+ * first: unquarantined, the chunk comes back out with its shadow revalidated
+ * and its free-stack overwritten, and this case misses.
  *
- * This is the case that tests the free-quarantine, as distinct from plain UAF
- * poisoning.  kt_heap_uaf reads its chunk immediately after free(), so it
- * reports whether or not the chunk was quarantined -- nothing has had a chance
- * to re-validate the shadow.  Here the chunk is freed and then the same bucket
- * is drained KT_QUAR_CHURN times.  Without the quarantine the chunk sits on the
- * bucket freelist, is handed back out, has its shadow marked valid again and
- * its KASAN free-stack overwritten by the new owner -- so the read below is
- * silent and this case FAILS.  With it the chunk is withheld, still 0xFC, and
- * still carrying this function in its "freed at" trace, which is what the
- * kt_freed_by field pins down.
- *
- * Churn count: malloc carves a page onto the freelist head and free() appends
- * to the tail, so a freed chunk sits behind at most a page of fresh ones (64
- * for this bucket).  KT_QUAR_CHURN is far past that, and the diagnostic printf
- * makes a failure self-explanatory rather than mysterious: if the chunk really
- * was handed back out, the transcript says so.
+ * malloc carves a page onto the freelist head and free() appends to the tail,
+ * so a freed chunk sits behind at most a page of fresh ones (64 here).
+ * KT_QUAR_CHURN is well past that; the printf says so if it was not.
  */
 #define KT_QUAR_CHURN	4096
 static void
