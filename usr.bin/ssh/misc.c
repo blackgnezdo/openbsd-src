@@ -1,4 +1,4 @@
-/* $OpenBSD: misc.c,v 1.216 2026/09/07 20:24:22 job Exp $ */
+/* $OpenBSD: misc.c,v 1.218 2026/09/15 08:31:46 djm Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  * Copyright (c) 2005-2020 Damien Miller.  All rights reserved.
@@ -2495,6 +2495,7 @@ parse_absolute_time(const char *s, uint64_t *tp)
 			return SSH_ERR_INVALID_FORMAT;
 	} else {
 		tm.tm_wday = -1;	/* sentinel for error */
+		tm.tm_isdst = -1;	/* mktime decides DST */
 		if ((tt = mktime(&tm)) == -1 && tm.tm_wday == -1)
 			return SSH_ERR_INVALID_FORMAT;
 	}
@@ -3095,6 +3096,7 @@ mkdir_path(const char *target, mode_t mode)
 	if (*dir == '/' &&
 	    (fd = open("/", O_RDONLY|O_DIRECTORY)) == -1) {
 		error_f("open(\"/\"): %s", strerror(errno));
+		free(odir);
 		return -1;
 	}
 	/* Work through the path, component-wise */

@@ -1,4 +1,4 @@
-/* $OpenBSD: channels.c,v 1.463 2026/06/24 11:59:09 dtucker Exp $ */
+/* $OpenBSD: channels.c,v 1.466 2026/09/15 07:08:09 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -376,6 +376,7 @@ channel_classify(struct ssh *ssh, Channel *c)
 void
 channel_set_xtype(struct ssh *ssh, int id, const char *xctype)
 {
+	struct ssh_channels *sc = ssh->chanctxt;
 	Channel *c;
 
 	if ((c = channel_by_id(ssh, id)) == NULL)
@@ -383,11 +384,15 @@ channel_set_xtype(struct ssh *ssh, int id, const char *xctype)
 	if (c->xctype != NULL)
 		free(c->xctype);
 	c->xctype = xstrdup(xctype);
-	/* Type has changed, so look up inactivity deadline again */
-	c->inactive_deadline = lookup_timeout(ssh, c->xctype);
+	/* Only override deadline if xctype has a more specific match. */
+	int xtype_deadline = lookup_timeout(ssh, c->xctype);
+	if (xtype_deadline != 0)
+		c->inactive_deadline = xtype_deadline;
 	channel_classify(ssh, c);
-	debug2_f("labeled channel %d as %s (inactive timeout %u)", id, xctype,
-	    c->inactive_deadline);
+	/* report effective timeout: per-channel if set, else global */
+	debug2_f("labeled channel %d as %s (inactive timeout %d)", id, xctype,
+	    c->inactive_deadline != 0 ?
+	    c->inactive_deadline : sc->global_deadline);
 }
 
 /*
@@ -553,8 +558,9 @@ channel_new(struct ssh *ssh, char *ctype, int type, int rfd, int wfd, int efd,
 	c->inactive_deadline = lookup_timeout(ssh, c->ctype);
 	TAILQ_INIT(&c->status_confirms);
 	channel_classify(ssh, c);
-	debug("channel %d: new %s [%s] (inactive timeout: %u)",
-	    found, c->ctype, remote_name, c->inactive_deadline);
+	debug("channel %d: new %s [%s] (inactive timeout: %d)",
+	    found, c->ctype, remote_name, c->inactive_deadline != 0 ?
+	    c->inactive_deadline : sc->global_deadline);
 	return c;
 }
 
@@ -2060,7 +2066,7 @@ channel_post_port_listener(struct ssh *ssh, Channel *c)
 			c->notbefore = monotime() + 1;
 		return;
 	}
-	if (c->host_port != PORT_STREAMLOCAL)
+	if (addr.ss_family == AF_INET || addr.ss_family == AF_INET6)
 		set_nodelay(newsock);
 	nc = channel_new(ssh, rtype, nextstate, newsock, newsock, -1,
 	    c->local_window_max, c->local_maxpacket, 0, rtype, 1);
@@ -2672,9 +2678,10 @@ channel_handler(struct ssh *ssh, int table, struct timespec *timeout)
 			    channel_get_expiry(ssh, c) != 0 &&
 			    now >= channel_get_expiry(ssh, c)) {
 				/* channel closed for inactivity */
-				verbose("channel %d: closing after %u seconds "
-				    "of inactivity", c->self,
-				    c->inactive_deadline);
+				int fired_deadline = c->inactive_deadline != 0 ?
+				    c->inactive_deadline : sc->global_deadline;
+				verbose("channel %d: closing after %d seconds "
+				    "of inactivity", c->self, fired_deadline);
 				channel_force_close(ssh, c, 1);
 			} else if (c->notbefore <= now) {
 				/* Run handlers that are not paused. */

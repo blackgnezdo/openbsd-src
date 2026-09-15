@@ -738,7 +738,6 @@ static const struct intel_device_info adl_p_info = {
 
 static const struct intel_device_info dg2_info = {
 	DG2_FEATURES,
-	.require_force_probe = 1,
 };
 
 static const struct intel_device_info ats_m_info = {
@@ -959,6 +958,9 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct intel_device_info *intel_info =
 		(struct intel_device_info *) ent->driver_data;
 	int err;
+
+	if (!intel_info)
+		return -ENODEV;
 
 	if (intel_info->require_force_probe && !id_forced(pdev->device)) {
 		dev_info(&pdev->dev,
