@@ -654,6 +654,56 @@ kt_poolcache_uaf_link(void)
 	*link = *link;				/* freed header access -> 0xFD */
 }
 
+
+/*
+ * Use-after-free of a chunk that has been through a round of bucket churn.
+ *
+ * This is the case that tests the free-quarantine, as distinct from plain UAF
+ * poisoning.  kt_heap_uaf reads its chunk immediately after free(), so it
+ * reports whether or not the chunk was quarantined -- nothing has had a chance
+ * to re-validate the shadow.  Here the chunk is freed and then the same bucket
+ * is drained KT_QUAR_CHURN times.  Without the quarantine the chunk sits on the
+ * bucket freelist, is handed back out, has its shadow marked valid again and
+ * its KASAN free-stack overwritten by the new owner -- so the read below is
+ * silent and this case FAILS.  With it the chunk is withheld, still 0xFC, and
+ * still carrying this function in its "freed at" trace, which is what the
+ * kt_freed_by field pins down.
+ *
+ * Churn count: malloc carves a page onto the freelist head and free() appends
+ * to the tail, so a freed chunk sits behind at most a page of fresh ones (64
+ * for this bucket).  KT_QUAR_CHURN is far past that, and the diagnostic printf
+ * makes a failure self-explanatory rather than mysterious: if the chunk really
+ * was handed back out, the transcript says so.
+ */
+#define KT_QUAR_CHURN	4096
+static void
+kt_quar_uaf_churn(void)
+{
+	volatile char *p = malloc(64, KT_MTYPE, M_WAITOK);
+	void **keep;
+	volatile char sink;
+	int i, reused = 0;
+
+	free((void *)p, KT_MTYPE, 64);
+
+	keep = mallocarray(KT_QUAR_CHURN, sizeof(*keep), KT_MTYPE,
+	    M_WAITOK | M_ZERO);
+	for (i = 0; i < KT_QUAR_CHURN; i++) {
+		keep[i] = malloc(64, KT_MTYPE, M_WAITOK);
+		if (keep[i] == (void *)p)
+			reused = 1;
+	}
+	if (reused)
+		printf("kasan-test: quar_uaf_churn: the freed chunk was handed "
+		    "back out; the free-quarantine is inactive\n");
+
+	sink = p[0];				/* __asan_load1 -> 0xFC read */
+	(void)sink;
+
+	for (i = 0; i < KT_QUAR_CHURN; i++)
+		free(keep[i], KT_MTYPE, 64);
+	free(keep, KT_MTYPE, KT_QUAR_CHURN * sizeof(*keep));
+}
 #define KT_CLEAN	0	/* expect no report (positive test) */
 #define KT_REPORT	1	/* expect a report (negative test) */
 
@@ -698,6 +748,9 @@ static const struct kasan_test kasan_tests[] = {
 	{ "malloc_uaf_link", KT_REPORT, 0, 0xFC, "malloc use-after-free",
 	    "8 bytes inside the 128-byte malloc slot",
 	    "kt_malloc_uaf_link", "kt_malloc_uaf_link",  kt_malloc_uaf_link },
+	{ "quar_uaf_churn", KT_REPORT, 0, 0xFC, "malloc use-after-free",
+	    "0 bytes inside the 128-byte malloc slot",
+	    "kt_quar_uaf_churn", "kt_quar_uaf_churn", kt_quar_uaf_churn },
 	{ "partial_gran",   KT_REPORT, 0, 0x05, "partial granule",
 	    "13 bytes inside the 32-byte malloc slot",
 	    "kt_partial_granule", "",                    kt_partial_granule },
