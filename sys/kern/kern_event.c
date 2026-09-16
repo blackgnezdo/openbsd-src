@@ -2232,9 +2232,11 @@ knote_processfork(struct process *pr, pid_t pid)
 {
 	struct knote marker = { .kn_fop = &proc_filtops };
 	struct knlist *list = &pr->ps_klist.kl_list;
-	struct knote *kn, *prev = NULL;
+	struct knote *kn, *prev = NULL, *tracked = NULL;
 	struct kqueue *kq;
 	struct kevent kev;
+	__uintptr_t knid;
+	u_short knflags;
 	int error;
 	int skip = 0;
 
@@ -2243,10 +2245,24 @@ knote_processfork(struct process *pr, pid_t pid)
 	SLIST_FOREACH(kn, list, kn_selnext) {
 		if (skip) {
 			if (kn == &marker) {
-				SLIST_REMOVE_AFTER(prev, kn_selnext);
+				/*
+				 * The knote this walk was on may have been
+				 * dropped while ps_mtx was released, which
+				 * leaves the marker at the head of the list
+				 * with no prev to unlink it from.  Do not
+				 * reach for SLIST_REMOVE() here: it also
+				 * invalidates the marker's own next pointer
+				 * under DIAGNOSTIC, and this walk is about
+				 * to follow it.
+				 */
+				if (prev != NULL)
+					SLIST_REMOVE_AFTER(prev, kn_selnext);
+				else
+					SLIST_REMOVE_HEAD(list, kn_selnext);
 				skip = 0;
 				/* XXX this is tricky */
-				if (error && (prev->kn_sfflags & NOTE_TRACK))
+				if (error && prev == tracked &&
+				    (prev->kn_sfflags & NOTE_TRACK))
 					prev->kn_fflags |= NOTE_TRACKERR;
 			}
 			prev = kn;
@@ -2273,6 +2289,7 @@ knote_processfork(struct process *pr, pid_t pid)
 
 		SLIST_INSERT_AFTER(kn, &marker, kn_selnext);
 		skip = 1;
+		tracked = kn;
 
 		/* register knote clone with new process. */
 		memset(&kev, 0, sizeof(kev));
@@ -2282,13 +2299,23 @@ knote_processfork(struct process *pr, pid_t pid)
 		kev.fflags = kn->kn_sfflags;
 		kev.udata = kn->kn_udata;		/* preserve udata */
 
+		/*
+		 * kqueue_register() clears kev.data and kev.fflags, so the
+		 * second registration below has to build them again -- but by
+		 * then ps_mtx has been released and kn may have been detached
+		 * and freed by a concurrent kqueue_scan().  Take the copies
+		 * now, while the lock still keeps kn alive.
+		 */
+		knflags = kn->kn_flags;
+		knid = kn->kn_id;
+
 		mtx_leave(&pr->ps_mtx);
 		error = kqueue_register(kq, &kev, 0, NULL);
 		if (error == 0) {
 			/* register child knote with new process. */
-			kev.flags = kn->kn_flags | EV_ADD | EV_ENABLE;
+			kev.flags = knflags | EV_ADD | EV_ENABLE;
 			kev.flags |= EV_ONESHOT | EV_FLAG1;
-			kev.data = kn->kn_id;			/* parent */
+			kev.data = knid;			/* parent */
 			error = kqueue_register(kq, &kev, 0, NULL);
 		}
 		goto again;
