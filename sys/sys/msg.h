@@ -107,15 +107,12 @@ struct msginfo {
 		msgseg;		/* number of message segments */
 };
 
-extern const struct msginfo msginfo;
+int sysctl_sysvmsg(int *, u_int, void *, size_t *);
 
 struct msg_sysctl_info {
 	struct msginfo msginfo;
 	struct msqid_ds msgids[1];
 };
-
-/* Fill callback for sysctl(KERN_SYSVIPC_MSG_INFO); see sysv_msg.c. */
-void	sysvipc_fill_msg(void *, size_t);
 
 #ifndef MSGSSZ
 #define MSGSSZ	8		/* Each segment must be 2^N long */
