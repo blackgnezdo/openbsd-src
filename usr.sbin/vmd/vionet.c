@@ -1,4 +1,4 @@
-/*	$OpenBSD: vionet.c,v 1.33 2026/08/30 23:23:18 jsg Exp $	*/
+/*	$OpenBSD: vionet.c,v 1.36 2026/09/19 17:21:52 dv Exp $	*/
 
 /*
  * Copyright (c) 2023 Dave Voutila <dv@openbsd.org>
@@ -82,7 +82,7 @@ static void handle_sync_io(int, short, void *);
 static void read_pipe_main(int, short, void *);
 static void read_pipe_rx(int, short, void *);
 static void read_pipe_tx(int, short, void *);
-static void vionet_assert_pic_irq(struct virtio_dev *);
+static void vionet_assert_irq(struct virtio_dev *, uint16_t);
 static void vionet_deassert_pic_irq(struct virtio_dev *);
 
 /* Device Globals */
@@ -105,7 +105,7 @@ pthread_rwlock_t lock = NULL;		/* Guards device config state. */
 int rx_enabled = 0;	/* 1: we expect to read the tap, 0: wait for notify. */
 
 __dead void
-vionet_main(int fd, int fd_vmm)
+vionet_main(int fd, int vm_fd)
 {
 	struct virtio_dev	 dev;
 	struct vionet_dev	*vionet = NULL;
@@ -141,8 +141,8 @@ vionet_main(int fd, int fd_vmm)
 	vionet = &dev.vionet;
 
 	log_debug("%s: got vionet dev. tap fd = %d, syncfd = %d, asyncfd = %d"
-	    ", vmm fd = %d", __func__, vionet->data_fd, dev.sync_fd,
-	    dev.async_fd, fd_vmm);
+	    ", vm fd = %d", __func__, vionet->data_fd, dev.sync_fd,
+	    dev.async_fd, vm_fd);
 
 	/* Receive our vm information from the vm process. */
 	memset(&vm, 0, sizeof(vm));
@@ -157,16 +157,16 @@ vionet_main(int fd, int fd_vmm)
 	log_procinit("vm/%s/vionet%d", vm.vm_params.vmc_name, vionet->idx);
 
 	/* Now that we have our vm information, we can remap memory. */
-	ret = remap_guest_mem(&vm, fd_vmm);
+	ret = remap_guest_mem(&vm, vm_fd);
 	if (ret) {
 		fatal("%s: failed to remap", __func__);
 		goto fail;
 	}
 
 	/*
-	 * We no longer need /dev/vmm access.
+	 * We no longer need VM fd access.
 	 */
-	close_fd(fd_vmm);
+	close_fd(vm_fd);
 	if (pledge("stdio", NULL) == -1)
 		fatal("pledge2");
 
@@ -333,13 +333,14 @@ vionet_rx(struct virtio_dev *dev, int fd)
 	vq_info = &dev->vq[RXQ];
 	idx = vq_info->last_avail;
 	vr = vq_info->q_hva;
-	if (vr == NULL)
+	if (vr == NULL || vq_info->q_avail_hva == NULL ||
+	    vq_info->q_used_hva == NULL)
 		fatalx("%s: vr == NULL", __func__);
 
-	/* Compute offsets in ring of descriptors, avail ring, and used ring */
+	/* Locate the independently mapped split virtqueue areas. */
 	table = (struct vring_desc *)(vr);
-	avail = (struct vring_avail *)(vr + vq_info->vq_availoffset);
-	used = (struct vring_used *)(vr + vq_info->vq_usedoffset);
+	avail = vq_info->q_avail_hva;
+	used = vq_info->q_used_hva;
 	used->flags |= VRING_USED_F_NO_NOTIFY;
 
 	while (idx != avail->idx) {
@@ -630,7 +631,8 @@ vionet_rx_event(int fd, short event, void *arg)
 	pthread_rwlock_unlock(&lock);
 
 	if (raise_irq)
-		vm_pipe_send(&pipe_main, VIRTIO_RAISE_IRQ);
+		vm_pipe_send(&pipe_main, ret == 1 ? VIRTIO_RAISE_IRQ_RX :
+		    VIRTIO_RAISE_IRQ_CONFIG);
 }
 
 static void
@@ -682,13 +684,14 @@ vionet_tx(struct virtio_dev *dev)
 	vq_info = &dev->vq[TXQ];
 	idx = vq_info->last_avail;
 	vr = vq_info->q_hva;
-	if (vr == NULL)
+	if (vr == NULL || vq_info->q_avail_hva == NULL ||
+	    vq_info->q_used_hva == NULL)
 		fatalx("%s: vr == NULL", __func__);
 
-	/* Compute offsets in ring of descriptors, avail ring, and used ring */
+	/* Locate the independently mapped split virtqueue areas. */
 	table = (struct vring_desc *)(vr);
-	avail = (struct vring_avail *)(vr + vq_info->vq_availoffset);
-	used = (struct vring_used *)(vr + vq_info->vq_usedoffset);
+	avail = vq_info->q_avail_hva;
+	used = vq_info->q_used_hva;
 
 	while (idx != avail->idx) {
 		hdr_idx = avail->ring[idx & vq_info->mask];
@@ -1014,7 +1017,7 @@ vionet_cfg_read(struct virtio_dev *dev, struct viodev_msg *msg)
 		}
 		break;
 	case VIO1_PCI_CONFIG_MSIX_VECTOR:
-		data = VIRTIO_MSI_NO_VECTOR;	/* Unsupported */
+		data = pci_cfg->config_msix_vector;
 		break;
 	case VIO1_PCI_NUM_QUEUES:
 		data = dev->num_queues;
@@ -1032,7 +1035,7 @@ vionet_cfg_read(struct virtio_dev *dev, struct viodev_msg *msg)
 		data = pci_cfg->queue_size;
 		break;
 	case VIO1_PCI_QUEUE_MSIX_VECTOR:
-		data = VIRTIO_MSI_NO_VECTOR;	/* Unsupported */
+		data = pci_cfg->queue_msix_vector;
 		break;
 	case VIO1_PCI_QUEUE_ENABLE:
 		data = pci_cfg->queue_enable;
@@ -1121,7 +1124,14 @@ vionet_cfg_write(struct virtio_dev *dev, struct viodev_msg *msg)
 		    dev->driver_feature);
 		break;
 	case VIO1_PCI_CONFIG_MSIX_VECTOR:
-		/* Ignore until we support MSIX. */
+		if (sz != 2)
+			log_warnx("%s: invalid config MSI-X vector size %u",
+			    __func__, sz);
+		else if (data == VIRTIO_MSI_NO_VECTOR ||
+		    data < dev->num_queues + 1)
+			pci_cfg->config_msix_vector = data;
+		else
+			pci_cfg->config_msix_vector = VIRTIO_MSI_NO_VECTOR;
 		break;
 	case VIO1_PCI_NUM_QUEUES:
 		log_warnx("illegal write to num queues register");
@@ -1148,10 +1158,11 @@ vionet_cfg_write(struct virtio_dev *dev, struct viodev_msg *msg)
 			/* Reset device and virtqueues. */
 			dev->driver_feature = 0;
 			dev->isr = 0;
+			pci_cfg->config_msix_vector = VIRTIO_MSI_NO_VECTOR;
 			pci_cfg->queue_select = 0;	/* Technically RXQ. */
-			virtio_update_qs(dev);
 			virtio_vq_init(dev, RXQ);
 			virtio_vq_init(dev, TXQ);
+			virtio_update_qs(dev);
 		}
 		DPRINTF("%s: dev %u status [%s%s%s%s%s%s]", __func__,
 		    dev->pci_id,
@@ -1185,7 +1196,19 @@ vionet_cfg_write(struct virtio_dev *dev, struct viodev_msg *msg)
 		virtio_update_qa(dev);
 		break;
 	case VIO1_PCI_QUEUE_MSIX_VECTOR:
-		/* Ignore until we support MSI-X. */
+		if (sz != 2)
+			log_warnx("%s: invalid queue MSI-X vector size %u",
+			    __func__, sz);
+		else if (pci_cfg->queue_select < dev->num_queues) {
+			if (data == VIRTIO_MSI_NO_VECTOR ||
+			    data < dev->num_queues + 1)
+				dev->vq[pci_cfg->queue_select].q_msix_vector = data;
+			else
+				dev->vq[pci_cfg->queue_select].q_msix_vector =
+				    VIRTIO_MSI_NO_VECTOR;
+			pci_cfg->queue_msix_vector =
+			    dev->vq[pci_cfg->queue_select].q_msix_vector;
+		}
 		break;
 	case VIO1_PCI_QUEUE_ENABLE:
 		pci_cfg->queue_enable = data;
@@ -1499,7 +1522,8 @@ read_pipe_tx(int fd, short event, void *arg)
 	pthread_rwlock_unlock(&lock);
 
 	if (raise_irq)
-		vm_pipe_send(&pipe_main, VIRTIO_RAISE_IRQ);
+		vm_pipe_send(&pipe_main, ret == 1 ? VIRTIO_RAISE_IRQ_TX :
+		    VIRTIO_RAISE_IRQ_CONFIG);
 }
 
 /*
@@ -1516,8 +1540,14 @@ read_pipe_main(int fd, short event, void *arg)
 
 	msg = vm_pipe_recv(&pipe_main);
 	switch (msg) {
-	case VIRTIO_RAISE_IRQ:
-		vionet_assert_pic_irq(dev);
+	case VIRTIO_RAISE_IRQ_RX:
+		vionet_assert_irq(dev, RXQ);
+		break;
+	case VIRTIO_RAISE_IRQ_TX:
+		vionet_assert_irq(dev, TXQ);
+		break;
+	case VIRTIO_RAISE_IRQ_CONFIG:
+		vionet_assert_irq(dev, VIODEV_QUEUE_CONFIG);
 		break;
 	default:
 		fatalx("%s: invalid channel msg: %d", __func__, msg);
@@ -1529,7 +1559,7 @@ read_pipe_main(int fd, short event, void *arg)
  * thread.
  */
 static void
-vionet_assert_pic_irq(struct virtio_dev *dev)
+vionet_assert_irq(struct virtio_dev *dev, uint16_t vq_idx)
 {
 	struct viodev_msg	msg;
 	int			ret;
@@ -1537,6 +1567,7 @@ vionet_assert_pic_irq(struct virtio_dev *dev)
 	memset(&msg, 0, sizeof(msg));
 	msg.irq = dev->irq;
 	msg.vcpu = 0; /* XXX: smp */
+	msg.vq_idx = vq_idx;
 	msg.type = VIODEV_MSG_KICK;
 	msg.state = INTR_STATE_ASSERT;
 
@@ -1559,6 +1590,7 @@ vionet_deassert_pic_irq(struct virtio_dev *dev)
 	memset(&msg, 0, sizeof(msg));
 	msg.irq = dev->irq;
 	msg.vcpu = 0; /* XXX: smp */
+	msg.vq_idx = VIODEV_QUEUE_CONFIG;
 	msg.type = VIODEV_MSG_KICK;
 	msg.state = INTR_STATE_DEASSERT;
 

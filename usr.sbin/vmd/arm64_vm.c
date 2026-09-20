@@ -1,4 +1,4 @@
-/*	$OpenBSD: arm64_vm.c,v 1.11 2026/01/14 03:09:05 dv Exp $	*/
+/*	$OpenBSD: arm64_vm.c,v 1.14 2026/09/19 17:21:52 dv Exp $	*/
 /*
  * Copyright (c) 2024 Dave Voutila <dv@openbsd.org>
  *
@@ -81,7 +81,7 @@ read_mem(paddr_t src, void *buf, size_t len)
 }
 
 int
-intr_pending(struct vmd_vm *vm)
+intr_pending(int vcpu_id)
 {
 	fatalx("%s: unimplemented", __func__);
 	/* NOTREACHED */
@@ -96,7 +96,7 @@ intr_toggle_el(struct vmd_vm *vm, int irq, int val)
 }
 
 int
-intr_ack(struct vmd_vm *vm)
+intr_ack(int vcpu_id)
 {
 	fatalx("%s: unimplemented", __func__);
 	/* NOTREACHED */
@@ -104,13 +104,19 @@ intr_ack(struct vmd_vm *vm)
 }
 
 void
-vcpu_assert_irq(uint32_t vm_id, uint32_t vcpu_id, int irq)
+vcpu_assert_vector(int fd, uint32_t vcpu_id, uint8_t vector)
 {
 	fatalx("%s: unimplemented", __func__);
 }
 
 void
-vcpu_deassert_irq(uint32_t vm_id, uint32_t vcpu_id, int irq)
+vcpu_assert_irq(int fd, uint32_t vcpu_id, int vector)
+{
+	fatalx("%s: unimplemented", __func__);
+}
+
+void
+vcpu_deassert_irq(int fd, uint32_t vcpu_id, int vector)
 {
 	fatalx("%s: unimplemented", __func__);
 }

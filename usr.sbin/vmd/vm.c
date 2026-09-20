@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm.c,v 1.129 2026/09/08 19:46:18 dv Exp $	*/
+/*	$OpenBSD: vm.c,v 1.135 2026/09/19 17:21:52 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -38,16 +38,26 @@
 #include <util.h>
 
 #include "atomicio.h"
+#ifdef __amd64__
+#include "acpi.h"
+#include "lapic.h"
+#endif
 #include "pci.h"
 #include "virtio.h"
 #include "vmd.h"
 
-#define MMIO_NOTYET 0
-
 static int run_vm(struct vmd_vm *, struct vcpu_reg_state *);
 static void vm_dispatch_vmm(int, short, void *);
+static void vm_sighdlr(int, short, void *);
+static void vm_stop_event(int, short, void *);
+static void stop_vm(struct vmd_vm *);
 static void *event_thread(void *);
+#ifdef __amd64__
+static void *lapic_timer_thread(void *);
+#endif
 static void *vcpu_run_loop(void *);
+static int vcpu_apply_pending_startup(uint32_t);
+static int vcpu_should_stop(void);
 static int vmm_create_vm(struct vmd_vm *);
 static void pause_vm(struct vmd_vm *);
 static void unpause_vm(struct vmd_vm *);
@@ -63,13 +73,35 @@ pthread_cond_t threadcond;
 
 pthread_cond_t vcpu_run_cond[VMM_MAX_VCPUS_PER_VM];
 pthread_mutex_t vcpu_run_mtx[VMM_MAX_VCPUS_PER_VM];
-pthread_barrier_t vm_pause_barrier;
 pthread_cond_t vcpu_unpause_cond[VMM_MAX_VCPUS_PER_VM];
 pthread_mutex_t vcpu_unpause_mtx[VMM_MAX_VCPUS_PER_VM];
 
 pthread_mutex_t vm_mtx;
 uint8_t vcpu_hlt[VMM_MAX_VCPUS_PER_VM];
+uint8_t vcpu_hlt_intr[VMM_MAX_VCPUS_PER_VM];
+/* Protected by threadmutex. */
 uint8_t vcpu_done[VMM_MAX_VCPUS_PER_VM];
+uint8_t vcpu_paused[VMM_MAX_VCPUS_PER_VM];
+
+uint64_t vcpu_wake_gen[VMM_MAX_VCPUS_PER_VM];
+uint64_t vcpu_enter_gen[VMM_MAX_VCPUS_PER_VM];
+
+enum vcpu_runstate {
+	VCPU_RUNSTATE_RUNNING,
+	VCPU_RUNSTATE_WAIT_SIPI,
+	VCPU_RUNSTATE_INIT,
+	VCPU_RUNSTATE_SIPI
+};
+
+static uint8_t vcpu_runstate[VMM_MAX_VCPUS_PER_VM];
+static uint8_t vcpu_sipi_vector[VMM_MAX_VCPUS_PER_VM];
+
+struct event ev_sigterm;
+
+#ifdef __amd64__
+/* Protected by threadmutex. */
+static int lapic_timer_stop;
+#endif
 
 /*
  * vm_main
@@ -96,6 +128,11 @@ vm_main(int fd, int fd_vmm)
 	 */
 	if (unveil(env->vmd_execpath, "x") == -1)
 		fatal("unveil %s", env->vmd_execpath);
+#ifdef __amd64__
+	if (unveil("/etc/firmware/vmm.dsdt", "r") == -1 && errno != ENOENT)
+		fatal("unveil /etc/firmware/vmm.dsdt");
+	(void)acpi_load_dsdt("/etc/firmware/vmm.dsdt");
+#endif
 	if (unveil(NULL, NULL) == -1)
 		fatal("unveil lock");
 
@@ -194,10 +231,8 @@ start_vm(struct vmd_vm *vm, int fd)
 			errno = ret;
 			log_warn("could not create vm");
 		}
-
-		/* Let the vmm process know we failed by sending a 0 vm id. */
-		vm->vm_vmmid = 0;
-		atomicio(vwrite, fd, &vm->vm_vmmid, sizeof(vm->vm_vmmid));
+		/* Let the vmm process know we failed by sending the error code. */
+		atomicio(vwrite, fd, &ret, sizeof(ret));
 		return (ret);
 	}
 
@@ -217,14 +252,10 @@ start_vm(struct vmd_vm *vm, int fd)
 		log_warn("failed to set nonblocking mode on console");
 		return (1);
 	}
-
-	/*
-	 * We now let the vmm process know we were successful by sending it our
-	 * vmm(4) assigned vm id.
-	 */
-	if (atomicio(vwrite, fd, &vm->vm_vmmid, sizeof(vm->vm_vmmid)) !=
-	    sizeof(vm->vm_vmmid)) {
-		log_warn("failed to send created vm id to vmm process");
+	/* We now let the vmm process know we were successful. */
+	ret = 0;
+	if (atomicio(vwrite, fd, &ret, sizeof(ret)) != sizeof(ret)) {
+		log_warn("failed to send vm start status to vmm process");
 		return (1);
 	}
 
@@ -254,9 +285,6 @@ start_vm(struct vmd_vm *vm, int fd)
 		    __func__);
 		return (ret);
 	}
-
-	/* Lock thread mutex now. It's unlocked when waiting on threadcond. */
-	mutex_lock(&threadmutex);
 
 	/*
 	 * Finalize our communication socket with the vmm process. From here
@@ -427,7 +455,7 @@ pause_vm(struct vmd_vm *vm)
 	int ret;
 
 	mutex_lock(&vm_mtx);
-	if (vm->vm_state & VM_STATE_PAUSED) {
+	if (vm->vm_state & (VM_STATE_PAUSED | VM_STATE_SHUTDOWN)) {
 		mutex_unlock(&vm_mtx);
 		return;
 	}
@@ -435,19 +463,34 @@ pause_vm(struct vmd_vm *vm)
 	mutex_unlock(&vm_mtx);
 
 	for (n = 0; n < vm->vm_params.vmc_ncpus; n++) {
+		mutex_lock(&vcpu_run_mtx[n]);
 		ret = pthread_cond_broadcast(&vcpu_run_cond[n]);
+		mutex_unlock(&vcpu_run_mtx[n]);
 		if (ret) {
 			log_warnx("%s: can't broadcast vcpu run cond (%d)",
 			    __func__, (int)ret);
 			return;
 		}
 	}
-	ret = pthread_barrier_wait(&vm_pause_barrier);
-	if (ret != 0 && ret != PTHREAD_BARRIER_SERIAL_THREAD) {
-		log_warnx("%s: could not wait on pause barrier (%d)",
-		    __func__, (int)ret);
-		return;
+	mutex_lock(&threadmutex);
+	for (;;) {
+		for (n = 0; n < vm->vm_params.vmc_ncpus; n++) {
+			if (!vcpu_paused[n] && !vcpu_done[n])
+				break;
+		}
+		if (n == vm->vm_params.vmc_ncpus)
+			break;
+		ret = pthread_cond_wait(&threadcond, &threadmutex);
+		if (ret)
+			fatalx("cannot wait for vcpus to pause (%d)", ret);
 	}
+	mutex_unlock(&threadmutex);
+
+	mutex_lock(&vm_mtx);
+	ret = (vm->vm_state & VM_STATE_SHUTDOWN) != 0;
+	mutex_unlock(&vm_mtx);
+	if (ret)
+		return;
 
 	pause_vm_md(vm);
 }
@@ -467,7 +510,9 @@ unpause_vm(struct vmd_vm *vm)
 	mutex_unlock(&vm_mtx);
 
 	for (n = 0; n < vm->vm_params.vmc_ncpus; n++) {
+		mutex_lock(&vcpu_unpause_mtx[n]);
 		ret = pthread_cond_broadcast(&vcpu_unpause_cond[n]);
+		mutex_unlock(&vcpu_unpause_mtx[n]);
 		if (ret) {
 			log_warnx("%s: can't broadcast vcpu unpause cond (%d)",
 			    __func__, (int)ret);
@@ -485,28 +530,27 @@ unpause_vm(struct vmd_vm *vm)
  * the register state provided
  *
  * Parameters
- *  vmid: VM ID to reset
+ *  fd: vm file descriptor to reset
  *  vcpu_id: VCPU ID to reset
  *  vrs: the register state to initialize
  *
  * Return values:
  *  0: success
- *  !0 : ioctl to vmm(4) failed (eg, ENOENT if the supplied VM ID is not
+ *  !0 : ioctl to vmm(4) failed (eg, ENOENT if the supplied VCPU ID is not
  *      valid)
  */
 int
-vcpu_reset(uint32_t vmid, uint32_t vcpu_id, struct vcpu_reg_state *vrs)
+vcpu_reset(int fd, uint32_t vcpu_id, struct vcpu_reg_state *vrs)
 {
 	struct vm_resetcpu_params vrp;
 
 	memset(&vrp, 0, sizeof(vrp));
-	vrp.vrp_vm_id = vmid;
 	vrp.vrp_vcpu_id = vcpu_id;
 	memcpy(&vrp.vrp_init_state, vrs, sizeof(struct vcpu_reg_state));
 
-	log_debug("%s: resetting vcpu %d for vm %d", __func__, vcpu_id, vmid);
+	log_debug("%s: resetting vcpu %d", __func__, vcpu_id);
 
-	if (ioctl(env->vmd_vmm_fd, VMM_IOC_RESETCPU, &vrp) == -1)
+	if (ioctl(fd, VMM_IOC_RESETCPU, &vrp) == -1)
 		return (errno);
 
 	return (0);
@@ -532,9 +576,11 @@ vmm_create_vm(struct vmd_vm *vm)
 	struct vm_create_params		 vcp;
 	struct vmop_create_params	*vmc = &vm->vm_params;
 	size_t				 i;
+	int				 error;
 
 	/* Sanity check arguments */
-	if (vmc->vmc_ncpus > VMM_MAX_VCPUS_PER_VM)
+	if (vmc->vmc_ncpus == 0 ||
+	    vmc->vmc_ncpus > VMM_MAX_VCPUS_PER_VM)
 		return (EINVAL);
 
 	if (vmc->vmc_nmemranges == 0 ||
@@ -556,10 +602,16 @@ vmm_create_vm(struct vmd_vm *vm)
 	vcp.vcp_sev = vmc->vmc_sev;
 	vcp.vcp_seves = vmc->vmc_seves;
 
-	if (ioctl(env->vmd_vmm_fd, VMM_IOC_CREATE, &vcp) == -1)
-		return (errno);
+	if (ioctl(env->vmd_vmm_fd, VMM_IOC_CREATE, &vcp) == -1) {
+		error = errno;
+		close_fd(env->vmd_vmm_fd);
+		env->vmd_vmm_fd = -1;
+		return (error);
+	}
+	close_fd(env->vmd_vmm_fd);
+	env->vmd_vmm_fd = -1;
 
-	vm->vm_vmmid = vcp.vcp_id;
+	vm->vm_fd = vcp.vcp_fd;
 	for (i = 0; i < vcp.vcp_ncpus; i++)
 		vm->vm_sev_asid[i] = vcp.vcp_asid[i];
 	for (i = 0; i < vmc->vmc_nmemranges; i++)
@@ -587,10 +639,16 @@ static int
 run_vm(struct vmd_vm *vm, struct vcpu_reg_state *vrs)
 {
 	struct vmop_create_params *vmc;
-	uint8_t evdone = 0;
-	size_t i;
-	int ret;
+	struct event ev_stop;
+	uint8_t evdone = 0, evstop = 0;
+	size_t i, nstarted = 0;
+	int ret, error = 0, stopping, event_loop_started = 0;
+	int event_pipe[2];
 	pthread_t *tid, evtid;
+#ifdef __amd64__
+	pthread_t laptid;
+	int lapic_timer_started = 0;
+#endif
 	char tname[MAXCOMLEN + 1];
 	struct vm_run_params **vrp;
 	void *exit_status;
@@ -612,38 +670,46 @@ run_vm(struct vmd_vm *vm, struct vcpu_reg_state *vrs)
 		return (ENOMEM);
 	}
 
-	ret = pthread_barrier_init(&vm_pause_barrier, NULL, vmc->vmc_ncpus + 1);
-	if (ret) {
-		log_warnx("cannot initialize pause barrier (%d)", ret);
-		return (ret);
-	}
-
 	log_debug("%s: starting %zu vcpu thread(s) for vm %s", __func__,
 	    vmc->vmc_ncpus, vmc->vmc_name);
 
 	/*
-	 * Create and launch one thread for each VCPU. These threads may
+	 * Prepare each VCPU before launching any worker. These threads may
 	 * migrate between PCPUs over time; the need to reload CPU state
 	 * in such situations is detected and performed by vmm(4) in the
 	 * kernel.
 	 */
 	for (i = 0 ; i < vmc->vmc_ncpus; i++) {
-		vrp[i] = malloc(sizeof(struct vm_run_params));
+		vrp[i] = calloc(1, sizeof(struct vm_run_params));
 		if (vrp[i] == NULL) {
 			log_warn("failed to allocate vm run parameters");
 			/* caller will exit, so skip freeing */
 			return (ENOMEM);
 		}
-		vrp[i]->vrp_exit = malloc(sizeof(struct vm_exit));
+		vrp[i]->vrp_exit = calloc(1, sizeof(struct vm_exit));
 		if (vrp[i]->vrp_exit == NULL) {
 			log_warn("failed to allocate vm exit area");
 			/* caller will exit, so skip freeing */
 			return (ENOMEM);
 		}
-		vrp[i]->vrp_vm_id = vm->vm_vmmid;
 		vrp[i]->vrp_vcpu_id = i;
 
-		if (vcpu_reset(vm->vm_vmmid, i, vrs)) {
+#ifdef __amd64__
+		if (i == 0) {
+			ret = vcpu_reset(vm->vm_fd, i, vrs);
+			vcpu_runstate[i] = VCPU_RUNSTATE_RUNNING;
+		} else {
+			struct vcpu_reg_state ap_vrs;
+
+			vcpu_init_ap(&ap_vrs);
+			ret = vcpu_reset(vm->vm_fd, i, &ap_vrs);
+			vcpu_runstate[i] = VCPU_RUNSTATE_WAIT_SIPI;
+		}
+#else
+		ret = vcpu_reset(vm->vm_fd, i, vrs);
+		vcpu_runstate[i] = VCPU_RUNSTATE_RUNNING;
+#endif
+		if (ret) {
 			log_warnx("cannot reset vcpu %zu", i);
 			return (EIO);
 		}
@@ -693,85 +759,169 @@ run_vm(struct vmd_vm *vm, struct vcpu_reg_state *vrs)
 		}
 
 		vcpu_hlt[i] = 0;
+		vcpu_hlt_intr[i] = 0;
+		vcpu_done[i] = 0;
+		vcpu_paused[i] = 0;
+		vcpu_wake_gen[i] = 0;
+		vcpu_enter_gen[i] = 0;
+	}
 
-		/* Start each VCPU run thread at vcpu_run_loop */
+	/* Only the event thread may stop its event loop. */
+	if (pipe2(event_pipe, O_CLOEXEC) == -1)
+		fatal("event stop pipe");
+	event_set(&ev_stop, event_pipe[0], EV_READ | EV_PERSIST,
+	    vm_stop_event, &evstop);
+	signal_set(&ev_sigterm, SIGTERM, vm_sighdlr, NULL);
+	event_add(&ev_stop, NULL);
+	signal_add(&ev_sigterm, NULL);
+
+	/*
+	 * Do not launch the BSP until every AP's mutex, condition variable and
+	 * reset state are ready. Firmware can send INIT/SIPI immediately.
+	 */
+	for (i = 0; i < vmc->vmc_ncpus; i++) {
 		ret = pthread_create(&tid[i], NULL, vcpu_run_loop, vrp[i]);
 		if (ret) {
-			/* caller will _exit after this return */
-			ret = errno;
-			log_warn("%s: could not create vcpu thread %zu",
-			    __func__, i);
-			return (ret);
+			log_warnx("%s: could not create vcpu thread %zu (%d)",
+			    __func__, i, ret);
+			error = ret;
+			goto stop;
 		}
+		nstarted++;
 
 		snprintf(tname, sizeof(tname), "vcpu-%zu", i);
 		pthread_set_name_np(tid[i], tname);
 	}
 
 	log_debug("%s: waiting on events for VM %s", __func__, vmc->vmc_name);
+#ifdef __amd64__
+	lapic_timer_stop = 0;
+	ret = pthread_create(&laptid, NULL, lapic_timer_thread,
+	    (void *)(intptr_t)vmc->vmc_ncpus);
+	if (ret) {
+		errno = ret;
+		log_warn("%s: could not create LAPIC timer thread", __func__);
+		error = ret;
+		goto stop;
+	}
+	lapic_timer_started = 1;
+	pthread_set_name_np(laptid, "lapictmr");
+#endif
 	ret = pthread_create(&evtid, NULL, event_thread, &evdone);
 	if (ret) {
 		errno = ret;
 		log_warn("%s: could not create event thread", __func__);
-		return (ret);
+		error = ret;
+		goto stop;
 	}
+	event_loop_started = 1;
 	pthread_set_name_np(evtid, "event");
 
+	/* Completion flags and their notification share one mutex. */
+	mutex_lock(&threadmutex);
 	for (;;) {
-		ret = pthread_cond_wait(&threadcond, &threadmutex);
-		if (ret) {
-			log_warn("%s: waiting on thread state condition "
-			    "variable failed", __func__);
-			return (ret);
-		}
-
-		/*
-		 * Did a VCPU thread exit with an error? => return the first one
-		 */
 		mutex_lock(&vm_mtx);
-		for (i = 0; i < vmc->vmc_ncpus; i++) {
-			if (vcpu_done[i] == 0)
-				continue;
-
-			if (pthread_join(tid[i], &exit_status)) {
-				log_warn("failed to join thread %zd", i);
-				mutex_unlock(&vm_mtx);
-				return (EIO);
-			}
-
-			ret = (intptr_t)exit_status;
-		}
+		stopping = (vm->vm_state & VM_STATE_SHUTDOWN) != 0;
 		mutex_unlock(&vm_mtx);
 
-		/* Did the event thread exit? => return with an error */
-		if (evdone) {
-			if (pthread_join(evtid, &exit_status)) {
-				log_warn("failed to join event thread");
-				return (EIO);
-			}
-
-			log_warnx("event thread exited unexpectedly");
-			return (EIO);
-		}
-
-		/* Did all VCPU threads exit successfully? => return */
-		mutex_lock(&vm_mtx);
-		for (i = 0; i < vmc->vmc_ncpus; i++) {
-			if (vcpu_done[i] == 0)
+		for (i = 0; i < nstarted; i++) {
+			if (vcpu_done[i])
 				break;
 		}
-		mutex_unlock(&vm_mtx);
-		if (i == vmc->vmc_ncpus)
+		if (stopping || evdone || i < nstarted)
 			break;
 
-		/* Some more threads to wait for, start over */
+		ret = pthread_cond_wait(&threadcond, &threadmutex);
+		if (ret)
+			fatalx("cannot wait for vm threads (%d)", ret);
+	}
+	if (evdone) {
+		log_warnx("event thread exited unexpectedly");
+		error = EIO;
+	}
+	mutex_unlock(&threadmutex);
+
+	/* Keep processing device events until every VCPU has finished. */
+stop:
+	stop_vm(vm);
+	for (i = 0; i < nstarted; i++) {
+		ret = pthread_join(tid[i], &exit_status);
+		if (ret)
+			fatalx("cannot join vcpu %zu (%d)", i, ret);
+		/* A guest reset takes precedence over sibling exit statuses. */
+		if ((intptr_t)exit_status == EAGAIN || error == 0)
+			error = (intptr_t)exit_status;
+	}
+#ifdef __amd64__
+	if (lapic_timer_started) {
+		/* VCPUs no longer need timer interrupts to make progress. */
+		mutex_lock(&threadmutex);
+		lapic_timer_stop = 1;
+		mutex_unlock(&threadmutex);
+		ret = pthread_join(laptid, &exit_status);
+		if (ret)
+			fatalx("cannot join LAPIC timer thread (%d)", ret);
+	}
+#endif
+	if (event_loop_started) {
+		do {
+			ret = write(event_pipe[1], "", 1);
+		} while (ret == -1 && errno == EINTR);
+		if (ret != 1)
+			fatal("cannot stop event thread");
+		ret = pthread_join(evtid, &exit_status);
+		if (ret)
+			fatalx("cannot join event thread (%d)", ret);
+		if ((!evstop || (intptr_t)exit_status != 0) && error == 0)
+			error = EIO;
+	}
+	event_del(&ev_stop);
+	/* Keep catching shutdown signals until device cleanup finishes. */
+	close(event_pipe[0]);
+	close(event_pipe[1]);
+	return (error);
+}
+
+#ifdef __amd64__
+static void *
+lapic_timer_thread(void *arg)
+{
+	size_t ncpus = (size_t)(intptr_t)arg;
+	size_t i;
+	int done, error, stopping;
+
+	for (;;) {
+		mutex_lock(&threadmutex);
+		stopping = lapic_timer_stop;
+		mutex_unlock(&threadmutex);
+		if (stopping)
+			break;
+
+		usleep(200);
+
+		for (i = 0; i < ncpus; i++) {
+			mutex_lock(&threadmutex);
+			done = vcpu_done[i];
+			mutex_unlock(&threadmutex);
+			if (done)
+				continue;
+			if (!lapic_timer_check(i))
+				continue;
+
+			error = vcpu_intr(current_vm->vm_fd, i, 1);
+			if (error != 0) {
+				log_debug("%s: could not interrupt vcpu %zu: %s",
+				    __func__, i, strerror(error));
+				continue;
+			}
+			vcpu_unhalt(i);
+			vcpu_signal_run(i);
+		}
 	}
 
-	if (pthread_barrier_destroy(&vm_pause_barrier))
-		log_warnx("could not destroy pause barrier");
-
-	return (ret);
+	return (NULL);
 }
+#endif
 
 static void *
 event_thread(void *arg)
@@ -781,14 +931,13 @@ event_thread(void *arg)
 
 	ret = event_dispatch();
 
-	*donep = 1;
-
 	mutex_lock(&threadmutex);
-	pthread_cond_signal(&threadcond);
+	*donep = 1;
+	pthread_cond_broadcast(&threadcond);
 	mutex_unlock(&threadmutex);
 
 	return (void *)ret;
- }
+}
 
 /*
  * vcpu_run_loop
@@ -809,97 +958,137 @@ vcpu_run_loop(void *arg)
 	struct vm_run_params *vrp = (struct vm_run_params *)arg;
 	intptr_t ret = 0;
 	uint32_t n = vrp->vrp_vcpu_id;
-	int paused = 0, halted = 0;
+	int paused, stopping, vector;
 
 	for (;;) {
-		ret = pthread_mutex_lock(&vcpu_run_mtx[n]);
+		if (vcpu_should_stop()) {
+			ret = 0;
+			break;
+		}
 
+		ret = vcpu_apply_pending_startup(n);
+		if (ret != 0)
+			break;
+
+		ret = pthread_mutex_lock(&vcpu_run_mtx[n]);
 		if (ret) {
 			log_warnx("%s: can't lock vcpu run mtx (%d)",
 			    __func__, (int)ret);
-			return ((void *)ret);
+			goto out;
 		}
 
+	check_state:
 		mutex_lock(&vm_mtx);
 		paused = (current_vm->vm_state & VM_STATE_PAUSED) != 0;
-		halted = vcpu_hlt[n];
+		stopping = (current_vm->vm_state & VM_STATE_SHUTDOWN) != 0;
 		mutex_unlock(&vm_mtx);
 
-		/* If we need to pause, wait on the barrier. */
-		if (paused) {
-			ret = pthread_barrier_wait(&vm_pause_barrier);
-			if (ret != 0 && ret != PTHREAD_BARRIER_SERIAL_THREAD) {
-				log_warnx("%s: could not wait on pause barrier (%d)",
-				    __func__, (int)ret);
-				return ((void *)ret);
-			}
-
-			ret = pthread_mutex_lock(&vcpu_unpause_mtx[n]);
-			if (ret) {
-				log_warnx("%s: can't lock vcpu unpause mtx (%d)",
-				    __func__, (int)ret);
-				return ((void *)ret);
-			}
-
-			/* Interrupt may be firing, release run mtx. */
+		if (stopping) {
+			log_debug("%s: vcpu %u stopping", __func__, n);
 			mutex_unlock(&vcpu_run_mtx[n]);
-			ret = pthread_cond_wait(&vcpu_unpause_cond[n],
-			    &vcpu_unpause_mtx[n]);
-			if (ret) {
-				log_warnx(
-				    "%s: can't wait on unpause cond (%d)",
-				    __func__, (int)ret);
-				break;
-			}
-			mutex_lock(&vcpu_run_mtx[n]);
-
-			ret = pthread_mutex_unlock(&vcpu_unpause_mtx[n]);
-			if (ret) {
-				log_warnx("%s: can't unlock unpause mtx (%d)",
-				    __func__, (int)ret);
-				break;
-			}
+			ret = 0;
+			goto out;
 		}
 
-		/* If we are halted and not paused, wait */
-		if (halted) {
+		/* Acknowledge the pause without holding the run mutex. */
+		if (paused) {
+			mutex_unlock(&vcpu_run_mtx[n]);
+			mutex_lock(&threadmutex);
+			vcpu_paused[n] = 1;
+			pthread_cond_broadcast(&threadcond);
+			mutex_unlock(&threadmutex);
+
+			mutex_lock(&vcpu_unpause_mtx[n]);
+			for (;;) {
+				mutex_lock(&vm_mtx);
+				paused = (current_vm->vm_state &
+				    VM_STATE_PAUSED) != 0;
+				stopping = (current_vm->vm_state &
+				    VM_STATE_SHUTDOWN) != 0;
+				mutex_unlock(&vm_mtx);
+				if (!paused || stopping)
+					break;
+				ret = pthread_cond_wait(&vcpu_unpause_cond[n],
+				    &vcpu_unpause_mtx[n]);
+				if (ret)
+					break;
+			}
+			mutex_unlock(&vcpu_unpause_mtx[n]);
+			mutex_lock(&threadmutex);
+			vcpu_paused[n] = 0;
+			mutex_unlock(&threadmutex);
+
+			if (ret) {
+				log_warnx("%s: can't wait on unpause cond (%d)",
+				    __func__, (int)ret);
+				goto out;
+			}
+			mutex_lock(&vcpu_run_mtx[n]);
+			goto check_state;
+		}
+
+		/* Apply a transition queued after the check at the top of the loop. */
+		if (vcpu_runstate[n] == VCPU_RUNSTATE_INIT ||
+		    vcpu_runstate[n] == VCPU_RUNSTATE_SIPI) {
+			(void)pthread_mutex_unlock(&vcpu_run_mtx[n]);
+			continue;
+		}
+
+		/* APs wait here until a SIPI transition makes them runnable. */
+		if (vcpu_runstate[n] != VCPU_RUNSTATE_RUNNING || vcpu_hlt[n]) {
 			ret = pthread_cond_wait(&vcpu_run_cond[n],
 			    &vcpu_run_mtx[n]);
-
 			if (ret) {
 				log_warnx(
 				    "%s: can't wait on cond (%d)",
 				    __func__, (int)ret);
-				(void)pthread_mutex_unlock(
-				    &vcpu_run_mtx[n]);
-				break;
+				mutex_unlock(&vcpu_run_mtx[n]);
+				goto out;
 			}
+			goto check_state;
 		}
 
 		ret = pthread_mutex_unlock(&vcpu_run_mtx[n]);
-
 		if (ret) {
 			log_warnx("%s: can't unlock mutex on cond (%d)",
 			    __func__, (int)ret);
 			break;
 		}
 
-		if (vrp->vrp_irqready && intr_pending(current_vm)) {
-			vrp->vrp_inject.vie_vector = intr_ack(current_vm);
-			vrp->vrp_inject.vie_type = VCPU_INJECT_INTR;
+		if (vrp->vrp_irqready && intr_pending(n)) {
+			vector = intr_ack(n);
+			if (vector == 0xffff) {
+				/* Interrupt state changed between pending and ack. */
+				vrp->vrp_inject.vie_type = VCPU_INJECT_NONE;
+			} else {
+				vrp->vrp_inject.vie_vector = vector;
+				vrp->vrp_inject.vie_type = VCPU_INJECT_INTR;
+			}
 		} else
 			vrp->vrp_inject.vie_type = VCPU_INJECT_NONE;
 
 		/* Still more interrupts pending? */
-		vrp->vrp_intr_pending = intr_pending(current_vm);
+		vrp->vrp_intr_pending = intr_pending(n);
 
-		if (ioctl(env->vmd_vmm_fd, VMM_IOC_RUN, vrp) == -1) {
+		/* Pair a later HLT exit with wakeups racing this guest entry. */
+		mutex_lock(&vcpu_run_mtx[n]);
+		vcpu_enter_gen[n] = vcpu_wake_gen[n];
+		mutex_unlock(&vcpu_run_mtx[n]);
+
+		if (ioctl(current_vm->vm_fd, VMM_IOC_RUN, vrp) == -1) {
 			/* If run ioctl failed, exit */
 			ret = errno;
-			log_warn("%s: vm %d / vcpu %d run ioctl failed",
+			log_debug("%s: vm %d / vcpu %d run ioctl failed",
 			    __func__, current_vm->vm_vmid, n);
 			break;
 		}
+
+		/* INIT supersedes any ordinary exit which raced with its kick. */
+		mutex_lock(&vcpu_run_mtx[n]);
+		paused = vcpu_runstate[n] != VCPU_RUNSTATE_RUNNING;
+		mutex_unlock(&vcpu_run_mtx[n]);
+		if (paused && !vcpu_should_stop())
+			continue;
 
 		/* If the VM is terminating, exit normally */
 		if (vrp->vrp_exit_reason == VM_EXIT_TERMINATED) {
@@ -916,31 +1105,92 @@ vcpu_run_loop(void *arg)
 			if (ret)
 				break;
 		}
+
+		/* A sibling requested teardown; do not re-enter the guest. */
+		if (vcpu_should_stop()) {
+			ret = 0;
+			break;
+		}
 	}
 
-	mutex_lock(&vm_mtx);
-	vcpu_done[n] = 1;
-	mutex_unlock(&vm_mtx);
+out:
+	if (ret != 0)
+		stop_vm(current_vm);
 
 	mutex_lock(&threadmutex);
-	pthread_cond_signal(&threadcond);
+	vcpu_done[n] = 1;
+	pthread_cond_broadcast(&threadcond);
 	mutex_unlock(&threadmutex);
 
 	return ((void *)ret);
 }
 
+/* Return whether shutdown has been requested by any VM thread. */
+static int
+vcpu_should_stop(void)
+{
+	int stopping;
+
+	mutex_lock(&vm_mtx);
+	stopping = (current_vm->vm_state & VM_STATE_SHUTDOWN) != 0;
+	mutex_unlock(&vm_mtx);
+
+	return (stopping);
+}
+
+static int
+vcpu_apply_pending_startup(uint32_t vcpu_id)
+{
+#ifdef __amd64__
+	struct vcpu_reg_state vrs;
+	uint8_t state, vector;
+	int ret;
+
+	for (;;) {
+		mutex_lock(&vcpu_run_mtx[vcpu_id]);
+		state = vcpu_runstate[vcpu_id];
+		vector = vcpu_sipi_vector[vcpu_id];
+		mutex_unlock(&vcpu_run_mtx[vcpu_id]);
+
+		if (state != VCPU_RUNSTATE_INIT && state != VCPU_RUNSTATE_SIPI)
+			return (0);
+
+		if (state == VCPU_RUNSTATE_INIT)
+			vcpu_init_ap(&vrs);
+		else
+			vcpu_init_sipi(&vrs, vector);
+
+		ret = vcpu_reset(current_vm->vm_fd, vcpu_id, &vrs);
+		if (ret != 0) {
+			log_warnx("%s: cannot reset vcpu %u: %s", __func__,
+			    vcpu_id, strerror(ret));
+			return (ret);
+		}
+		mutex_lock(&vcpu_run_mtx[vcpu_id]);
+		if (vcpu_runstate[vcpu_id] == state &&
+		    (state != VCPU_RUNSTATE_SIPI ||
+		    vcpu_sipi_vector[vcpu_id] == vector)) {
+			vcpu_runstate[vcpu_id] = state == VCPU_RUNSTATE_INIT ?
+			    VCPU_RUNSTATE_WAIT_SIPI : VCPU_RUNSTATE_RUNNING;
+		}
+		mutex_unlock(&vcpu_run_mtx[vcpu_id]);
+	}
+#else
+	return (0);
+#endif
+}
+
 int
-vcpu_intr(uint32_t vmm_id, uint32_t vcpu_id, uint8_t intr)
+vcpu_intr(int fd, uint32_t vcpu_id, uint8_t intr)
 {
 	struct vm_intr_params vip;
 
 	memset(&vip, 0, sizeof(vip));
 
-	vip.vip_vm_id = vmm_id;
 	vip.vip_vcpu_id = vcpu_id; /* XXX always 0? */
 	vip.vip_intr = intr;
 
-	if (ioctl(env->vmd_vmm_fd, VMM_IOC_INTR, &vip) == -1)
+	if (ioctl(fd, VMM_IOC_INTR, &vip) == -1)
 		return (errno);
 
 	return (0);
@@ -1095,7 +1345,7 @@ vm_pipe_recv(struct vm_dev_pipe *p)
  * Returns 0 on success or an errno in event of failure.
  */
 int
-remap_guest_mem(struct vmd_vm *vm, int vmm_fd)
+remap_guest_mem(struct vmd_vm *vm, int vm_fd)
 {
 	size_t i;
 	struct vm_sharemem_params vsp;
@@ -1103,38 +1353,46 @@ remap_guest_mem(struct vmd_vm *vm, int vmm_fd)
 	if (vm == NULL)
 		return (EINVAL);
 
-	/* Initialize using our original creation parameters. */
 	memset(&vsp, 0, sizeof(vsp));
-	vsp.vsp_nmemranges = vm->vm_params.vmc_nmemranges;
-	vsp.vsp_vm_id = vm->vm_vmmid;
-	memcpy(&vsp.vsp_memranges, &vm->vm_params.vmc_memranges,
-	    sizeof(vsp.vsp_memranges));
 
 	/* Ask vmm(4) to enter a shared mapping to guest memory. */
-	if (ioctl(vmm_fd, VMM_IOC_SHAREMEM, &vsp) == -1)
+	if (ioctl(vm_fd, VMM_IOC_SHAREMEM, &vsp) == -1)
 		return (errno);
 
 	/* Update with the location of the new mappings. */
-	for (i = 0; i < vsp.vsp_nmemranges; i++)
+	for (i = 0; i < vm->vm_params.vmc_nmemranges; i++)
 		vm->vm_params.vmc_memranges[i].vmr_va = vsp.vsp_va[i];
 
 	return (0);
 }
 
 void
-vcpu_halt(uint32_t vcpu_id)
+vcpu_halt(uint32_t vcpu_id, int interruptible)
 {
-	mutex_lock(&vm_mtx);
-	vcpu_hlt[vcpu_id] = 1;
-	mutex_unlock(&vm_mtx);
+	mutex_lock(&vcpu_run_mtx[vcpu_id]);
+	vcpu_hlt_intr[vcpu_id] = interruptible != 0;
+	/*
+	 * An interrupt can race the HLT exit after it has signalled this
+	 * condition variable but before the vCPU thread records the halt. Keep
+	 * an interruptible vCPU runnable when that wakeup raced this guest entry
+	 * or an interrupt is still pending. A non-interruptible AP halt instead
+	 * remains parked until INIT/SIPI changes its run state.
+	 */
+	if (!interruptible ||
+	    (vcpu_wake_gen[vcpu_id] == vcpu_enter_gen[vcpu_id] &&
+	    !intr_pending(vcpu_id)))
+		vcpu_hlt[vcpu_id] = 1;
+	mutex_unlock(&vcpu_run_mtx[vcpu_id]);
 }
 
 void
 vcpu_unhalt(uint32_t vcpu_id)
-	{
-	mutex_lock(&vm_mtx);
-	vcpu_hlt[vcpu_id] = 0;
-	mutex_unlock(&vm_mtx);
+{
+	mutex_lock(&vcpu_run_mtx[vcpu_id]);
+	vcpu_wake_gen[vcpu_id]++;
+	if (!vcpu_hlt[vcpu_id] || vcpu_hlt_intr[vcpu_id])
+		vcpu_hlt[vcpu_id] = 0;
+	mutex_unlock(&vcpu_run_mtx[vcpu_id]);
 }
 
 void
@@ -1147,4 +1405,111 @@ vcpu_signal_run(uint32_t vcpu_id)
 	if (ret)
 		fatalx("%s: can't signal (%d)", __func__, ret);
 	mutex_unlock(&vcpu_run_mtx[vcpu_id]);
+}
+
+/* Queue the architectural INIT transition and force a running AP to exit. */
+void
+vcpu_assert_init(uint32_t vcpu_id)
+{
+	int ret;
+
+	if (vcpu_id >= current_vm->vm_params.vmc_ncpus)
+		return;
+	mutex_lock(&vcpu_run_mtx[vcpu_id]);
+#ifdef __amd64__
+	/* Serialize the LAPIC reset against a closely following SIPI. */
+	lapic_reset(vcpu_id);
+#endif /* __amd64__ */
+	vcpu_runstate[vcpu_id] = VCPU_RUNSTATE_INIT;
+	vcpu_hlt[vcpu_id] = 0;
+	ret = pthread_cond_signal(&vcpu_run_cond[vcpu_id]);
+	mutex_unlock(&vcpu_run_mtx[vcpu_id]);
+	if (ret != 0)
+		fatalx("%s: can't signal vcpu %u (%d)", __func__, vcpu_id,
+		    ret);
+
+	ret = vcpu_intr(current_vm->vm_fd, vcpu_id, 1);
+	if (ret != 0)
+		log_warnx("%s: cannot kick vcpu %u: %s", __func__, vcpu_id,
+		    strerror(ret));
+}
+
+/* Queue the first SIPI received by an AP in WAIT_SIPI or pending INIT. */
+void
+vcpu_start_sipi(uint32_t vcpu_id, uint8_t vector)
+{
+	int ret = 0;
+
+	if (vcpu_id >= current_vm->vm_params.vmc_ncpus)
+		return;
+
+	mutex_lock(&vcpu_run_mtx[vcpu_id]);
+	if (vcpu_runstate[vcpu_id] == VCPU_RUNSTATE_WAIT_SIPI ||
+	    vcpu_runstate[vcpu_id] == VCPU_RUNSTATE_INIT) {
+		vcpu_sipi_vector[vcpu_id] = vector;
+		vcpu_runstate[vcpu_id] = VCPU_RUNSTATE_SIPI;
+		vcpu_hlt[vcpu_id] = 0;
+		ret = pthread_cond_signal(&vcpu_run_cond[vcpu_id]);
+	}
+	mutex_unlock(&vcpu_run_mtx[vcpu_id]);
+
+	if (ret != 0)
+		fatalx("%s: can't signal vcpu %u (%d)", __func__, vcpu_id,
+		    ret);
+}
+
+void
+vm_sighdlr(int sig, short event, void *arg)
+{
+	switch (sig) {
+	case SIGTERM:
+		stop_vm(current_vm);
+		break;
+	default:
+		fatalx("unexpected signal: %d", sig);
+	}
+}
+
+static void
+stop_vm(struct vmd_vm *vm)
+{
+	size_t n;
+	int ret;
+
+	mutex_lock(&vm_mtx);
+	vm->vm_state |= VM_STATE_SHUTDOWN;
+	mutex_unlock(&vm_mtx);
+
+	for (n = 0; n < vm->vm_params.vmc_ncpus; n++) {
+		mutex_lock(&vcpu_run_mtx[n]);
+		ret = pthread_cond_broadcast(&vcpu_run_cond[n]);
+		mutex_unlock(&vcpu_run_mtx[n]);
+		if (ret)
+			fatalx("cannot wake halted vcpu %zu (%d)", n, ret);
+		mutex_lock(&vcpu_unpause_mtx[n]);
+		ret = pthread_cond_broadcast(&vcpu_unpause_cond[n]);
+		mutex_unlock(&vcpu_unpause_mtx[n]);
+		if (ret)
+			fatalx("cannot wake paused vcpu %zu (%d)", n, ret);
+
+		/* Running VCPUs must also observe the shutdown request. */
+		ret = vcpu_intr(vm->vm_fd, n, 1);
+		if (ret != 0)
+			log_debug("%s: cannot kick vcpu %zu: %s", __func__, n,
+			    strerror(ret));
+	}
+
+	mutex_lock(&threadmutex);
+	pthread_cond_broadcast(&threadcond);
+	mutex_unlock(&threadmutex);
+}
+
+static void
+vm_stop_event(int fd, short event, void *arg)
+{
+	uint8_t *stopped = arg;
+
+	/* All VCPUs have been joined; device events are no longer needed. */
+	*stopped = 1;
+	event_loopbreak();
 }

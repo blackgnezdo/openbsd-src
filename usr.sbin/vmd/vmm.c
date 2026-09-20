@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.141 2026/09/08 19:46:18 dv Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.143 2026/09/19 17:21:52 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -17,10 +17,11 @@
  */
 
 #include <sys/types.h>
-#include <sys/ioctl.h>
 #include <sys/queue.h>
+#include <sys/sysctl.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
+#include <signal.h>
 
 #include <dev/vmm/vmm.h>
 
@@ -45,8 +46,9 @@ int	vmm_start_vm(struct imsg *, uint32_t *, pid_t *);
 int	vmm_dispatch_parent(int, struct privsep_proc *, struct imsg *);
 void	vmm_run(struct privsep *, struct privsep_proc *, void *);
 void	vmm_dispatch_vm(int, short, void *);
-int	terminate_vm(struct vm_terminate_params *);
-int	get_info_vm(struct privsep *, struct imsg *, int);
+void	vmm_vm_timeout(int, short, void *);
+int	terminate_vm(struct vmd_vm *);
+int	get_info_vm(struct privsep *, struct imsg *);
 int	opentap(char *);
 
 int	dev_null = -1;
@@ -91,10 +93,11 @@ vmm_run(struct privsep *ps, struct privsep_proc *p, void *arg)
 	 * stdio - for malloc and basic I/O including events.
 	 * vmm - for the vmm ioctls and operations.
 	 * proc, exec - for forking and execing new vm's.
+	 * ps - for querying VM process memory usage.
 	 * sendfd - for sending send/recv fds to vm proc.
 	 * recvfd - for disks, interfaces and other fds.
 	 */
-	if (pledge("stdio vmm sendfd recvfd proc exec", NULL) == -1)
+	if (pledge("stdio vmm sendfd recvfd proc exec ps", NULL) == -1)
 		fatal("pledge");
 
 	signal_del(&ps->ps_evsigchld);
@@ -108,7 +111,6 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 	struct privsep		*ps = p->p_ps;
 	int			 res = 0, cmd = IMSG_NONE, verbose;
 	struct vmd_vm		*vm = NULL;
-	struct vm_terminate_params vtp;
 	struct vmop_id		 vid;
 	struct vmop_result	 vmr;
 	struct vmop_addr_result  var;
@@ -153,9 +155,6 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		break;
 	case IMSG_VMDOP_START_VM_END:
 		res = vmm_start_vm(imsg, &id, &vm_pid);
-		/* Check if the ID can be mapped correctly */
-		if (res == 0 && (id = vm_id2vmid(id, NULL)) == 0)
-			res = ENOENT;
 		cmd = IMSG_VMDOP_START_VM_RESPONSE;
 		break;
 	case IMSG_VMDOP_TERMINATE_VM_REQUEST:
@@ -171,10 +170,8 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 			res = ENOENT;
 		} else if ((vm = vm_getbyvmid(id)) != NULL) {
 			if (flags & VMOP_FORCE) {
-				vtp.vtp_vm_id = vm_vmid2id(vm->vm_vmid, vm);
 				vm->vm_state |= VM_STATE_SHUTDOWN;
-				(void)terminate_vm(&vtp);
-				res = 0;
+				res = terminate_vm(vm);
 			} else if (!(vm->vm_state & VM_STATE_SHUTDOWN)) {
 				log_debug("%s: sending shutdown request"
 				    " to vm %d", __func__, id);
@@ -199,7 +196,7 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 				 * Check to see if the VM process is still
 				 * active.  If not, return VMD_VM_STOP_INVALID.
 				 */
-				if (vm_vmid2id(vm->vm_vmid, vm) == 0) {
+				if (kill(vm->vm_pid, 0) == -1 && errno == ESRCH) {
 					log_debug("%s: no vm running anymore",
 					    __func__);
 					res = VMD_VM_STOP_INVALID;
@@ -213,7 +210,7 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		}
 		break;
 	case IMSG_VMDOP_GET_INFO_VM_REQUEST:
-		res = get_info_vm(ps, imsg, 0);
+		res = get_info_vm(ps, imsg);
 		cmd = IMSG_VMDOP_GET_INFO_VM_END_DATA;
 		break;
 	case IMSG_VMDOP_CONFIG:
@@ -274,9 +271,6 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		if (env->vmd_vmm_fd != -1)
 			fatalx("already received vmm fd");
 		env->vmd_vmm_fd = imsg_get_fd(imsg);
-
-		/* Get and terminate all running VMs */
-		get_info_vm(ps, NULL, 1);
 		break;
 	case IMSG_VMDOP_RECEIVE_PSP_FD:
 		if (env->vmd_psp_fd != -1)
@@ -327,11 +321,10 @@ void
 vmm_sighdlr(int sig, short event, void *arg)
 {
 	struct privsep *ps = arg;
-	int status, ret = 0;
+	int status, ret;
 	pid_t pid;
 	struct vmop_result vmr;
 	struct vmd_vm *vm;
-	struct vm_terminate_params vtp;
 
 	log_debug("%s: handling signal %d", __func__, sig);
 	switch (sig) {
@@ -340,6 +333,7 @@ vmm_sighdlr(int sig, short event, void *arg)
 			pid = waitpid(-1, &status, WNOHANG);
 			if (pid <= 0)
 				continue;
+			ret = 0;
 
 			if (WIFEXITED(status) || WIFSIGNALED(status)) {
 				vm = vm_getbypid(pid);
@@ -354,31 +348,28 @@ vmm_sighdlr(int sig, short event, void *arg)
 
 				if (WIFEXITED(status))
 					ret = WEXITSTATUS(status);
+				else if (WIFSIGNALED(status))
+					ret = EIO;
 
 				/* Don't reboot on pending shutdown */
 				if (ret == EAGAIN &&
 				    (vm->vm_state & VM_STATE_SHUTDOWN))
 					ret = 0;
 
-				/* XXX check this */
-				vtp.vtp_vm_id = vm->vm_vmmid;
-
-				if (terminate_vm(&vtp) == 0)
-					log_debug("%s: terminated vm %s"
-					    " (id %d)", __func__,
-					    vm->vm_params.vmc_name,
-					    vm->vm_vmid);
+				log_debug("%s: vm %s exited (id %d)",
+				    __func__, vm->vm_params.vmc_name,
+				    vm->vm_vmid);
 
 				memset(&vmr, 0, sizeof(vmr));
 				vmr.vmr_result = ret;
-				vmr.vmr_id = vm_id2vmid(vm->vm_vmmid, vm);
+				vmr.vmr_id = vm->vm_vmid;
 				if (proc_compose_imsg(ps, PROC_PARENT,
 				    IMSG_VMDOP_TERMINATE_VM_EVENT,
 				    vm->vm_peerid, -1, &vmr, sizeof(vmr)) == -1)
 					log_warnx("could not signal "
 					    "termination of VM %u to "
 					    "parent", vm->vm_vmid);
-
+				event_del(&vm->vm_timeout_ev);
 				vm_remove(vm, __func__);
 			} else
 				fatalx("unexpected cause of SIGCHLD");
@@ -397,14 +388,13 @@ vmm_sighdlr(int sig, short event, void *arg)
 void
 vmm_shutdown(void)
 {
-	struct vm_terminate_params vtp;
 	struct vmd_vm *vm, *vm_next;
 
 	TAILQ_FOREACH_SAFE(vm, env->vmd_vms, vm_entry, vm_next) {
-		vtp.vtp_vm_id = vm_vmid2id(vm->vm_vmid, vm);
-
 		/* XXX suspend or request graceful shutdown */
-		(void)terminate_vm(&vtp);
+		if (vm->vm_pid > 0)
+			kill(vm->vm_pid, SIGKILL);
+		event_del(&vm->vm_timeout_ev);
 		vm_remove(vm, __func__);
 	}
 }
@@ -514,24 +504,32 @@ vmm_dispatch_vm(int fd, short event, void *arg)
 	imsg_event_add(iev);
 }
 
-/*
- * terminate_vm
- *
- * Requests vmm(4) to terminate the VM whose ID is provided in the
- * supplied vm_terminate_params structure (vtp->vtp_vm_id)
- *
- * Parameters
- *  vtp: vm_terminate_params struct containing the ID of the VM to terminate
- *
- * Return values:
- *  0: success
- *  !0: ioctl to vmm(4) failed (eg, ENOENT if the supplied VM is not valid)
- */
 int
-terminate_vm(struct vm_terminate_params *vtp)
+terminate_vm(struct vmd_vm *vm)
 {
-	if (ioctl(env->vmd_vmm_fd, VMM_IOC_TERM, vtp) == -1)
+	struct timeval tv;
+
+	if (vm->vm_pid <= 0)
+		return (EINVAL);
+
+	/* Force the vm process out of its event loop. */
+	if (kill(vm->vm_pid, SIGTERM) == -1) {
+		log_warn("failed to signal termination to vm for pid %u",
+		    vm->vm_pid);
 		return (errno);
+	}
+
+	/* Give it 10 seconds to exit before trying to kill. */
+	timerclear(&tv);
+	tv.tv_sec = 10;
+	evtimer_del(&vm->vm_timeout_ev);
+	evtimer_set(&vm->vm_timeout_ev, vmm_vm_timeout, vm);
+
+	if (evtimer_add(&vm->vm_timeout_ev, &tv) == -1) {
+		log_warn("failed to schedule timeout for vm %u", vm->vm_vmid);
+		if (kill(vm->vm_pid, SIGKILL) == -1)
+			return (errno);
+	}
 
 	return (0);
 }
@@ -588,7 +586,7 @@ opentap(char *ifname)
  *
  * Parameters:
  *  imsg: The VM data structure that is including the VM create parameters.
- *  id: Returns the VM id as reported by the kernel and obtained from the VM.
+ *  id: Returns the vmd(8) VM identifier.
  *  pid: Returns the VM pid to the parent.
  *
  * Return values:
@@ -686,22 +684,19 @@ vmm_start_vm(struct imsg *imsg, uint32_t *id, pid_t *pid)
 			goto err;
 		}
 
-		/* Read back the kernel-generated vm id from the child */
-		sz = atomicio(read, fds[0], &vm->vm_vmmid,
-		    sizeof(vm->vm_vmmid));
-		if (sz != sizeof(vm->vm_vmmid)) {
-			log_debug("%s: failed to receive vm id from vm %s",
+		/* Read back the VM start status from the child. */
+		sz = atomicio(read, fds[0], &ret, sizeof(ret));
+		if (sz != sizeof(ret)) {
+			log_debug("%s: failed to receive vm start status from vm %s",
 			    __func__, vm->vm_params.vmc_name);
-			/* vmd could not allocate memory for the vm. */
-			ret = ENOMEM;
+			ret = EIO;
 			goto err;
 		}
 
-		/* Check for an invalid id. This indicates child failure. */
-		if (vm->vm_vmmid == 0)
+		if (ret != 0)
 			goto err;
 
-		*id = vm->vm_vmmid;
+		*id = vm->vm_vmid;
 		*pid = vm->vm_pid;
 
 		/* Wire up our pipe into the event handling. */
@@ -724,6 +719,8 @@ vmm_start_vm(struct imsg *imsg, uint32_t *id, pid_t *pid)
 				close(dev_null);
 		}
 
+		if (env->vmd_vmm_fd > 0)
+			fcntl(env->vmd_vmm_fd, F_SETFD, 0); /* /dev/vmm fd */
 		if (env->vmd_psp_fd > 0)
 			fcntl(env->vmd_psp_fd, F_SETFD, 0); /* psp device fd */
 
@@ -777,96 +774,70 @@ vmm_start_vm(struct imsg *imsg, uint32_t *id, pid_t *pid)
 /*
  * get_info_vm
  *
- * Returns a list of VMs known to vmm(4).
+ * Returns a list of running VMs known to this vmd(8) instance.
  *
  * Parameters:
  *  ps: the privsep context.
  *  imsg: the received imsg including the peer id.
- *  terminate: terminate the listed vm.
  *
  * Return values:
  *  0: success
- *  !0: failure (eg, ENOMEM, EIO or another error code from vmm(4) ioctl)
+ *  !0: failure (EIO or an error code from sysctl(2))
  */
 int
-get_info_vm(struct privsep *ps, struct imsg *imsg, int terminate)
+get_info_vm(struct privsep *ps, struct imsg *imsg)
 {
-	int ret;
-	size_t ct, i;
-	struct vm_info_params vip;
-	struct vm_info_result *info;
-	struct vm_terminate_params vtp;
+	struct kinfo_proc kp;
 	struct vmop_info_result vir;
+	struct vmd_vm *vm;
+	int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, 0,
+	    sizeof(kp), 1 };
+	size_t len, pagesize;
 	uint32_t peer_id;
 
-	/*
-	 * We issue the VMM_IOC_INFO ioctl twice, once with an input
-	 * buffer size of 0, which results in vmm(4) returning the
-	 * number of bytes required back to us in vip.vip_size,
-	 * and then we call it again after malloc'ing the required
-	 * number of bytes.
-	 *
-	 * It is possible that we could fail a second time (e.g. if
-	 * another VM was created in the instant between the two
-	 * ioctls, but in that case the caller can just try again
-	 * as vmm(4) will return a zero-sized list in that case.
-	 */
-	vip.vip_size = 0;
-	info = NULL;
-	ret = 0;
-	memset(&vir, 0, sizeof(vir));
-
-	/* First ioctl to see how many bytes needed (vip.vip_size) */
-	if (ioctl(env->vmd_vmm_fd, VMM_IOC_INFO, &vip) == -1)
-		return (errno);
-
-	if (vip.vip_info_ct != 0)
-		return (EIO);
-
-	info = malloc(vip.vip_size);
-	if (info == NULL)
-		return (ENOMEM);
-
-	/* Second ioctl to get the actual list */
-	vip.vip_info = info;
-	if (ioctl(env->vmd_vmm_fd, VMM_IOC_INFO, &vip) == -1) {
-		ret = errno;
-		free(info);
-		return (ret);
-	}
-
-	/* Return info */
-	ct = vip.vip_size / sizeof(struct vm_info_result);
-	for (i = 0; i < ct; i++) {
-		if (terminate) {
-			vtp.vtp_vm_id = info[i].vir_id;
-			if ((ret = terminate_vm(&vtp)) != 0)
-				break;
-			log_debug("%s: terminated vm %s (id %d)", __func__,
-			    info[i].vir_name, info[i].vir_id);
+	peer_id = imsg_get_id(imsg);
+	pagesize = getpagesize();
+	TAILQ_FOREACH(vm, env->vmd_vms, vm_entry) {
+		if (vm->vm_pid <= 0)
 			continue;
-		}
 
-		/* XXX */
-		vir.vir_memory_size = info[i].vir_memory_size;
-		vir.vir_used_size = info[i].vir_used_size;
-		vir.vir_ncpus = info[i].vir_ncpus;
-		memcpy(vir.vir_vcpu_state, info[i].vir_vcpu_state,
-		    sizeof(vir.vir_vcpu_state));
-		vir.vir_creator_pid = info[i].vir_creator_pid;
-		vir.vir_id = vm_id2vmid(info[i].vir_id, NULL);
-		memcpy(vir.vir_name, info[i].vir_name, sizeof(vir.vir_name));
+		mib[3] = vm->vm_pid;
+		len = sizeof(kp);
+		if (sysctl(mib, nitems(mib), &kp, &len, NULL, 0) == -1)
+			return (errno);
+		if (len == 0)
+			continue;
+		if (len != sizeof(kp))
+			return (EIO);
 
-		peer_id = imsg_get_id(imsg);
+		memset(&vir, 0, sizeof(vir));
+		vir.vir_memory_size = vm->vm_params.vmc_memranges[0].vmr_size;
+		/* RSS includes the VM process itself as well as guest memory. */
+		vir.vir_used_size = (size_t)kp.p_vm_rssize * pagesize;
+		vir.vir_ncpus = vm->vm_params.vmc_ncpus;
+		vir.vir_creator_pid = vm->vm_pid;
+		vir.vir_id = vm->vm_vmid;
+		strlcpy(vir.vir_name, vm->vm_params.vmc_name, sizeof(vir.vir_name));
 
 		if (proc_compose_imsg(ps, PROC_PARENT,
 		    IMSG_VMDOP_GET_INFO_VM_DATA, peer_id, -1,
-		    &vir, sizeof(vir)) == -1) {
-			ret = EIO;
-			break;
-		}
+		    &vir, sizeof(vir)) == -1)
+			return (EIO);
 	}
-	free(info);
 
-	return (ret);
+	return (0);
+}
+
+void
+vmm_vm_timeout(int fd, short event, void *arg)
+{
+	struct vmd_vm *vm = (struct vmd_vm *)arg;
+
+	if (vm->vm_pid <= 0)
+		fatalx("%s: invalid pid %u", __func__, vm->vm_pid);
+
+	if (kill(vm->vm_pid, SIGKILL) == -1)
+		log_warn("failed to kill vm %u", vm->vm_vmid);
+	else
+		log_warn("force killed vm %u", vm->vm_vmid);
 }

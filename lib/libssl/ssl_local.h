@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_local.h,v 1.43 2026/08/21 17:15:22 tb Exp $ */
+/* $OpenBSD: ssl_local.h,v 1.45 2026/09/16 00:24:54 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -162,6 +162,7 @@
 
 #include "bytestring.h"
 #include "tls_content.h"
+#include "tls12_internal.h"
 #include "tls13_internal.h"
 
 __BEGIN_HIDDEN_DECLS
@@ -644,7 +645,7 @@ int tls12_record_layer_change_read_cipher_state(struct tls12_record_layer *rl,
 int tls12_record_layer_change_write_cipher_state(struct tls12_record_layer *rl,
     CBS *mac_key, CBS *key, CBS *iv);
 int tls12_record_layer_open_record(struct tls12_record_layer *rl,
-    uint8_t *buf, size_t buf_len, struct tls_content *out);
+    const uint8_t *buf, size_t buf_len, struct tls_content *out);
 int tls12_record_layer_seal_record(struct tls12_record_layer *rl,
     uint8_t content_type, const uint8_t *content, size_t content_len,
     CBB *out);
@@ -1087,6 +1088,8 @@ typedef struct ssl3_state_st {
 	SSL3_BUFFER_INTERNAL wbuf;	/* write IO goes into here */
 
 	SSL3_RECORD_INTERNAL rrec;	/* each decoded record goes in here */
+
+	struct tls12_record *tls_rrec;
 
 	struct tls_content *rcontent;	/* Content from opened TLS records. */
 

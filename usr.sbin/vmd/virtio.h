@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio.h,v 1.63 2026/04/17 21:08:42 dv Exp $	*/
+/*	$OpenBSD: virtio.h,v 1.66 2026/09/19 17:21:52 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -139,6 +139,8 @@ struct viodev_msg {
 	uint8_t io_sz;		/* IO instruction size */
 	uint8_t vcpu;		/* VCPU id */
 	uint8_t irq;		/* IRQ number */
+	uint16_t vq_idx;	/* Virtqueue, or VIODEV_QUEUE_CONFIG */
+#define VIODEV_QUEUE_CONFIG	UINT16_MAX
 
 	int8_t state;		/* Interrupt state toggle (if any) */
 #define INTR_STATE_ASSERT	 1
@@ -177,11 +179,15 @@ struct virtio_backing {
  * There is one virtio_vq_info per virtq.
  */
 struct virtio_vq_info {
-	/* Guest physical address of virtq */
+	/* Guest physical addresses of the split virtqueue areas. */
 	uint64_t q_gpa;
+	uint64_t q_avail_gpa;
+	uint64_t q_used_gpa;
 
-	/* Host virtual address of virtq */
+	/* Host virtual addresses of the split virtqueue areas. */
 	void *q_hva;
+	void *q_avail_hva;
+	void *q_used_hva;
 
 	/* Queue size: number of queue entries in virtq */
 	uint32_t qs;
@@ -191,13 +197,13 @@ struct virtio_vq_info {
 
 	/*
 	 * The offset of the 'available' ring within the virtq located at
-	 * guest physical address qa above
+	 * guest physical address q_gpa above (legacy layout only)
 	 */
 	uint32_t vq_availoffset;
 
 	/*
 	 * The offset of the 'used' ring within the virtq located at guest
-	 * physical address qa above
+	 * physical address q_gpa above (legacy layout only)
 	 */
 	uint32_t vq_usedoffset;
 
@@ -212,6 +218,9 @@ struct virtio_vq_info {
 	 * driver notified to the host.
 	 */
 	uint16_t notified_avail;
+
+	/* MSI-X table entry selected by the guest for this virtqueue. */
+	uint16_t q_msix_vector;
 
 	uint8_t vq_enabled;
 };
@@ -341,10 +350,10 @@ struct virtio_dev {
 		/* Multi-process enabled. */
 		struct vioblk_dev vioblk;
 		struct vionet_dev vionet;
+		struct vioscsi_dev vioscsi;
 
 		/* In-process only. */
 		struct vmmci_dev vmmci;
-		struct vioscsi_dev vioscsi;
 	};
 
 	struct virtio_io_cfg		cfg;		/* Virtio 0.9 */
@@ -369,8 +378,8 @@ struct virtio_dev {
 	int sync_fd;				/* fd for synchronous channel */
 	int async_fd;				/* fd for async channel */
 
+	int		vm_fd;			/* vmm(4) vm file descriptor [r] */
 	uint32_t	vm_id;			/* vmd(8) vm identifier [r] */
-	uint32_t	vmm_id;			/* vmm(4) vm identifier [r] */
 	pid_t		dev_pid;		/* pid of emulator process */
 	char		dev_type;		/* device type (as char) */
 	SLIST_ENTRY(virtio_dev) dev_next;
@@ -390,7 +399,7 @@ uint32_t vring_size(uint32_t);
 int vm_device_pipe(struct virtio_dev *, void (*)(int, short, void *),
     struct event_base *);
 int virtio_pci_io(int, uint16_t, uint32_t *, uint8_t *, void *, uint8_t);
-void virtio_assert_irq(struct virtio_dev *, int);
+void virtio_assert_irq(struct virtio_dev *, int, uint16_t);
 void virtio_deassert_irq(struct virtio_dev *, int);
 uint32_t virtio_io_cfg(struct virtio_dev *, int, uint8_t, uint32_t, uint8_t);
 

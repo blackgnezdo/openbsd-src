@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.c,v 1.182 2026/09/08 19:46:18 dv Exp $	*/
+/*	$OpenBSD: vmd.c,v 1.185 2026/09/19 17:21:52 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <event.h>
 #include <fcntl.h>
 #include <pwd.h>
@@ -127,11 +128,21 @@ vmd_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 					goto start_failed;
 				}
 
-				/* If not running, are our flags ok? */
-				if (vmc.vmc_flags &&
-				    vmc.vmc_flags != VMOP_CREATE_KERNEL) {
+				/* If not running, are our overrides valid? */
+				if (vmc.vmc_flags & ~(VMOP_CREATE_KERNEL |
+				    VMOP_CREATE_CPU)) {
 					cmd = IMSG_VMDOP_START_VM_RESPONSE;
 					goto start_failed;
+				}
+
+				if (vmc.vmc_flags & VMOP_CREATE_CPU) {
+					if (vmc.vmc_ncpus == 0 ||
+					    vmc.vmc_ncpus > VMM_MAX_VCPUS_PER_VM) {
+						res = EINVAL;
+						cmd = IMSG_VMDOP_START_VM_RESPONSE;
+						goto start_failed;
+					}
+					vm->vm_params.vmc_ncpus = vmc.vmc_ncpus;
 				}
 
 				close_fd(vm->vm_kernel);
@@ -145,8 +156,11 @@ vmd_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 		/* Try to start the launch of the VM. */
 		res = config_setvm(ps, vm, peer_id,
 		    vm->vm_params.vmc_owner.uid);
-		if (res)
+		if (res) {
+			if (vm->vm_from_config)
+				vm->vm_params.vmc_ncpus = vm->vm_ncpus_config;
 			cmd = IMSG_VMDOP_START_VM_RESPONSE;
+		}
 		break;
 	start_failed:
 		close_fd(kernfd);
@@ -243,7 +257,7 @@ vmd_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 			} else {
 				vid.vid_id = vm->vm_vmid;
 			}
-		} else if ((vm = vm_getbyid(vid.vid_id)) == NULL) {
+		} else if ((vm = vm_getbyvmid(vid.vid_id)) == NULL) {
 			res = ENOENT;
 			cmd = type == IMSG_VMDOP_PAUSE_VM
 			    ? IMSG_VMDOP_PAUSE_VM_RESPONSE
@@ -328,7 +342,6 @@ vmd_dispatch_vmm(int fd, struct privsep_proc *p, struct imsg *imsg)
 		if ((vm = vm_getbyvmid(vmr.vmr_id)) == NULL)
 			break;
 		vm->vm_pid = vmr.vmr_pid;
-		vm->vm_vmmid = vmr.vmr_id;
 
 		/*
 		 * If the peerid is not -1, forward the response back to the
@@ -608,13 +621,13 @@ main(int argc, char **argv)
 			break;
 		case 'V':
 			vm_launch = VMD_LAUNCH_VM;
-			vm_fd = strtonum(optarg, 0, 128, &errp);
+			vm_fd = strtonum(optarg, 0, INT_MAX, &errp);
 			if (errp)
 				fatalx("invalid vm fd");
 			break;
 		case 'X':
 			vm_launch = VMD_LAUNCH_DEV;
-			vm_fd = strtonum(optarg, 0, 128, &errp);
+			vm_fd = strtonum(optarg, 0, INT_MAX, &errp);
 			if (errp)
 				fatalx("invalid device fd");
 			break;
@@ -629,13 +642,13 @@ main(int argc, char **argv)
 			}
 			break;
 		case 'i':
-			vmm_fd = strtonum(optarg, 0, 128, &errp);
+			vmm_fd = strtonum(optarg, 0, INT_MAX, &errp);
 			if (errp)
 				fatalx("invalid vmm fd");
 			break;
 		case 'j':
 			/* -1 means no PSP available */
-			psp_fd = strtonum(optarg, -1, 128, &errp);
+			psp_fd = strtonum(optarg, -1, INT_MAX, &errp);
 			if (errp)
 				fatalx("invalid psp fd");
 			break;
@@ -966,42 +979,6 @@ vm_getbyvmid(uint32_t vmid)
 	return (NULL);
 }
 
-/* Find a vm in the list by it's vmm(4) id. */
-struct vmd_vm *
-vm_getbyid(uint32_t id)
-{
-	struct vmd_vm	*vm;
-
-	if (id == 0)
-		return (NULL);
-	TAILQ_FOREACH(vm, env->vmd_vms, vm_entry) {
-		if (vm->vm_vmmid == id)	// XXX check this
-			return (vm);
-	}
-
-	return (NULL);
-}
-
-/* Translate a kernel/vmm(4) vm id to a vmd(8) id. */
-uint32_t
-vm_id2vmid(uint32_t id, struct vmd_vm *vm)
-{
-	if (vm == NULL && (vm = vm_getbyid(id)) == NULL)
-		return (0);
-	DPRINTF("%s: vmm id %u is vmid %u", __func__,
-	    id, vm->vm_vmid);
-	return (vm->vm_vmid);
-}
-
-uint32_t
-vm_vmid2id(uint32_t vmid, struct vmd_vm *vm)
-{
-	if (vm == NULL && (vm = vm_getbyvmid(vmid)) == NULL)
-		return (0);
-	DPRINTF("%s: vmid %u is vmm id %u", __func__, vmid, vm->vm_vmmid);
-	return (vm->vm_vmmid);
-}
-
 struct vmd_vm *
 vm_getbyname(const char *name)
 {
@@ -1044,6 +1021,8 @@ vm_stop(struct vmd_vm *vm, int keeptty, const char *caller)
 	    vm->vm_vmid, keeptty ? ", keeping tty open" : "");
 
 	vm->vm_state &= ~(VM_STATE_RUNNING | VM_STATE_SHUTDOWN);
+	/* Command-line CPU counts override one boot, not vm.conf. */
+	vm->vm_params.vmc_ncpus = vm->vm_ncpus_config;
 
 	if (vm->vm_iev.ibuf.fd != -1) {
 		event_del(&vm->vm_iev.ev);
@@ -1197,8 +1176,8 @@ vm_register(struct privsep *ps, struct vmop_create_params *vmc,
 	} else if (vmc->vmc_nnics > VM_MAX_NICS_PER_VM) {
 		log_warnx("invalid number of interfaces");
 		goto fail;
-	} else if (vmc->vmc_kernel == -1 && vmc->vmc_ndisks == 0
-	    && strlen(vmc->vmc_cdrom) == 0) {
+	} else if ((vmc->vmc_flags & VMOP_CREATE_KERNEL) == 0 &&
+	    vmc->vmc_ndisks == 0 && strlen(vmc->vmc_cdrom) == 0) {
 		log_warnx("no kernel or disk/cdrom specified");
 		goto fail;
 	} else if (strlen(vmc->vmc_name) == 0) {
@@ -1223,8 +1202,10 @@ vm_register(struct privsep *ps, struct vmop_create_params *vmc,
 
 	memcpy(&vm->vm_params, vmc, sizeof(vm->vm_params));
 	vmc = &vm->vm_params;
+	vm->vm_ncpus_config = vmc->vmc_ncpus;
 	vm->vm_pid = -1;
 	vm->vm_tty = -1;
+	vm->vm_fd = -1;
 	vm->vm_kernel = -1;
 	vm->vm_state &= ~VM_STATE_PAUSED;
 
@@ -1400,7 +1381,7 @@ vm_instance(struct privsep *ps, struct vmd_vm **vm_parent,
 
 	/* kernel */
 	if (vmc->vmc_kernel > -1 || ((*vm_parent)->vm_kernel_path != NULL &&
-		strnlen((*vm_parent)->vm_kernel_path, PATH_MAX) < PATH_MAX)) {
+	    strnlen((*vm_parent)->vm_kernel_path, PATH_MAX) < PATH_MAX)) {
 		if (vm_checkinsflag(vmc_parent, VMOP_CREATE_KERNEL, uid) != 0) {
 			log_warnx("vm \"%s\" no permission to set boot image",
 			    name);

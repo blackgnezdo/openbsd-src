@@ -1,4 +1,4 @@
-/* $OpenBSD: dtls_local.h,v 1.9 2026/07/16 14:37:21 jsing Exp $ */
+/* $OpenBSD: dtls_local.h,v 1.12 2026/09/19 16:06:42 jsing Exp $ */
 /*
  * DTLS implementation written by Nagendra Modadugu
  * (nagendra@cs.stanford.edu) for the OpenSSL project 2005.
@@ -101,11 +101,6 @@ struct dtls1_timeout_st {
 
 struct _pqueue;
 
-typedef struct record_pqueue_st {
-	unsigned short epoch;
-	struct _pqueue *q;
-} record_pqueue;
-
 typedef struct rcontent_pqueue_st {
 	unsigned short epoch;
 	struct _pqueue *q;
@@ -117,20 +112,13 @@ typedef struct hm_fragment_st {
 	unsigned char *reassembly;
 } hm_fragment;
 
-typedef struct dtls1_record_data_internal_st {
-	unsigned char *packet;
-	unsigned int packet_length;
-	SSL3_BUFFER_INTERNAL rbuf;
-	SSL3_RECORD_INTERNAL rrec;
-} DTLS1_RECORD_DATA_INTERNAL;
-
 typedef struct dtls1_rcontent_data_internal_st {
 	struct tls_content *rcontent;
 } DTLS1_RCONTENT_DATA_INTERNAL;
 
 struct dtls1_state_st {
-	/* Buffered (sent) handshake records */
-	struct _pqueue *sent_messages;
+	/* Current flight of messages. */
+	struct dtls12_buffered_msg *flight;
 
 	/* Indicates when the last handshake msg or heartbeat sent will timeout */
 	struct timeval next_timeout;
@@ -155,9 +143,6 @@ struct dtls1_state_st {
 
 	unsigned short handshake_read_seq;
 
-	/* Received handshake records (unprocessed) */
-	record_pqueue unprocessed_rcds;
-
 	/* Buffered handshake messages */
 	struct _pqueue *buffered_messages;
 
@@ -173,7 +158,6 @@ struct dtls1_state_st {
 
 	unsigned int mtu; /* max DTLS packet size */
 
-	struct hm_header_st w_msg_hdr;
 	struct hm_header_st r_msg_hdr;
 
 	struct dtls1_timeout_st timeout;
@@ -197,10 +181,8 @@ int dtls1_write_app_data_bytes(SSL *s, int type, const void *buf, int len);
 int dtls1_write_bytes(SSL *s, int type, const void *buf, int len);
 
 int dtls1_read_failed(SSL *s, int code);
-int dtls1_buffer_message(SSL *s, int ccs);
-int dtls1_get_queue_priority(unsigned short seq, int is_ccs);
 int dtls1_retransmit_buffered_messages(SSL *s);
-void dtls1_clear_record_buffer(SSL *s);
+void dtls1_clear_flight(SSL *s);
 int dtls1_get_message_header(CBS *header, struct hm_header_st *msg_hdr);
 void dtls1_reset_read_seq_numbers(SSL *s);
 struct timeval* dtls1_get_timeout(SSL *s, struct timeval* timeleft);

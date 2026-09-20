@@ -1,4 +1,4 @@
-/* $OpenBSD: dtls12_internal.h,v 1.1 2026/05/16 08:20:41 jsing Exp $ */
+/* $OpenBSD: dtls12_internal.h,v 1.3 2026/09/17 22:58:23 jsing Exp $ */
 /*
  * Copyright (c) 2026 Joel Sing <jsing@openbsd.org>
  *
@@ -25,10 +25,24 @@
 
 __BEGIN_HIDDEN_DECLS
 
+/*
+ * DTLS flight of buffered messages.
+ */
+struct dtls12_buffered_msg {
+	struct dtls12_buffered_msg *next;
+	uint16_t record_type;
+	uint16_t epoch;
+	struct dtls12_handshake_msg *hs_msg;
+};
+
+/*
+ * DTLS handshake messages.
+ */
 struct dtls12_handshake_msg;
 
 struct dtls12_handshake_msg *dtls12_handshake_msg_new(void);
 void dtls12_handshake_msg_free(struct dtls12_handshake_msg *msg);
+void dtls12_handshake_msg_up_ref(struct dtls12_handshake_msg *msg);
 void dtls12_handshake_msg_data(struct dtls12_handshake_msg *msg, CBS *cbs);
 uint8_t dtls12_handshake_msg_type(struct dtls12_handshake_msg *msg);
 int dtls12_handshake_msg_content(struct dtls12_handshake_msg *msg, CBS *cbs);

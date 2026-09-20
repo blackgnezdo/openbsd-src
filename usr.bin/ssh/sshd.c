@@ -1,4 +1,4 @@
-/* $OpenBSD: sshd.c,v 1.632 2026/09/15 07:08:09 djm Exp $ */
+/* $OpenBSD: sshd.c,v 1.635 2026/09/16 07:47:29 jsg Exp $ */
 /*
  * Copyright (c) 2000, 2001, 2002 Markus Friedl.  All rights reserved.
  * Copyright (c) 2002 Niels Provos.  All rights reserved.
@@ -599,7 +599,7 @@ drop_connection(int sock, int startups, int notify_pipe)
 		if (!should_drop_connection(startups) &&
 		    srclimit_check_allow(sock, notify_pipe) == 1)
 			return 0;
-		reason = "Maxstartups";
+		reason = "MaxStartups";
 		rl = &ratelimit_maxstartups;
 	}
 
@@ -964,6 +964,12 @@ server_accept_loop(int *sock_in, int *sock_out, int *newsock, int *config_s,
 				lameduck = 1;
 			}
 			if (listening <= 0) {
+				/*
+				 * Leave termination signals blocked, so
+				 * they don't get lost across a restart.
+				 */
+				sigaddset(&osigset, SIGTERM);
+				sigaddset(&osigset, SIGQUIT);
 				sigprocmask(SIG_SETMASK, &osigset, NULL);
 				sighup_restart();
 			}

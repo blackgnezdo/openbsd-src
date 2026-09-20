@@ -1,4 +1,4 @@
-/* $OpenBSD: misc.c,v 1.218 2026/09/15 08:31:46 djm Exp $ */
+/* $OpenBSD: misc.c,v 1.221 2026/09/16 17:31:27 dtucker Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  * Copyright (c) 2005-2020 Damien Miller.  All rights reserved.
@@ -228,6 +228,19 @@ set_reuseaddr(int fd)
 
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1) {
 		error("setsockopt SO_REUSEADDR fd %d: %s", fd, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+/* Set TCP keepalives */
+int
+set_keepalive(int fd)
+{
+	int on = 1;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on)) == -1) {
+		error("setsockopt SO_KEEPALIVE fd %d: %s", fd, strerror(errno));
 		return -1;
 	}
 	return 0;
@@ -2522,10 +2535,10 @@ format_absolute_time(uint64_t t, char *buf, size_t len)
  * Caller must free *typep.
  */
 int
-parse_pattern_interval(const char *s, char **typep, int *secsp)
+parse_pattern_interval(const char *s, char **typep, double *secsp)
 {
 	char *cp, *sdup;
-	int secs;
+	double secs;
 
 	if (typep != NULL)
 		*typep = NULL;
@@ -2540,7 +2553,7 @@ parse_pattern_interval(const char *s, char **typep, int *secsp)
 		return -1;
 	}
 	*cp++ = '\0';
-	if ((secs = convtime(cp)) < 0) {
+	if ((secs = convtime_double(cp)) < 0.0) {
 		free(sdup);
 		return -1;
 	}
@@ -2972,6 +2985,22 @@ ptimeout_deadline_ms(struct timespec *pt, long ms)
 	ptimeout_deadline_tsp(pt, &p);
 }
 
+/* Specify a poll/ppoll deadline of at most 'sec' seconds (double) */
+void
+ptimeout_deadline_sec_double(struct timespec *pt, double sec)
+{
+	struct timespec t;
+
+	memset(&t, 0, sizeof(t));
+	if ((int64_t)sec >= SSH_TIME_T_MAX)
+		t.tv_sec = SSH_TIME_T_MAX;
+	else if (sec > 0) {
+		t.tv_sec = sec;
+		t.tv_nsec = (sec - (double)t.tv_sec) * 1000000000.0;
+	}
+	ptimeout_deadline_tsp(pt, &t);
+}
+
 /* Specify a poll/ppoll deadline at wall clock monotime 'when' (timespec) */
 void
 ptimeout_deadline_monotime_tsp(struct timespec *pt, struct timespec *when)
@@ -2988,6 +3017,13 @@ ptimeout_deadline_monotime_tsp(struct timespec *pt, struct timespec *when)
 		timespecsub(when, &now, &t);
 		ptimeout_deadline_tsp(pt, &t);
 	}
+}
+
+/* Specify a poll/ppoll deadline at wall clock monotime 'when' (double) */
+void
+ptimeout_deadline_monotime_double(struct timespec *pt, double when)
+{
+	ptimeout_deadline_sec_double(pt, when - monotime_double());
 }
 
 /* Specify a poll/ppoll deadline at wall clock monotime 'when' */

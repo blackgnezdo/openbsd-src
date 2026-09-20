@@ -1,4 +1,4 @@
-/*	$OpenBSD: x86_vm.c,v 1.17 2026/08/30 23:23:18 jsg Exp $	*/
+/*	$OpenBSD: x86_vm.c,v 1.25 2026/09/19 17:21:52 dv Exp $	*/
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -15,13 +15,16 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include <dev/ic/i8042reg.h>
 #include <dev/ic/i8253reg.h>
 #include <dev/isa/isareg.h>
 
 #include <machine/pte.h>
+#include <machine/psl.h>
 #include <machine/specialreg.h>
 #include <machine/vmmvar.h>
 
@@ -31,27 +34,35 @@
 
 #include <zlib.h>
 
+#include "acpi.h"
 #include "atomicio.h"
 #include "fw_cfg.h"
+#include "i82093aa.h"
 #include "i8253.h"
 #include "i8259.h"
+#include "lapic.h"
 #include "loadfile.h"
 #include "mc146818.h"
+#include "mmio.h"
 #include "ns8250.h"
 #include "pci.h"
 #include "virtio.h"
+#include "x86_mmio.h"
+#include "x86_vm.h"
 
 typedef uint8_t (*io_fn_t)(struct vm_run_params *);
 
 #define LOWMEM_KB	576
 #define MAX_PORTS	65536
+#define PIIX_RESET_PORT	0xcf9
+#define PIIX_RESET_FULL	0x06
 
 io_fn_t	ioports_map[MAX_PORTS];
 
-int	 translate_gva(struct vm_exit*, uint64_t, uint64_t *, int);
-
 static int	loadfile_bios(gzFile, off_t, struct vcpu_reg_state *);
+static int	vcpu_exit_reset(struct vm_run_params *);
 static int	vcpu_exit_eptviolation(struct vm_run_params *);
+static int	vcpu_exit_x2apic(struct vm_run_params *);
 static void	vcpu_exit_inout(struct vm_run_params *);
 
 extern struct vmd_vm	*current_vm;
@@ -143,6 +154,29 @@ static const struct vcpu_reg_state vcpu_init_flat16 = {
 	.vrs_msrs[VCPU_REGS_KGSBASE] = 0ULL,
 	.vrs_crs[VCPU_REGS_XCR0] = XFEATURE_X87
 };
+
+/*
+ * Construct an inert real-mode register state for an application processor.
+ * The AP remains parked in userspace after creation or INIT, so this state is
+ * not executed; SIPI replaces its CS selector/base and RIP before it runs
+ */
+void
+vcpu_init_ap(struct vcpu_reg_state *vrs)
+{
+	memcpy(vrs, &vcpu_init_flat16, sizeof(*vrs));
+	vrs->vrs_gprs[VCPU_REGS_RIP] = 0;
+	vrs->vrs_sregs[VCPU_REGS_CS].vsi_sel = 0;
+	vrs->vrs_sregs[VCPU_REGS_CS].vsi_base = 0;
+}
+
+/* Construct the real-mode state selected by an xAPIC startup IPI */
+void
+vcpu_init_sipi(struct vcpu_reg_state *vrs, uint8_t vector)
+{
+	vcpu_init_ap(vrs);
+	vrs->vrs_sregs[VCPU_REGS_CS].vsi_sel = (uint16_t)vector << 8;
+	vrs->vrs_sregs[VCPU_REGS_CS].vsi_base = (uint64_t)vector << 12;
+}
 
 /*
  * create_memory_map
@@ -368,7 +402,7 @@ init_emulated_hw(struct vmd_vm *vm, int child_cdrom,
 	memset(&ioports_map, 0, sizeof(io_fn_t) * MAX_PORTS);
 
 	/* Init i8253 PIT */
-	i8253_init(vm->vm_vmmid);
+	i8253_init(vm->vm_fd);
 	ioports_map[TIMER_CTRL] = vcpu_exit_i8253;
 	ioports_map[TIMER_BASE + TIMER_CNTR0] = vcpu_exit_i8253;
 	ioports_map[TIMER_BASE + TIMER_CNTR1] = vcpu_exit_i8253;
@@ -376,7 +410,7 @@ init_emulated_hw(struct vmd_vm *vm, int child_cdrom,
 	ioports_map[PCKBC_AUX] = vcpu_exit_i8253_misc;
 
 	/* Init mc146818 RTC */
-	mc146818_init(vm->vm_vmmid, memlo, memhi);
+	mc146818_init(vm->vm_fd, memlo, memhi);
 	ioports_map[IO_RTC] = vcpu_exit_mc146818;
 	ioports_map[IO_RTC + 1] = vcpu_exit_mc146818;
 
@@ -390,7 +424,7 @@ init_emulated_hw(struct vmd_vm *vm, int child_cdrom,
 	ioports_map[ELCR1] = vcpu_exit_elcr;
 
 	/* Init ns8250 UART */
-	ns8250_init(con_fd, vm->vm_vmmid);
+	ns8250_init(con_fd, vm->vm_fd);
 	for (i = COM1_DATA; i <= COM1_SCR; i++)
 		ioports_map[i] = vcpu_exit_com;
 
@@ -404,6 +438,26 @@ init_emulated_hw(struct vmd_vm *vm, int child_cdrom,
 	ioports_map[PCI_MODE1_DATA_REG + 2] = vcpu_exit_pci;
 	ioports_map[PCI_MODE1_DATA_REG + 3] = vcpu_exit_pci;
 	pci_init();
+
+	mmio_init();
+	if (mmio_dev_add(PCI_MMIO_BAR_BASE, PCI_MMIO_BAR_END,
+	    pci_handle_mmio) != 0)
+		fatalx("%s: cannot register PCI MMIO window", __func__);
+	i82093aa_init(vmc->vmc_ncpus);
+	for (i = 0; i < vmc->vmc_ncpus; i++)
+		lapic_init(i);
+
+	acpi_pm1_init();
+	for (i = VMD_PM1A_EVT_BASE;
+	    i < VMD_PM1A_EVT_BASE + VMD_PM1A_EVT_LEN; i++)
+		ioports_map[i] = vcpu_exit_acpi_pm1;
+	for (i = VMD_PM1A_CNT_BASE;
+	    i < VMD_PM1A_CNT_BASE + VMD_PM1A_CNT_LEN; i++)
+		ioports_map[i] = vcpu_exit_acpi_pm1;
+	for (i = VMD_PM_TMR_BASE;
+	    i < VMD_PM_TMR_BASE + VMD_PM_TMR_LEN; i++)
+		ioports_map[i] = vcpu_exit_acpi_pm_timer;
+	acpi_init(vmc->vmc_ncpus);
 
 	/* Initialize virtio devices */
 	if (virtio_init(current_vm, child_cdrom, child_disks, child_taps))
@@ -438,6 +492,31 @@ unpause_vm_md(struct vmd_vm *vm)
 	mc146818_start();
 	ns8250_start();
 	virtio_start(vm);
+}
+
+/*
+ * Recognize the conventional PC reset ports used by firmware and operating
+ * systems. The caller turns a matching request into the same EAGAIN restart
+ * path used for a guest triple fault.
+ */
+static int
+vcpu_exit_reset(struct vm_run_params *vrp)
+{
+	struct vm_exit_inout *vei = &vrp->vrp_exit->vei;
+	uint8_t data;
+
+	if (vei->vei_dir != VEI_DIR_OUT || vei->vei_rep || vei->vei_string ||
+	    vei->vei_size != 1)
+		return (0);
+
+	data = vei->vei_data;
+	if (vei->vei_port == IO_KBD + KBCMDP && data == KBC_PULSE0)
+		return (1);
+	if (vei->vei_port == PIIX_RESET_PORT &&
+	    (data & PIIX_RESET_FULL) == PIIX_RESET_FULL)
+		return (1);
+
+	return (0);
 }
 
 /*
@@ -482,7 +561,17 @@ vcpu_exit_inout(struct vm_run_params *vrp)
 	vei->vrs.vrs_gprs[VCPU_REGS_RIP] += vei->vei.vei_insn_len;
 
 	if (intr != 0xFF)
-		vcpu_assert_irq(vrp->vrp_vm_id, vrp->vrp_vcpu_id, intr);
+		vcpu_assert_irq(current_vm->vm_fd, vrp->vrp_vcpu_id, intr);
+}
+static int
+vcpu_exit_x2apic(struct vm_run_params *vrp)
+{
+	struct vm_exit_x2apic *vex = &vrp->vrp_exit->vex;
+	int dir;
+
+	dir = vex->vex_write ? MMIO_DIR_WRITE : MMIO_DIR_READ;
+	return (lapic_x2apic(vrp->vrp_vcpu_id, dir, vex->vex_msr,
+	    &vex->vex_data));
 }
 
 /*
@@ -531,13 +620,21 @@ vcpu_exit(struct vm_run_params *vrp)
 		if (ret)
 			return (ret);
 		break;
+	case VM_EXIT_X2APIC:
+		ret = vcpu_exit_x2apic(vrp);
+		if (ret)
+			return (ret);
+		break;
 	case VMX_EXIT_IO:
 	case SVM_VMEXIT_IOIO:
+		if (vcpu_exit_reset(vrp))
+			return (EAGAIN);
 		vcpu_exit_inout(vrp);
 		break;
 	case VMX_EXIT_HLT:
 	case SVM_VMEXIT_HLT:
-		vcpu_halt(vrp->vrp_vcpu_id);
+		vcpu_halt(vrp->vrp_vcpu_id,
+		    (vrp->vrp_exit->vrs.vrs_gprs[VCPU_REGS_RFLAGS] & PSL_I) != 0);
 		break;
 	case VMX_EXIT_TRIPLE_FAULT:
 	case SVM_VMEXIT_SHUTDOWN:
@@ -567,16 +664,13 @@ vcpu_exit_eptviolation(struct vm_run_params *vrp)
 {
 	struct vm_exit *ve = vrp->vrp_exit;
 	int ret = 0;
-#if MMIO_NOTYET
 	struct x86_insn insn;
 	uint64_t va, pa;
 	size_t len = 15;		/* Max instruction length in x86. */
-#endif /* MMIO_NOTYET */
 	switch (ve->vee.vee_fault_type) {
 	case VEE_FAULT_HANDLED:
 		break;
 
-#if MMIO_NOTYET
 	case VEE_FAULT_MMIO_ASSIST:
 		/* Intel VMX might give us the length of the instruction. */
 		if (ve->vee.vee_insn_info & VEE_LEN_VALID)
@@ -617,9 +711,8 @@ vcpu_exit_eptviolation(struct vm_run_params *vrp)
 
 		ret = insn_decode(ve, &insn);
 		if (ret == 0)
-			ret = insn_emulate(ve, &insn);
+			ret = insn_emulate(ve, &insn, vrp->vrp_vcpu_id);
 		break;
-#endif /* MMIO_NOTYET */
 
 	case VEE_FAULT_PROTECT:
 		log_debug("EPT Violation: rip=0x%llx",
@@ -679,22 +772,24 @@ vcpu_exit_pci(struct vm_run_params *vrp)
 /*
  * find_gpa_range
  *
- * Search for a contiguous guest physical mem range.
+ * Find the base memory range that provides contiguous memory for the given
+ * starting gpa and spanning len bytes.
  *
  * Parameters:
- *  vcp: VM create parameters that contain the memory map to search in
+ *  vcp: VM create parameters that contain the memory map to search
  *  gpa: the starting guest physical address
- *  len: the length of the memory range
+ *  len: the length of the requested span
  *
  * Return values:
- *  NULL: on failure if there is no memory range as described by the parameters
- *  Pointer to vm_mem_range that contains the start of the range otherwise.
+ *  NULL: if no base memory range
+ *  On success, a pointer to vm_mem_range that contains the start of the range.
  */
 struct vm_mem_range *
 find_gpa_range(struct vmop_create_params *vmc, paddr_t gpa, size_t len)
 {
-	size_t i, n;
-	struct vm_mem_range *vmr;
+	size_t i, n, rest;
+	paddr_t prev_end_gpa;
+	struct vm_mem_range *vmr, *end_vmr;
 
 	/* Find the first vm_mem_range that contains gpa */
 	for (i = 0; i < vmc->vmc_nmemranges; i++) {
@@ -708,30 +803,53 @@ find_gpa_range(struct vmop_create_params *vmc, paddr_t gpa, size_t len)
 	if (i == vmc->vmc_nmemranges)
 		return (NULL);
 
-	/*
-	 * vmr may cover the range [gpa, gpa + len) only partly. Make
-	 * sure that the following vm_mem_ranges are contiguous and
-	 * cover the rest.
-	 */
-	n = vmr->vmr_size - (gpa - vmr->vmr_gpa);
-	if (len < n)
-		len = 0;
-	else
-		len -= n;
-	gpa = vmr->vmr_gpa + vmr->vmr_size;
-	for (i = i + 1; len != 0 && i < vmc->vmc_nmemranges; i++) {
-		vmr = &vmc->vmc_memranges[i];
-		if (gpa != vmr->vmr_gpa)
-			return (NULL);
-		if (len <= vmr->vmr_size)
-			len = 0;
-		else
-			len -= vmr->vmr_size;
+	/* Reject MMIO ranges or those with bogus host VAs. */
+	if (vmr->vmr_type == VM_MEM_MMIO || vmr->vmr_va == 0)
+		return (NULL);
 
-		gpa = vmr->vmr_gpa + vmr->vmr_size;
+	/* Does the requested span fit in the found range? */
+	n = vmr->vmr_size - (gpa - vmr->vmr_gpa);
+	if (len <= n)
+		return (vmr);
+	rest = len - n;
+
+	/*
+	 * vmr covers the range [gpa, gpa + len) partially. Make sure
+	 * that the following vm_mem_ranges are contiguous without
+	 * mmio holes and covers the remaining requested span.
+	 */
+	if (vmr->vmr_size - 1 > UINT64_MAX - vmr->vmr_gpa)
+		return (NULL);
+	prev_end_gpa = vmr->vmr_gpa + (vmr->vmr_size - 1);
+
+	for (i = i + 1; rest > 0 && i < vmc->vmc_nmemranges; i++) {
+		end_vmr = &vmc->vmc_memranges[i];
+
+		/* Is the region valid memory and mapped in the host? */
+		if (end_vmr->vmr_type == VM_MEM_MMIO || end_vmr->vmr_va == 0)
+			return (NULL);
+
+		/* Are the regions contiguous? */
+		if (prev_end_gpa == UINT64_MAX)
+			return (NULL);
+		if (prev_end_gpa + 1 != end_vmr->vmr_gpa)
+			return (NULL);
+
+		/* Does the span end here or do we continue checking? */
+		if (rest <= end_vmr->vmr_size) {
+			rest = 0;
+			break;
+		}
+
+		/* Check for if we'd overflow */
+		if (end_vmr->vmr_size - 1 > UINT64_MAX - end_vmr->vmr_gpa)
+			return (NULL);
+
+		rest -= end_vmr->vmr_size;
+		prev_end_gpa = end_vmr->vmr_gpa + (end_vmr->vmr_size - 1);
 	}
 
-	if (len != 0)
+	if (rest != 0)
 		return (NULL);
 
 	return (vmr);
@@ -883,18 +1001,19 @@ hvaddr_mem(paddr_t gpa, size_t len)
  * Injects the specified IRQ on the supplied vcpu/vm
  *
  * Parameters:
- *  vm_id: VMM vm ID to inject to
+ *  fd: vmm(4) vm file descriptor to inject to
  *  vcpu_id: VCPU ID to inject to
  *  irq: IRQ to inject
  */
 void
-vcpu_assert_irq(uint32_t vmm_id, uint32_t vcpu_id, int irq)
+vcpu_assert_irq(int fd, uint32_t vcpu_id, int irq)
 {
 	i8259_assert_irq(irq);
+	i82093aa_assert_pin(irq);
 
-	if (i8259_is_pending()) {
-		if (vcpu_intr(vmm_id, vcpu_id, 1))
-			fatalx("%s: can't assert INTR", __func__);
+	if (intr_pending(vcpu_id)) {
+		if (vcpu_intr(fd, vcpu_id, 1))
+			log_debug("%s: can't assert INTR", __func__);
 
 		vcpu_unhalt(vcpu_id);
 		vcpu_signal_run(vcpu_id);
@@ -907,19 +1026,42 @@ vcpu_assert_irq(uint32_t vmm_id, uint32_t vcpu_id, int irq)
  * Clears the specified IRQ on the supplied vcpu/vm
  *
  * Parameters:
- *  vm_id: VMM vm ID to clear in
+ *  fd: vmm(4) vm file descriptor to clear in
  *  vcpu_id: VCPU ID to clear in
  *  irq: IRQ to clear
  */
 void
-vcpu_deassert_irq(uint32_t vmm_id, uint32_t vcpu_id, int irq)
+vcpu_deassert_irq(int fd, uint32_t vcpu_id, int irq)
 {
 	i8259_deassert_irq(irq);
+	i82093aa_deassert_pin(irq);
 
-	if (!i8259_is_pending()) {
-		if (vcpu_intr(vmm_id, vcpu_id, 0))
-			fatalx("%s: can't deassert INTR for vmm_id %d, "
-			    "vcpu_id %d", __func__, vmm_id, vcpu_id);
+	if (!intr_pending(vcpu_id)) {
+		if (vcpu_intr(fd, vcpu_id, 0))
+			fatalx("%s: can't deassert INTR for vm fd %d, "
+			    "vcpu_id %d", __func__, fd, vcpu_id);
+	}
+}
+
+/* Deliver an edge-triggered interrupt vector directly to a local APIC */
+void
+vcpu_assert_vector(int fd, uint32_t vcpu_id, uint8_t vector)
+{
+	if (vcpu_id >= current_vm->vm_params.vmc_ncpus) {
+		log_debug("%s: invalid destination vcpu %u", __func__, vcpu_id);
+		return;
+	}
+
+	if (lapic_vector_irq(vcpu_id, 0, vector, 0))
+		return;
+
+	if (intr_pending(vcpu_id)) {
+		if (vcpu_intr(fd, vcpu_id, 1))
+			fatalx("%s: can't assert vector %u on vcpu %u", __func__,
+			    vector, vcpu_id);
+
+		vcpu_unhalt(vcpu_id);
+		vcpu_signal_run(vcpu_id);
 	}
 }
 
@@ -986,152 +1128,34 @@ get_input_data(struct vm_exit *vei, uint32_t *data)
 
 }
 
-/*
- * translate_gva
- *
- * Translates a guest virtual address to a guest physical address by walking
- * the currently active page table (if needed).
- *
- * XXX ensure translate_gva updates the A bit in the PTE
- * XXX ensure translate_gva respects segment base and limits in i386 mode
- * XXX ensure translate_gva respects segment wraparound in i8086 mode
- * XXX ensure translate_gva updates the A bit in the segment selector
- * XXX ensure translate_gva respects CR4.LMSLE if available
- *
- * Parameters:
- *  exit: The VCPU this translation should be performed for (guest MMU settings
- *   are gathered from this VCPU)
- *  va: virtual address to translate
- *  pa: pointer to paddr_t variable that will receive the translated physical
- *   address. 'pa' is unchanged on error.
- *  mode: one of PROT_READ, PROT_WRITE, PROT_EXEC indicating the mode in which
- *   the address should be translated
- *
- * Return values:
- *  0: the address was successfully translated - 'pa' contains the physical
- *     address currently mapped by 'va'.
- *  EFAULT: the PTE for 'VA' is unmapped. A #PF will be injected in this case
- *     and %cr2 set in the vcpu structure.
- *  EINVAL: an error occurred reading paging table structures
- */
 int
-translate_gva(struct vm_exit* exit, uint64_t va, uint64_t* pa, int mode)
+intr_pending(int vcpu_id)
 {
-	int level, shift, pdidx;
-	uint64_t pte, pt_paddr, pte_paddr, mask, low_mask, high_mask;
-	uint64_t shift_width, pte_size;
-	struct vcpu_reg_state *vrs;
+	if (lapic_is_pending(vcpu_id))
+		return 1;
+	if (!i8259_is_pending())
+		return 0;
 
-	vrs = &exit->vrs;
+	/* A disabled LAPIC leaves the processor wired directly to the PIC. */
+	if (!lapic_enabled(vcpu_id))
+		return 1;
 
-	if (!pa)
-		return (EINVAL);
-
-	if (!(vrs->vrs_crs[VCPU_REGS_CR0] & CR0_PG)) {
-		log_debug("%s: unpaged, va=pa=0x%llx", __func__, va);
-		*pa = va;
-		return (0);
-	}
-
-	pt_paddr = vrs->vrs_crs[VCPU_REGS_CR3];
-
-	log_debug("%s: guest %%cr0=0x%llx, %%cr3=0x%llx", __func__,
-	    vrs->vrs_crs[VCPU_REGS_CR0], vrs->vrs_crs[VCPU_REGS_CR3]);
-
-	if (vrs->vrs_crs[VCPU_REGS_CR0] & CR0_PE) {
-		if (vrs->vrs_crs[VCPU_REGS_CR4] & CR4_PAE) {
-			pte_size = sizeof(uint64_t);
-			shift_width = 9;
-
-			if (vrs->vrs_msrs[VCPU_REGS_EFER] & EFER_LMA) {
-				/* 4 level paging */
-				level = 4;
-				mask = L4_MASK;
-				shift = L4_SHIFT;
-			} else {
-				/* 32 bit with PAE paging */
-				level = 3;
-				mask = L3_MASK;
-				shift = L3_SHIFT;
-			}
-		} else {
-			/* 32 bit paging */
-			level = 2;
-			shift_width = 10;
-			mask = 0xFFC00000;
-			shift = 22;
-			pte_size = sizeof(uint32_t);
-		}
-	} else
-		return (EINVAL);
-
-	/* XXX: Check for R bit in segment selector and set A bit */
-
-	for (;level > 0; level--) {
-		pdidx = (va & mask) >> shift;
-		pte_paddr = (pt_paddr) + (pdidx * pte_size);
-
-		log_debug("%s: read pte level %d @ GPA 0x%llx", __func__,
-		    level, pte_paddr);
-		if (read_mem(pte_paddr, &pte, pte_size)) {
-			log_warn("%s: failed to read pte", __func__);
-			return (EFAULT);
-		}
-
-		log_debug("%s: PTE @ 0x%llx = 0x%llx", __func__, pte_paddr,
-		    pte);
-
-		/* XXX: Set CR2  */
-		if (!(pte & PG_V))
-			return (EFAULT);
-
-		/* XXX: Check for SMAP */
-		if ((mode == PROT_WRITE) && !(pte & PG_RW))
-			return (EPERM);
-
-		if ((exit->cpl > 0) && !(pte & PG_u))
-			return (EPERM);
-
-		pte = pte | PG_U;
-		if (mode == PROT_WRITE)
-			pte = pte | PG_M;
-		if (write_mem(pte_paddr, &pte, pte_size)) {
-			log_warn("%s: failed to write back flags to pte",
-			    __func__);
-			return (EIO);
-		}
-
-		/* XXX: EINVAL if in 32bit and PG_PS is 1 but CR4.PSE is 0 */
-		if (pte & PG_PS)
-			break;
-
-		if (level > 1) {
-			pt_paddr = pte & PG_FRAME;
-			shift -= shift_width;
-			mask = mask >> shift_width;
-		}
-	}
-
-	low_mask = (1 << shift) - 1;
-	high_mask = (((uint64_t)1ULL << ((pte_size * 8) - 1)) - 1) ^ low_mask;
-	*pa = (pte & high_mask) | (va & low_mask);
-
-	log_debug("%s: final GPA for GVA 0x%llx = 0x%llx\n", __func__, va, *pa);
-
-	return (0);
+	/* With the LAPIC enabled, the PIC reaches the CPU only via LINT0. */
+	return lapic_extint_enabled(vcpu_id);
 }
 
 int
-intr_pending(struct vmd_vm *vm)
+intr_ack(int vcpu_id)
 {
-	/* XXX select active interrupt controller */
-	return i8259_is_pending();
-}
+	int vec;
 
-int
-intr_ack(struct vmd_vm *vm)
-{
-	/* XXX select active interrupt controller */
+	vec = lapic_ack(vcpu_id);
+	if (vec != 0xffff)
+		return vec;
+
+	if (lapic_enabled(vcpu_id) && !lapic_extint_enabled(vcpu_id))
+		return 0xffff;
+
 	return i8259_ack();
 }
 

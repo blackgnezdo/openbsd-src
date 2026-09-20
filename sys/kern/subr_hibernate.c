@@ -1,4 +1,4 @@
-/*	$OpenBSD: subr_hibernate.c,v 1.159 2026/09/06 18:26:41 mglocker Exp $	*/
+/*	$OpenBSD: subr_hibernate.c,v 1.161 2026/09/19 17:27:09 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2011 Ariane van der Steldt <ariane@stack.nl>
@@ -58,8 +58,9 @@ CTASSERT((offsetof(union hibernate_info, sec_size) + sizeof(u_int32_t)) <= DEV_B
  * 29*PAGE_SIZE			start of hiballoc area
  * 30*PAGE_SIZE			preserved entropy
  * 110*PAGE_SIZE		end of hiballoc area (80 pages)
- * 366*PAGE_SIZE		end of retguard preservation region (256 pages)
+ * 142*PAGE_SIZE		end of retguard preservation region (256 pages)
  * ...				unused
+ * 512*PAGE_SIZE		start of MD area
  * HIBERNATE_CHUNK_SIZE		start of hibernate chunk table
  * 2*HIBERNATE_CHUNK_SIZE	bounce area for chunks being unpacked
  * 4*HIBERNATE_CHUNK_SIZE	end of piglet
@@ -885,12 +886,15 @@ hibernate_deflate(union hibernate_info *hib, paddr_t src,
 int
 hibernate_write_signature(union hibernate_info *hib)
 {
-	memset(&disk_hib, 0, hib->sec_size);
-	memcpy(&disk_hib, hib, DEV_BSIZE);
+	vaddr_t hibernate_io_page = hib->piglet_va + PAGE_SIZE;
+
+	KASSERT(hib->sec_size <= PAGE_SIZE);
+	memset((void *)hibernate_io_page, 0, hib->sec_size);
+	memcpy((void *)hibernate_io_page, hib, DEV_BSIZE);
 
 	/* Write hibernate info to disk */
 	return (hibernate_write(hib, hib->sig_offset,
-	    (vaddr_t)&disk_hib, hib->sec_size, IO_TYPE_SIG));
+	    hibernate_io_page, hib->sec_size, IO_TYPE_SIG));
 }
 
 /*

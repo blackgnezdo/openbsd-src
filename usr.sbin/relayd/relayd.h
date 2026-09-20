@@ -1,4 +1,4 @@
-/*	$OpenBSD: relayd.h,v 1.296 2026/09/07 19:34:30 deraadt Exp $	*/
+/*	$OpenBSD: relayd.h,v 1.299 2026/09/17 23:15:32 rsadowski Exp $	*/
 
 /*
  * Copyright (c) 2006 - 2016 Reyk Floeter <reyk@openbsd.org>
@@ -323,6 +323,12 @@ enum digest_type {
 TAILQ_HEAD(kvlist, kv);
 RB_HEAD(kvtree, kv);
 
+#define KV_FLAG_MACRO		 0x01
+#define KV_FLAG_INVALID		 0x02
+#define KV_FLAG_GLOBBING	 0x04
+#define KV_FLAG_KEY_PATTERN	 0x08
+#define KV_FLAG_VAL_PATTERN	 0x10
+
 struct kv {
 	char			*kv_key;
 	char			*kv_value;
@@ -331,9 +337,6 @@ struct kv {
 	enum key_option		 kv_option;
 	enum digest_type	 kv_digest;
 
-#define KV_FLAG_MACRO		 0x01
-#define KV_FLAG_INVALID		 0x02
-#define KV_FLAG_GLOBBING	 0x04
 	u_int8_t		 kv_flags;
 
 	struct kvlist		 kv_children;
@@ -446,6 +449,7 @@ struct host {
 	int			 idx;
 	u_int16_t		 he;
 	int			 code;
+	u_int16_t		 icmp_ident;
 	struct ctl_tcp_event	 cte;
 };
 TAILQ_HEAD(hostlist, host);
@@ -1115,7 +1119,6 @@ struct relayd {
 	struct relaycertlist	*sc_certs;
 	struct sessionlist	 sc_sessions;
 	char			 sc_demote_group[IFNAMSIZ];
-	u_int16_t		 sc_id;
 	int			 sc_rtable;
 
 	struct event		 sc_statev;
@@ -1157,10 +1160,10 @@ int	 load_config(const char *, struct relayd *);
 int	 cmdline_symset(char *);
 
 /* util.c */
-const char *host_error(enum host_error);
-const char *host_status(enum host_status);
-const char *table_check(enum table_check);
-const char *relay_state(enum relay_state);
+const char	*host_error(enum host_error);
+const char	*host_status(enum host_status);
+const char	*table_check(enum table_check);
+const char	*relay_state(enum relay_state);
 const char	*print_availability(u_long, u_long);
 const char	*print_host(struct sockaddr_storage *, char *, size_t);
 const char	*print_time(struct timeval *, struct timeval *, char *, size_t);
@@ -1354,6 +1357,8 @@ int			 kv_log(struct rsession *, struct kv *, u_int16_t,
 struct kv		*kv_find(struct kvtree *, struct kv *);
 struct kv		*kv_find_value(struct kvtree *, char *, const char *,
     const char *);
+int			 kv_match_key(const struct kv *, const char *, int);
+int			 kv_match_val(const struct kv *, const char *, int);
 int			 kv_cmp(struct kv *, struct kv *);
 int			 rule_add(struct protocol *, struct relay_rule *,
     const char *);

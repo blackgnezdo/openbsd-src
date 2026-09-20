@@ -1,4 +1,4 @@
-/*	$OpenBSD: vioblk.c,v 1.33 2026/08/30 23:23:18 jsg Exp $	*/
+/*	$OpenBSD: vioblk.c,v 1.36 2026/09/19 17:21:52 dv Exp $	*/
 
 /*
  * Copyright (c) 2023 Dave Voutila <dv@openbsd.org>
@@ -61,7 +61,7 @@ disk_type(enum vm_disk_fmt type)
 }
 
 __dead void
-vioblk_main(int fd, int fd_vmm)
+vioblk_main(int fd, int vm_fd)
 {
 	struct virtio_dev	 dev;
 	struct vioblk_dev	*vioblk = NULL;
@@ -99,9 +99,9 @@ vioblk_main(int fd, int fd_vmm)
 	vioblk = &dev.vioblk;
 
 	log_debug("%s: got viblk dev. num disk fds = %d, sync fd = %d, "
-	    "async fd = %d, capacity = %lld seg_max = %u, vmm fd = %d",
+	    "async fd = %d, capacity = %lld seg_max = %u, vm fd = %d",
 	    __func__, vioblk->ndisk_fd, dev.sync_fd, dev.async_fd,
-	    vioblk->capacity, vioblk->seg_max, fd_vmm);
+	    vioblk->capacity, vioblk->seg_max, vm_fd);
 
 	/* Receive our vm information from the vm process. */
 	memset(&vm, 0, sizeof(vm));
@@ -117,16 +117,16 @@ vioblk_main(int fd, int fd_vmm)
 	log_procinit("vm/%s/vioblk%d", vm.vm_params.vmc_name, vioblk->idx);
 
 	/* Now that we have our vm information, we can remap memory. */
-	ret = remap_guest_mem(&vm, fd_vmm);
+	ret = remap_guest_mem(&vm, vm_fd);
 	if (ret) {
 		log_warnx("failed to remap guest memory");
 		goto fail;
 	}
 
 	/*
-	 * We no longer need /dev/vmm access.
+	 * We no longer need VM fd access.
 	 */
-	close_fd(fd_vmm);
+	close_fd(vm_fd);
 	if (pledge("stdio", NULL) == -1)
 		fatal("pledge2");
 
@@ -273,13 +273,14 @@ vioblk_notifyq(struct virtio_dev *dev, uint16_t vq_idx)
 	vq_info = &dev->vq[vq_idx];
 	idx = vq_info->last_avail;
 	vr = vq_info->q_hva;
-	if (vr == NULL)
+	if (vr == NULL || vq_info->q_avail_hva == NULL ||
+	    vq_info->q_used_hva == NULL)
 		fatalx("%s: null vring", __func__);
 
-	/* Compute offsets in table of descriptors, avail ring, and used ring */
+	/* Locate the independently mapped split virtqueue areas. */
 	table = (struct vring_desc *)(vr);
-	avail = (struct vring_avail *)(vr + vq_info->vq_availoffset);
-	used = (struct vring_used *)(vr + vq_info->vq_usedoffset);
+	avail = vq_info->q_avail_hva;
+	used = vq_info->q_used_hva;
 
 	while (idx != avail->idx) {
 		/* Retrieve Command descriptor. */
@@ -518,7 +519,9 @@ handle_sync_io(int fd, short event, void *arg)
 		case VIODEV_MSG_IO_WRITE:
 			/* Write IO: no reply needed, but maybe an irq assert */
 			if (vioblk_write(dev, &msg))
-				virtio_assert_irq(dev, 0);
+				virtio_assert_irq(dev, 0,
+				    (dev->isr & VIRTIO_CONFIG_ISR_CONFIG_CHANGE) ?
+				    VIODEV_QUEUE_CONFIG : (uint16_t)msg.data);
 			break;
 		case VIODEV_MSG_SHUTDOWN:
 			event_del(&dev->sync_iev.ev);

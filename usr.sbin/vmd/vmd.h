@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.h,v 1.149 2026/09/08 19:46:18 dv Exp $	*/
+/*	$OpenBSD: vmd.h,v 1.153 2026/09/19 17:21:52 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -303,12 +303,13 @@ TAILQ_HEAD(switchlist, vmd_switch);
 
 struct vmd_vm {
 	struct vmop_create_params vm_params;
+	size_t			 vm_ncpus_config;
 
 	/* Owner and identifier information */
 	pid_t			 vm_pid;
 	uid_t			 vm_uid;
 	uint32_t		 vm_vmid;	/* vmd(8) identifier */
-	uint32_t		 vm_vmmid;	/* vmm(4) identifier */
+	int			 vm_fd;		/* vmm(4) vm file descriptor */
 	uint32_t		 vm_peerid;
 
 	/* AMD SEV features */
@@ -347,6 +348,9 @@ struct vmd_vm {
 	/* For rate-limiting */
 	struct timeval		 vm_start_tv;
 	int			 vm_start_limit;
+
+	/* Timeout for termination. */
+	struct event		 vm_timeout_ev;
 
 	TAILQ_ENTRY(vmd_vm)	 vm_entry;
 };
@@ -429,7 +433,9 @@ enum pipe_msg_type {
 	NS8250_RATELIMIT,
 	MC146818_RESCHEDULE_PER,
 	VIRTIO_NOTIFY,
-	VIRTIO_RAISE_IRQ,
+	VIRTIO_RAISE_IRQ_RX,
+	VIRTIO_RAISE_IRQ_TX,
+	VIRTIO_RAISE_IRQ_CONFIG,
 	VIRTIO_THREAD_START,
 	VIRTIO_THREAD_PAUSE,
 	VIRTIO_THREAD_STOP,
@@ -471,10 +477,7 @@ ssize_t	 decode_udp_ip_header(unsigned char *, size_t, size_t,
 
 /* vmd.c */
 int	 vmd_reload(unsigned int, const char *);
-struct vmd_vm *vm_getbyid(uint32_t);
 struct vmd_vm *vm_getbyvmid(uint32_t);
-uint32_t vm_id2vmid(uint32_t, struct vmd_vm *);
-uint32_t vm_vmid2id(uint32_t, struct vmd_vm *);
 struct vmd_vm *vm_getbyname(const char *);
 struct vmd_vm *vm_getbypid(pid_t);
 void	 vm_stop(struct vmd_vm *, int, const char *);
@@ -525,7 +528,7 @@ void	 create_memory_map(struct vmd_vm *);
 int	 load_firmware(struct vmd_vm *, struct vcpu_reg_state *);
 int	 init_emulated_hw(struct vmd_vm *, int, int[][VM_MAX_BASE_PER_DISK],
     int *);
-int	 vcpu_reset(uint32_t, uint32_t, struct vcpu_reg_state *);
+int	 vcpu_reset(int, uint32_t, struct vcpu_reg_state *);
 void	 pause_vm_md(struct vmd_vm *);
 void	 unpause_vm_md(struct vmd_vm *);
 void	*hvaddr_mem(paddr_t, size_t);
@@ -533,25 +536,30 @@ struct vm_mem_range *
 	 find_gpa_range(struct vmop_create_params *, paddr_t, size_t);
 int	 write_mem(paddr_t, const void *, size_t);
 int	 read_mem(paddr_t, void *, size_t);
-int	 intr_ack(struct vmd_vm *);
-int	 intr_pending(struct vmd_vm *);
+int	 intr_ack(int);
+int	 intr_pending(int);
 void	 intr_toggle_el(struct vmd_vm *, int, int);
-void	 vcpu_assert_irq(uint32_t, uint32_t, int);
-void	 vcpu_deassert_irq(uint32_t, uint32_t, int);
+void	 vcpu_assert_irq(int, uint32_t, int);
+void	 vcpu_deassert_irq(int, uint32_t, int);
 int	 vcpu_exit(struct vm_run_params *);
 uint8_t	 vcpu_exit_pci(struct vm_run_params *);
 
 #ifdef __amd64__
 /* x86 io functions in x86_vm.c */
+void	 vcpu_init_ap(struct vcpu_reg_state *);
+void	 vcpu_init_sipi(struct vcpu_reg_state *, uint8_t);
 void	 set_return_data(struct vm_exit *, uint32_t);
 void	 get_input_data(struct vm_exit *, uint32_t *);
 #endif /* __amd64 __ */
 
 /* vm.c (mi functions) */
-void	 vcpu_halt(uint32_t);
+void	 vcpu_halt(uint32_t, int);
 void	 vcpu_unhalt(uint32_t);
 void	 vcpu_signal_run(uint32_t);
-int 	 vcpu_intr(uint32_t, uint32_t, uint8_t);
+void	 vcpu_assert_vector(int, uint32_t, uint8_t);
+void	 vcpu_assert_init(uint32_t);
+void	 vcpu_start_sipi(uint32_t, uint8_t);
+int 	 vcpu_intr(int, uint32_t, uint8_t);
 void	 vm_main(int, int);
 void	 mutex_lock(pthread_mutex_t *);
 void	 mutex_unlock(pthread_mutex_t *);
@@ -600,7 +608,7 @@ int	 psp_df_flush(void);
 int	 psp_get_gstate(uint32_t, uint32_t *, uint32_t *, uint8_t *);
 int	 psp_launch_start(uint32_t *, int);
 int	 psp_launch_update(uint32_t, vaddr_t, size_t);
-int	 psp_encrypt_state(uint32_t, uint32_t, uint32_t, uint32_t);
+int	 psp_encrypt_state(uint32_t, uint32_t, int, uint32_t);
 int	 psp_launch_measure(uint32_t);
 int	 psp_launch_finish(uint32_t);
 int	 psp_activate(uint32_t, uint32_t);

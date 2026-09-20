@@ -1,11 +1,11 @@
-# $OpenBSD: Makefile,v 1.4 2026/09/11 22:30:47 kurt Exp $
+# $OpenBSD: Makefile,v 1.6 2026/09/16 15:02:25 kurt Exp $
 
 .include <bsd.obj.mk>
 
 PROG_OBJDIR!=	if [ -d ${.CURDIR}/${__objdir} ]; then \
 			echo "${.CURDIR}/${__objdir}"; \
 		else \
-			echo "${.CURDIR})"; \
+			echo "${.CURDIR}"; \
 		fi
 
 AA_DIR=${.CURDIR}/../libaa
@@ -25,7 +25,7 @@ LDADD+=		-laa
 LDFLAGS+=	-Wl,-z,origin,-rpath,'$$ORIGIN/$${OSNAME}/$$OSREL/$${PLATFORM}'
 LDFLAGS+=	-L$(AA_OBJDIR)
 
-REGRESS_TARGETS = test1
+REGRESS_TARGETS = test1 test2
 
 .PHONY: test1 test2
 
