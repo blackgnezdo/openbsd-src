@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_tlsext.c,v 1.168 2026/08/29 05:12:51 tb Exp $ */
+/* $OpenBSD: ssl_tlsext.c,v 1.170 2026/09/21 23:37:20 jsing Exp $ */
 /*
  * Copyright (c) 2016, 2017, 2019 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2017 Doug Hogan <doug@openbsd.org>
@@ -496,8 +496,7 @@ tlsext_ri_server_process(SSL *s, uint16_t msg_type, CBS *cbs, int *alert)
 		return 0;
 	}
 
-	s->s3->renegotiate_seen = 1;
-	s->s3->send_connection_binding = 1;
+	s->s3->secure_renegotiation = 1;
 
 	return 1;
 }
@@ -506,7 +505,7 @@ static int
 tlsext_ri_server_needs(SSL *s, uint16_t msg_type)
 {
 	return (s->s3->hs.negotiated_tls_version < TLS1_3_VERSION &&
-	    s->s3->send_connection_binding);
+	    s->s3->secure_renegotiation);
 }
 
 static int
@@ -577,8 +576,7 @@ tlsext_ri_client_process(SSL *s, uint16_t msg_type, CBS *cbs, int *alert)
 		return 0;
 	}
 
-	s->s3->renegotiate_seen = 1;
-	s->s3->send_connection_binding = 1;
+	s->s3->secure_renegotiation = 1;
 
 	return 1;
 }
@@ -2721,7 +2719,6 @@ static void
 tlsext_server_reset_state(SSL *s)
 {
 	s->tlsext_status_type = -1;
-	s->s3->renegotiate_seen = 0;
 	free(s->s3->alpn_selected);
 	s->s3->alpn_selected = NULL;
 	s->s3->alpn_selected_len = 0;
@@ -2763,7 +2760,6 @@ tlsext_server_parse(SSL *s, uint16_t msg_type, CBS *cbs, int *alert)
 static void
 tlsext_client_reset_state(SSL *s)
 {
-	s->s3->renegotiate_seen = 0;
 	free(s->s3->alpn_selected);
 	s->s3->alpn_selected = NULL;
 	s->s3->alpn_selected_len = 0;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: x86_vm.c,v 1.25 2026/09/19 17:21:52 dv Exp $	*/
+/*	$OpenBSD: x86_vm.c,v 1.27 2026/09/22 20:20:57 mlarkin Exp $	*/
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -62,6 +62,7 @@ io_fn_t	ioports_map[MAX_PORTS];
 static int	loadfile_bios(gzFile, off_t, struct vcpu_reg_state *);
 static int	vcpu_exit_reset(struct vm_run_params *);
 static int	vcpu_exit_eptviolation(struct vm_run_params *);
+static int	vcpu_exit_apicbase(struct vm_run_params *);
 static int	vcpu_exit_x2apic(struct vm_run_params *);
 static void	vcpu_exit_inout(struct vm_run_params *);
 
@@ -222,20 +223,23 @@ create_memory_map(struct vmd_vm *vm)
 	 * BIOS area.
 	 */
 	if (mem_bytes <= MB(4)) {
-		vmc->vmc_memranges[2].vmr_gpa = PCI_MMIO_BAR_END;
-		vmc->vmc_memranges[2].vmr_size = MB(4);
+		vmc->vmc_memranges[2].vmr_gpa = VMD_ACPI_BASE_PADDR;
+		vmc->vmc_memranges[2].vmr_size = VMD_ACPI_AREA_SIZE;
 		vmc->vmc_memranges[2].vmr_type = VM_MEM_RESERVED;
-		vmc->vmc_nmemranges = 3;
+		vmc->vmc_memranges[3].vmr_gpa = PCI_MMIO_BAR_END + 1;
+		vmc->vmc_memranges[3].vmr_size = MB(4);
+		vmc->vmc_memranges[3].vmr_type = VM_MEM_RESERVED;
+		vmc->vmc_nmemranges = 4;
 		return;
 	}
 
 	/*
 	 * Calculate the how to split any remaining memory across the 4GB
 	 * boundary while making sure we do not place physical memory into
-	 * MMIO ranges.
+	 * MMIO ranges or ACPI table area.
 	 */
-	if (mem_bytes > PCI_MMIO_BAR_BASE - MB(1)) {
-		above_1m = PCI_MMIO_BAR_BASE - MB(1);
+	if (mem_bytes > VMD_ACPI_BASE_PADDR - MB(1)) {
+		above_1m = VMD_ACPI_BASE_PADDR - MB(1);
 		above_4g = mem_bytes - above_1m;
 	} else {
 		above_1m = mem_bytes;
@@ -247,25 +251,30 @@ create_memory_map(struct vmd_vm *vm)
 	vmc->vmc_memranges[2].vmr_size = above_1m;
 	vmc->vmc_memranges[2].vmr_type = VM_MEM_RAM;
 
-	/* Fourth region: PCI MMIO range */
-	vmc->vmc_memranges[3].vmr_gpa = PCI_MMIO_BAR_BASE;
-	vmc->vmc_memranges[3].vmr_size = PCI_MMIO_BAR_END -
+	/* Fourth region: ACPI payload tables */
+	vmc->vmc_memranges[3].vmr_gpa = VMD_ACPI_BASE_PADDR;
+	vmc->vmc_memranges[3].vmr_size = VMD_ACPI_AREA_SIZE;
+	vmc->vmc_memranges[3].vmr_type = VM_MEM_RESERVED;
+
+	/* Fifth region: PCI MMIO range */
+	vmc->vmc_memranges[4].vmr_gpa = PCI_MMIO_BAR_BASE;
+	vmc->vmc_memranges[4].vmr_size = PCI_MMIO_BAR_END -
 	    PCI_MMIO_BAR_BASE + 1;
-	vmc->vmc_memranges[3].vmr_type = VM_MEM_MMIO;
+	vmc->vmc_memranges[4].vmr_type = VM_MEM_MMIO;
 
-	/* Fifth region: 2nd copy of BIOS above MMIO ending at 4GB */
-	vmc->vmc_memranges[4].vmr_gpa = PCI_MMIO_BAR_END + 1;
-	vmc->vmc_memranges[4].vmr_size = MB(4);
-	vmc->vmc_memranges[4].vmr_type = VM_MEM_RESERVED;
+	/* Sixth region: 2nd copy of BIOS above MMIO ending at 4GB */
+	vmc->vmc_memranges[5].vmr_gpa = PCI_MMIO_BAR_END + 1;
+	vmc->vmc_memranges[5].vmr_size = MB(4);
+	vmc->vmc_memranges[5].vmr_type = VM_MEM_RESERVED;
 
-	/* Sixth region: any remainder above 4GB */
+	/* Seventh region: any remainder above 4GB */
 	if (above_4g > 0) {
-		vmc->vmc_memranges[5].vmr_gpa = GB(4);
-		vmc->vmc_memranges[5].vmr_size = above_4g;
-		vmc->vmc_memranges[5].vmr_type = VM_MEM_RAM;
-		vmc->vmc_nmemranges = 6;
+		vmc->vmc_memranges[6].vmr_gpa = GB(4);
+		vmc->vmc_memranges[6].vmr_size = above_4g;
+		vmc->vmc_memranges[6].vmr_type = VM_MEM_RAM;
+		vmc->vmc_nmemranges = 7;
 	} else
-		vmc->vmc_nmemranges = 5;
+		vmc->vmc_nmemranges = 6;
 }
 
 int
@@ -563,6 +572,14 @@ vcpu_exit_inout(struct vm_run_params *vrp)
 	if (intr != 0xFF)
 		vcpu_assert_irq(current_vm->vm_fd, vrp->vrp_vcpu_id, intr);
 }
+
+static int
+vcpu_exit_apicbase(struct vm_run_params *vrp)
+{
+	return (lapic_set_apicbase(vrp->vrp_vcpu_id,
+	    vrp->vrp_exit->vea.vea_value));
+}
+
 static int
 vcpu_exit_x2apic(struct vm_run_params *vrp)
 {
@@ -617,6 +634,11 @@ vcpu_exit(struct vm_run_params *vrp)
 	case SVM_VMEXIT_NPF:
 	case VMX_EXIT_EPT_VIOLATION:
 		ret = vcpu_exit_eptviolation(vrp);
+		if (ret)
+			return (ret);
+		break;
+	case VM_EXIT_APICBASE:
+		ret = vcpu_exit_apicbase(vrp);
 		if (ret)
 			return (ret);
 		break;

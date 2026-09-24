@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtrd.c,v 1.5 2026/09/19 17:23:52 schwarze Exp $ */
+/*	$OpenBSD: rtrd.c,v 1.8 2026/09/21 20:44:28 rcovelli Exp $ */
 /*
  * Copyright (c) 2025-2026 Ralph Covelli <rcovelli@he.net>
  *
@@ -103,6 +103,11 @@ main(int argc, char **argv)
 	argv += optind;
 	argc -= optind;
 
+	if (getuid() != 0) {
+		fprintf(stderr, "must run as root\n");
+		exit(1);
+	}
+
 	init_masks();
 
 	if (init_stats() != 0) {
@@ -132,46 +137,41 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	if (getuid() == 0) {
-		pw = getpwnam(RTRD_USER);
-		if (pw == NULL) {
-			fprintf(stderr,
-			    "couldnt get user %s to drop root privileges\n",
-			    RTRD_USER);
-			exit(1);
-		}
+	pw = getpwnam(RTRD_USER);
+	if (pw == NULL) {
+		fprintf(stderr,
+		    "couldnt get user %s to drop root privileges\n",
+		    RTRD_USER);
+		exit(1);
+	}
 
-		if (chown(controller_filename, pw->pw_uid, pw->pw_gid) == -1) {
-			fprintf(stderr, "couldnt chown control socket\n");
-			exit(1);
-		}
+	if (chown(controller_filename, pw->pw_uid, pw->pw_gid) == -1) {
+		fprintf(stderr, "couldnt chown control socket\n");
+		exit(1);
+	}
 
-		if (chmod(controller_filename, S_IRUSR | S_IWUSR |
-		    S_IRGRP | S_IWGRP) == -1) {
-			fprintf(stderr, "couldnt chmod control socket\n");
-			exit(1);
-		}
+	if (chmod(controller_filename, S_IRUSR | S_IWUSR |
+	    S_IRGRP | S_IWGRP) == -1) {
+		fprintf(stderr, "couldnt chmod control socket\n");
+		exit(1);
+	}
 
-		if (setgroups(1, &pw->pw_gid) == -1 ||
-		    setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) == -1 ||
-		    setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid) == -1) {
-			fprintf(stderr, "couldnt drop root privileges\n");
-			exit(1);
-		}
+	if (setgroups(1, &pw->pw_gid) == -1 ||
+	    setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) == -1 ||
+	    setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid) == -1) {
+		fprintf(stderr, "couldnt drop root privileges\n");
+		exit(1);
 	}
 
 	if (daemonize) {
-		close(STDIN_FILENO);
-		close(STDOUT_FILENO);
-		close(STDERR_FILENO);
-
+		if (daemon(0, 0) == -1) {
+			fprintf(stderr, "daemon failed\n");
+			exit(1);
+		}
 		foreground = 0;
-
-		if (fork())
-			exit(0);
 	}
 
-	if (pledge("stdio unix inet", NULL) == -1) {
+	if (pledge("stdio inet", NULL) == -1) {
 		logx(0, "RTR Pledge error\n");
 		exit(1);
 	}

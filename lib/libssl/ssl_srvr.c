@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_srvr.c,v 1.173 2026/09/17 22:58:23 jsing Exp $ */
+/* $OpenBSD: ssl_srvr.c,v 1.177 2026/09/21 23:43:25 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -281,7 +281,7 @@ ssl3_accept(SSL *s)
 
 				s->s3->hs.state = SSL3_ST_SR_CLNT_HELLO_A;
 				s->ctx->stats.sess_accept++;
-			} else if (!SSL_is_dtls(s) && !s->s3->send_connection_binding) {
+			} else if (!SSL_is_dtls(s) && !s->s3->secure_renegotiation) {
 				/*
 				 * Server attempting to renegotiate with
 				 * client that doesn't support secure
@@ -581,10 +581,7 @@ ssl3_accept(SSL *s)
 
 		case SSL3_ST_SR_CERT_VRFY_A:
 		case SSL3_ST_SR_CERT_VRFY_B:
-			if (SSL_is_dtls(s))
-				s->d1->change_cipher_spec_ok = 1;
-			else
-				s->s3->flags |= SSL3_FLAGS_CCS_OK;
+			s->s3->flags |= SSL3_FLAGS_CCS_OK;
 
 			/* we should decide if we expected this one */
 			ret = ssl3_get_cert_verify(s);
@@ -596,10 +593,8 @@ ssl3_accept(SSL *s)
 
 		case SSL3_ST_SR_FINISHED_A:
 		case SSL3_ST_SR_FINISHED_B:
-			if (SSL_is_dtls(s))
-				s->d1->change_cipher_spec_ok = 1;
-			else
-				s->s3->flags |= SSL3_FLAGS_CCS_OK;
+			s->s3->flags |= SSL3_FLAGS_CCS_OK;
+
 			ret = ssl3_get_client_finished(s);
 			if (ret <= 0)
 				goto end;
@@ -1005,7 +1000,7 @@ ssl3_get_client_hello(SSL *s)
 	if (CBS_len(&cbs) != 0)
 		goto decode_err;
 
-	if (!s->s3->renegotiate_seen && s->renegotiate) {
+	if (!tlsext_extension_seen(s, TLSEXT_TYPE_renegotiate) && s->renegotiate) {
 		al = SSL_AD_HANDSHAKE_FAILURE;
 		SSLerror(s, SSL_R_UNSAFE_LEGACY_RENEGOTIATION_DISABLED);
 		goto fatal_err;
@@ -1356,7 +1351,7 @@ ssl3_send_server_kex_dhe(SSL *s, CBB *cbb)
 	if (!tls_key_share_peer_security(s, s->s3->hs.key_share)) {
 		SSLerror(s, SSL_R_DH_KEY_TOO_SMALL);
 		ssl3_send_alert(s, SSL3_AL_FATAL, SSL_AD_HANDSHAKE_FAILURE);
-		return 0;
+		goto err;
 	}
 
 	return 1;

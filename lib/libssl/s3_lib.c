@@ -1,4 +1,4 @@
-/* $OpenBSD: s3_lib.c,v 1.263 2026/09/16 00:24:54 jsing Exp $ */
+/* $OpenBSD: s3_lib.c,v 1.266 2026/09/22 03:45:18 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -1155,12 +1155,14 @@ ssl3_get_cipher_by_value(uint16_t value)
 int
 ssl3_pending(const SSL *s)
 {
-	if (s->s3->rcontent == NULL)
-		return 0;
-	if (tls_content_type(s->s3->rcontent) != SSL3_RT_APPLICATION_DATA)
+	struct tls_content *rcontent;
+
+	rcontent = tls12_record_layer_rcontent(s->rl);
+
+	if (tls_content_type(rcontent) != SSL3_RT_APPLICATION_DATA)
 		return 0;
 
-	return tls_content_remaining(s->s3->rcontent);
+	return tls_content_remaining(rcontent);
 }
 
 int
@@ -1259,8 +1261,7 @@ ssl3_free(SSL *s)
 	ssl3_release_write_buffer(s);
 
 	tls12_record_free(s->s3->tls_rrec);
-
-	tls_content_free(s->s3->rcontent);
+	tls12_record_free(s->s3->tls_wrec);
 
 	tls_buffer_free(s->s3->alert_fragment);
 	tls_buffer_free(s->s3->handshake_fragment);
@@ -1348,9 +1349,8 @@ ssl3_clear(SSL *s)
 
 	tls12_record_free(s->s3->tls_rrec);
 	s->s3->tls_rrec = NULL;
-
-	tls_content_free(s->s3->rcontent);
-	s->s3->rcontent = NULL;
+	tls12_record_free(s->s3->tls_wrec);
+	s->s3->tls_wrec = NULL;
 
 	tls1_transcript_free(s);
 	tls1_transcript_hash_free(s);
@@ -2500,9 +2500,6 @@ ssl3_renegotiate(SSL *s)
 {
 	if (s->handshake_func == NULL)
 		return 1;
-
-	if (s->s3->flags & SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS)
-		return 0;
 
 	s->s3->renegotiate = 1;
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.547 2026/08/04 08:11:05 job Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.549 2026/09/24 11:41:41 job Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -1203,9 +1203,10 @@ struct filter_peers {
 #define	COMMUNITY_NEIGHBOR_AS		2
 #define	COMMUNITY_LOCAL_AS		3
 
-/* wellknown community definitions */
+/* well-known community definitions */
 #define	COMMUNITY_WELLKNOWN		0xffff
 #define	COMMUNITY_GRACEFUL_SHUTDOWN	0x0000  /* RFC 8326 */
+#define	COMMUNITY_DOWNGRADE		0x000A	/* draft-grow-downgrade */
 #define	COMMUNITY_BLACKHOLE		0x029A	/* RFC 7999 */
 #define	COMMUNITY_NO_EXPORT		0xff01
 #define	COMMUNITY_NO_ADVERTISE		0xff02
@@ -1800,6 +1801,7 @@ const char	*get_baudrate(unsigned long long, char *);
 unsigned int	 bin_of_attrs(unsigned int);
 unsigned int	 bin_of_communities(unsigned int);
 unsigned int	 bin_of_adjout_prefixes(unsigned int);
+unsigned int	 bin_of_sets(unsigned int);
 
 /* bgpd_imsg.c */
 int	imsg_send_ctl_peer(struct imsgbuf *, struct peer *,

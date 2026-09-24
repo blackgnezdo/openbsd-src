@@ -1,4 +1,4 @@
-/*	$OpenBSD: reboot.c,v 1.39 2026/07/01 00:41:33 jsg Exp $	*/
+/*	$OpenBSD: reboot.c,v 1.41 2026/09/22 15:05:21 deraadt Exp $	*/
 /*	$NetBSD: reboot.c,v 1.8 1995/10/05 05:36:22 mycroft Exp $	*/
 
 /*

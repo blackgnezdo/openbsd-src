@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_clnt.c,v 1.177 2026/08/29 08:41:17 tb Exp $ */
+/* $OpenBSD: ssl_clnt.c,v 1.180 2026/09/21 23:43:25 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -546,10 +546,8 @@ ssl3_connect(SSL *s)
 
 		case SSL3_ST_CR_FINISHED_A:
 		case SSL3_ST_CR_FINISHED_B:
-			if (SSL_is_dtls(s))
-				s->d1->change_cipher_spec_ok = 1;
-			else
-				s->s3->flags |= SSL3_FLAGS_CCS_OK;
+			s->s3->flags |= SSL3_FLAGS_CCS_OK;
+
 			ret = ssl3_get_server_finished(s);
 			if (ret <= 0)
 				goto end;
@@ -1060,7 +1058,7 @@ ssl3_get_server_hello(SSL *s)
 	 * which doesn't support RI so for the immediate future tolerate RI
 	 * absence on initial connect only.
 	 */
-	if (!s->s3->renegotiate_seen &&
+	if (!tlsext_extension_seen(s, TLSEXT_TYPE_renegotiate) &&
 	    !(s->options & SSL_OP_LEGACY_SERVER_CONNECT)) {
 		al = SSL_AD_HANDSHAKE_FAILURE;
 		SSLerror(s, SSL_R_UNSAFE_LEGACY_RENEGOTIATION_DISABLED);
@@ -1219,7 +1217,7 @@ ssl3_get_server_kex_dhe(SSL *s, CBS *cbs)
 	if (!tls_key_share_peer_security(s, s->s3->hs.key_share)) {
 		SSLerror(s, SSL_R_DH_KEY_TOO_SMALL);
 		ssl3_send_alert(s, SSL3_AL_FATAL, SSL_AD_HANDSHAKE_FAILURE);
-		return 0;
+		goto err;
 	}
 
 	return 1;
@@ -1865,7 +1863,7 @@ ssl3_send_client_kex_dhe(SSL *s, CBB *cbb)
 	if (!tls_key_share_peer_security(s, s->s3->hs.key_share)) {
 		SSLerror(s, SSL_R_DH_KEY_TOO_SMALL);
 		ssl3_send_alert(s, SSL3_AL_FATAL, SSL_AD_HANDSHAKE_FAILURE);
-		return 0;
+		goto err;
 	}
 
 	if (!tls12_derive_master_secret(s, key, key_len))

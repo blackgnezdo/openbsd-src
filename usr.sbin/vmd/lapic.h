@@ -1,4 +1,4 @@
-/*	$OpenBSD: lapic.h,v 1.3 2026/09/19 16:11:07 mlarkin Exp $ */
+/*	$OpenBSD: lapic.h,v 1.5 2026/09/23 15:35:43 mlarkin Exp $ */
 
 /*
  * Copyright (c) 2025 Mike Larkin <mlarkin@openbsd.org>
@@ -24,6 +24,7 @@
 
 void lapic_init(uint32_t);
 void lapic_reset(uint32_t);
+int lapic_set_apicbase(uint32_t, uint64_t);
 int lapic_mmio(uint32_t, int, paddr_t, uint8_t, uint64_t *);
 int lapic_x2apic(uint32_t, int, uint32_t, uint64_t *);
 int lapic_vector_irq(uint32_t, int, uint8_t, int);
@@ -31,6 +32,8 @@ int lapic_is_pending(int);
 int lapic_ack(int);
 int lapic_enabled(int);
 int lapic_extint_enabled(int);
+uint64_t lapic_targets(uint8_t, int);
+int lapic_lowest_priority(uint64_t, uint32_t);
 int lapic_timer_check(uint32_t);
 
 #endif /* !_LAPIC_H_ */

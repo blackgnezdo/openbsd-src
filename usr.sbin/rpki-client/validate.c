@@ -1,4 +1,4 @@
-/*	$OpenBSD: validate.c,v 1.86 2026/09/12 07:03:00 tb Exp $ */
+/*	$OpenBSD: validate.c,v 1.88 2026/09/24 10:52:31 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -408,15 +408,16 @@ pretty_revocation_time(X509 *x509, X509_CRL *crl, const char **errstr)
  * returned by X509_verify_cert_error_string().
  */
 int
-valid_x509(char *file, X509_STORE_CTX *store_ctx, X509 *x509, struct auth *a,
-    struct crl *crl, const char **errstr)
+valid_x509(char *file, X509_STORE_CTX *store_ctx, struct cert *cert,
+    struct auth *a, struct crl *crl, const char **errstr)
 {
+	X509			*x509 = cert->x509;
 	X509_VERIFY_PARAM	*params;
 	ASN1_OBJECT		*cp_oid;
 	STACK_OF(X509)		*intermediates, *root;
 	STACK_OF(X509_CRL)	*crls = NULL;
 	unsigned long		 flags;
-	int			 error;
+	int			 error, ret = 0;
 
 	*errstr = NULL;
 	build_chain(a, &intermediates, &root);
@@ -455,18 +456,23 @@ valid_x509(char *file, X509_STORE_CTX *store_ctx, X509 *x509, struct auth *a,
 		*errstr = X509_verify_cert_error_string(error);
 		if (filemode && error == X509_V_ERR_CERT_REVOKED)
 			pretty_revocation_time(x509, crl->x509_crl, errstr);
-		X509_STORE_CTX_cleanup(store_ctx);
-		sk_X509_free(intermediates);
-		sk_X509_free(root);
-		sk_X509_CRL_free(crls);
-		return 0;
+		goto out;
 	}
 
+	if (cert->purpose != CERT_PURPOSE_TA) {
+		if (strcmp(cert->crl, crl->mftcrldp) != 0) {
+			*errstr = "invalid CRLDP pointer";
+			goto out;
+		}
+	}
+
+	ret = 1;
+ out:
 	X509_STORE_CTX_cleanup(store_ctx);
 	sk_X509_free(intermediates);
 	sk_X509_free(root);
 	sk_X509_CRL_free(crls);
-	return 1;
+	return ret;
 }
 
 /*
