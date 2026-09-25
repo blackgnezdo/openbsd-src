@@ -1,4 +1,4 @@
-/*	$OpenBSD: validate.c,v 1.88 2026/09/24 10:52:31 tb Exp $ */
+/*	$OpenBSD: validate.c,v 1.90 2026/09/24 14:44:03 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -80,11 +80,11 @@ valid_ip(struct auth *a, enum afi afi,
 
 /*
  * Validate a non-TA certificate: make sure its IP and AS resources are
- * fully covered by those in the authority key (which must exist).
+ * fully covered by those in the issuing certificate.
  * Returns 1 if valid, 0 otherwise.
  */
-int
-valid_cert(const char *fn, struct auth *a, const struct cert *cert)
+static int
+valid_resources(const char *fn, struct auth *a, const struct cert *cert)
 {
 	size_t		 i;
 	uint32_t	 min, max;
@@ -408,7 +408,7 @@ pretty_revocation_time(X509 *x509, X509_CRL *crl, const char **errstr)
  * returned by X509_verify_cert_error_string().
  */
 int
-valid_x509(char *file, X509_STORE_CTX *store_ctx, struct cert *cert,
+valid_cert(char *file, X509_STORE_CTX *store_ctx, struct cert *cert,
     struct auth *a, struct crl *crl, const char **errstr)
 {
 	X509			*x509 = cert->x509;
@@ -464,6 +464,8 @@ valid_x509(char *file, X509_STORE_CTX *store_ctx, struct cert *cert,
 			*errstr = "invalid CRLDP pointer";
 			goto out;
 		}
+		if (!valid_resources(file, a, cert))
+			goto out;
 	}
 
 	ret = 1;
