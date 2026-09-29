@@ -2702,7 +2702,7 @@ sysctl_sysvipc(int *name, u_int namelen, void *where, size_t *sizep)
 		memcpy(&seminfo_tmp, &seminfo, sizeof(seminfo_tmp));
 		rw_exit_read(&sysvsem_lock);
 
-		infolen = sizeof(seminfo_tmp) +
+		infolen = offsetof(struct sem_sysctl_info, semids) +
 		    seminfo_tmp.semmni * sizeof(info->semids[0]);
 
 		if (where == NULL) {
@@ -2714,11 +2714,11 @@ sysctl_sysvipc(int *name, u_int namelen, void *where, size_t *sizep)
 			return (ENOMEM);
 		}
 
-		avail = infolen = min(*sizep, infolen);
+		avail = infolen = MIN(*sizep, infolen);
 		info = malloc(infolen, M_TEMP, M_WAITOK | M_ZERO);
 
 		memcpy(&info->seminfo, &seminfo_tmp, sizeof(info->seminfo));
-		avail -= sizeof(info->seminfo);
+		avail -= MIN(avail, offsetof(struct sem_sysctl_info, semids));
 
 		if (avail > 0) {
 			KERNEL_LOCK();
@@ -2761,7 +2761,7 @@ sysctl_sysvipc(int *name, u_int namelen, void *where, size_t *sizep)
 		memcpy(&shminfo_tmp, &shminfo, sizeof(shminfo_tmp));
 		rw_exit_read(&sysvshm_lock);
 
-		infolen = sizeof(shminfo_tmp) +
+		infolen = offsetof(struct shm_sysctl_info, shmids) +
 		    shminfo_tmp.shmmni * sizeof(info->shmids[0]);
 
 		if (where == NULL) {
@@ -2773,11 +2773,11 @@ sysctl_sysvipc(int *name, u_int namelen, void *where, size_t *sizep)
 			return (ENOMEM);
 		}
 
-		avail = infolen = min(*sizep, infolen); 
+		avail = infolen = MIN(*sizep, infolen);
 		info = malloc(infolen, M_TEMP, M_WAITOK | M_ZERO);
 
 		memcpy(&info->shminfo, &shminfo_tmp, sizeof(info->shminfo));
-		avail -= sizeof(info->shminfo);
+		avail -= MIN(avail, offsetof(struct shm_sysctl_info, shmids));
 
 		if (avail) {
 			KERNEL_LOCK();
@@ -2787,7 +2787,7 @@ sysctl_sysvipc(int *name, u_int namelen, void *where, size_t *sizep)
 					break;
 				}
 				if (shmsegs[i]) {
-					info->shmids[i].shm_perm = 
+					info->shmids[i].shm_perm =
 					    shmsegs[i]->shm_perm;
 					info->shmids[i].shm_lpid =
 					    shmsegs[i]->shm_lpid;
