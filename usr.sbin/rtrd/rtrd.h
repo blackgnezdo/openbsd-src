@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtrd.h,v 1.2 2026/09/22 01:14:18 rcovelli Exp $	*/
+/*	$OpenBSD: rtrd.h,v 1.4 2026/09/28 05:14:44 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2025-2026 Ralph Covelli <rcovelli@he.net>
@@ -32,8 +32,7 @@
 #define DOMAINNAME_SIZE	256
 #define RELEASE_SIZE	64
 
-struct global_stats
-{
+struct global_stats {
 	time_t start_time;
 	int64_t total_bytes_in;
 	int64_t total_bytes_out;
@@ -44,8 +43,7 @@ struct global_stats
 	char release[RELEASE_SIZE];
 };
 
-struct socket_stats
-{
+struct socket_stats {
 	time_t connect_time;
 	int64_t total_bytes_in;
 	int64_t total_bytes_out;
@@ -83,8 +81,6 @@ do {                                      \
 		(stat) = STATS_OVERFLOW;  \
 } while (0)
 
-#define PACKED __attribute__((packed))
-
 /*
  * Tables
  */
@@ -93,8 +89,7 @@ do {                                      \
 
 /* Validated ROA4 Payload (VRP4) */
 
-struct vrp4
-{
+struct vrp4 {
 	RB_ENTRY(vrp4) entry;
 	time_t expire;
 	uint8_t prefix_length;
@@ -102,15 +97,14 @@ struct vrp4
 	uint16_t zero;
 	struct in_addr prefix;
 	uint32_t asn;
-} PACKED;
+} __packed;
 
 RB_HEAD(vrp4_tree, vrp4);
 RB_PROTOTYPE(vrp4_tree, vrp4, entry, vrp4cmp)
 
 /* Validated ROA6 Payload (VRP6) */
 
-struct vrp6
-{
+struct vrp6 {
 	RB_ENTRY(vrp6) entry;
 	time_t expire;
 	uint8_t prefix_length;
@@ -118,7 +112,7 @@ struct vrp6
 	uint16_t zero;
 	struct in6_addr prefix;
 	uint32_t asn;
-} PACKED;
+} __packed;
 
 RB_HEAD(vrp6_tree, vrp6);
 RB_PROTOTYPE(vrp6_tree, vrp6, entry, vrp6cmp)
@@ -128,15 +122,14 @@ RB_PROTOTYPE(vrp6_tree, vrp6, entry, vrp6cmp)
 #define SKI_LENGTH 20
 #define SPKI_LENGTH_P256 91
 
-struct brk
-{
+struct brk {
 	RB_ENTRY(brk) entry;
 	time_t expire;
 	unsigned char ski[SKI_LENGTH];  /* Subject Key Identifier */
 	uint32_t asn;
 	uint32_t spki_length;
 	unsigned char spki[];  /* Subject Public Key Info */
-} PACKED;
+} __packed;
 
 RB_HEAD(brk_tree, brk);
 RB_PROTOTYPE(brk_tree, brk, entry, brkcmp)
@@ -146,32 +139,29 @@ RB_PROTOTYPE(brk_tree, brk, entry, brkcmp)
 /* PDU ASPA max providers 16380 */
 #define VAP_MAX_PROVIDERS	4096
 
-struct vap
-{
+struct vap {
 	RB_ENTRY(vap) entry;
 	time_t expire;
 	uint32_t customer_asn;
 	int32_t provider_count;
 	uint32_t provider_asns[];
-} PACKED;
+} __packed;
 
-struct vap_buffer
-{
+struct vap_buffer {
 	RB_ENTRY(vap) entry;
 	time_t expire;
 	uint32_t customer_asn;
 	int32_t provider_count;
 	uint32_t provider_asns[VAP_MAX_PROVIDERS];
-} PACKED;
+} __packed;
 
 RB_HEAD(vap_tree, vap);
 RB_PROTOTYPE(vap_tree, vap, entry, vapcmp)
 
-struct asn
-{
+struct asn {
 	RB_ENTRY(asn) entry;
 	uint32_t asn;
-} PACKED;
+} __packed;
 
 RB_HEAD(asn_tree, asn);
 RB_PROTOTYPE(asn_tree, asn, entry, asncmp)
@@ -198,24 +188,21 @@ RB_PROTOTYPE(asn_tree, asn, entry, asncmp)
 
 #define POLLEVENT(i) (poll_table[(i)].events)
 
-struct rtr_sendq_link
-{
+struct rtr_sendq_link {
 	ssize_t length;
 	ssize_t offset;
 	struct rtr_sendq_link *next;
 	unsigned char sendq_block[];
 };
 
-struct rtr_sendq
-{
+struct rtr_sendq {
 	struct rtr_sendq_link *head;
 	struct rtr_sendq_link *tail;
 	ssize_t length;
 	ssize_t max;
 };
 
-struct rtr_socket
-{
+struct rtr_socket {
 	int fd;
 	int type;
 	char *name;
@@ -277,50 +264,44 @@ enum pdu_type {
 #define RTR_WITHDRAW	0x00
 #define RTR_ANNOUNCE	0x01
 
-struct pdu_header
-{
+struct pdu_header {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
-} PACKED;
+} __packed;
 
-struct pdu_serial_notify
-{
+struct pdu_serial_notify {
 	uint8_t version;
 	uint8_t type;
 	uint16_t session_id;
 	uint32_t length;
 	uint32_t serial_number;
-} PACKED;
+} __packed;
 
-struct pdu_serial_query
-{
+struct pdu_serial_query {
 	uint8_t version;
 	uint8_t type;
 	uint16_t session_id;
 	uint32_t length;
 	uint32_t serial_number;
-} PACKED;
+} __packed;
 
-struct pdu_reset_query
-{
+struct pdu_reset_query {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
-} PACKED;
+} __packed;
 
-struct pdu_cache_response
-{
+struct pdu_cache_response {
 	uint8_t version;
 	uint8_t type;
 	uint16_t session_id;
 	uint32_t length;
-} PACKED;
+} __packed;
 
-struct pdu_ipv4_prefix
-{
+struct pdu_ipv4_prefix {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
@@ -331,10 +312,9 @@ struct pdu_ipv4_prefix
 	uint8_t zero;
 	struct in_addr prefix;
 	uint32_t asn;
-} PACKED;
+} __packed;
 
-struct pdu_ipv6_prefix
-{
+struct pdu_ipv6_prefix {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
@@ -345,19 +325,17 @@ struct pdu_ipv6_prefix
 	uint8_t zero;
 	struct in6_addr prefix;
 	uint32_t asn;
-} PACKED;
+} __packed;
 
-struct pdu_end_of_data_v0
-{
+struct pdu_end_of_data_v0 {
 	uint8_t version;
 	uint8_t type;
 	uint16_t session_id;
 	uint32_t length;
 	uint32_t serial_number;
-} PACKED;
+} __packed;
 
-struct pdu_end_of_data
-{
+struct pdu_end_of_data {
 	uint8_t version;
 	uint8_t type;
 	uint16_t session_id;
@@ -366,18 +344,16 @@ struct pdu_end_of_data
 	uint32_t refresh_interval;
 	uint32_t retry_interval;
 	uint32_t expire_interval;
-} PACKED;
+} __packed;
 
-struct pdu_cache_reset
-{
+struct pdu_cache_reset {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
-} PACKED;
+} __packed;
 
-struct pdu_router_key
-{
+struct pdu_router_key {
 	uint8_t version;
 	uint8_t type;
 	uint8_t flags;
@@ -386,7 +362,7 @@ struct pdu_router_key
 	unsigned char ski[SKI_LENGTH];
 	uint32_t asn;
 	unsigned char spki[];
-} PACKED;
+} __packed;
 
 enum pdu_error_code {
 	CORRUPT_DATA			=  0,
@@ -406,8 +382,7 @@ enum pdu_error_code {
 	PDU_ERROR_MAX
 };
 
-struct pdu_error
-{
+struct pdu_error {
 	uint8_t version;
 	uint8_t type;
 	uint16_t error_code;
@@ -416,10 +391,9 @@ struct pdu_error
 	unsigned char pdu[];
 	/* uint32_t text_length; */
 	/* char text[]; */
-} PACKED;
+} __packed;
 
-struct pdu_aspa
-{
+struct pdu_aspa {
 	uint8_t version;
 	uint8_t type;
 	uint8_t flags;
@@ -427,40 +401,36 @@ struct pdu_aspa
 	uint32_t length;
 	uint32_t customer_asn;
 	uint32_t provider_asns[];
-} PACKED;
+} __packed;
 
 /*
  * Controller PDUs
  */
 
-struct pdu_open_controller
-{
+struct pdu_open_controller {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
 	uint32_t controller_version;
 	uint32_t controller_flags;
-} PACKED;
+} __packed;
 
-struct pdu_close_controller
-{
+struct pdu_close_controller {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
-} PACKED;
+} __packed;
 
-struct pdu_start_of_import
-{
+struct pdu_start_of_import {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
-} PACKED;
+} __packed;
 
-struct pdu_ipv4_prefix_import
-{
+struct pdu_ipv4_prefix_import {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
@@ -472,10 +442,9 @@ struct pdu_ipv4_prefix_import
 	uint8_t zero;
 	struct in_addr prefix;
 	uint32_t asn;
-} PACKED;
+} __packed;
 
-struct pdu_ipv6_prefix_import
-{
+struct pdu_ipv6_prefix_import {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
@@ -487,10 +456,9 @@ struct pdu_ipv6_prefix_import
 	uint8_t zero;
 	struct in6_addr prefix;
 	uint32_t asn;
-} PACKED;
+} __packed;
 
-struct pdu_router_key_import
-{
+struct pdu_router_key_import {
 	uint8_t version;
 	uint8_t type;
 	uint8_t flags;
@@ -500,10 +468,9 @@ struct pdu_router_key_import
 	unsigned char ski[SKI_LENGTH];
 	uint32_t asn;
 	unsigned char spki[];
-} PACKED;
+} __packed;
 
-struct pdu_aspa_import
-{
+struct pdu_aspa_import {
 	uint8_t version;
 	uint8_t type;
 	uint8_t flags;
@@ -512,42 +479,37 @@ struct pdu_aspa_import
 	time_t expire;
 	uint32_t customer_asn;
 	uint32_t provider_asns[];
-} PACKED;
+} __packed;
 
-struct pdu_end_of_import
-{
+struct pdu_end_of_import {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
-} PACKED;
+} __packed;
 
-struct pdu_push_import
-{
+struct pdu_push_import {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
-} PACKED;
+} __packed;
 
-struct pdu_query_stats
-{
+struct pdu_query_stats {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
-} PACKED;
+} __packed;
 
-struct pdu_start_of_stats
-{
+struct pdu_start_of_stats {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
-} PACKED;
+} __packed;
 
-struct pdu_global_stats
-{
+struct pdu_global_stats {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
@@ -560,13 +522,12 @@ struct pdu_global_stats
 	int64_t total_bytes_out;
 	int64_t total_client_connects;
 	int64_t total_controller_connects;
-} PACKED;
+} __packed;
 
 #define CLIENT_STATE_REGISTERED	0x01
 #define CLIENT_STATE_CLOSED	0x02
 
-struct pdu_client_stats
-{
+struct pdu_client_stats {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
@@ -595,12 +556,11 @@ struct pdu_client_stats
 	int64_t vap_advertised;
 	int64_t reset_query_count;
 	int64_t serial_query_count;
-} PACKED;
+} __packed;
 
 #define CACHE_FRAME_FLAGS_ACTIVE	0x01
 
-struct pdu_cache_frame_stats
-{
+struct pdu_cache_frame_stats {
 	uint8_t version;
 	uint8_t type;
 	uint8_t reserved;
@@ -618,22 +578,20 @@ struct pdu_cache_frame_stats
 	time_t brk_creation_time;
 	int64_t vap_count;
 	time_t vap_creation_time;
-} PACKED;
+} __packed;
 
-struct pdu_end_of_stats
-{
+struct pdu_end_of_stats {
 	uint8_t version;
 	uint8_t type;
 	uint16_t reserved;
 	uint32_t length;
-} PACKED;
+} __packed;
 
 /*
  * Cache
  */
 
-struct cache_vrp4_tree
-{
+struct cache_vrp4_tree {
 	struct vrp4_tree vrp4s;
 	int reference_count;
 	uint32_t hash;
@@ -641,8 +599,7 @@ struct cache_vrp4_tree
 	time_t creation_time;
 };
 
-struct cache_vrp6_tree
-{
+struct cache_vrp6_tree {
 	struct vrp6_tree vrp6s;
 	int reference_count;
 	uint32_t hash;
@@ -650,8 +607,7 @@ struct cache_vrp6_tree
 	time_t creation_time;
 };
 
-struct cache_brk_tree
-{
+struct cache_brk_tree {
 	struct brk_tree brks;
 	int reference_count;
 	uint32_t hash;
@@ -659,8 +615,7 @@ struct cache_brk_tree
 	time_t creation_time;
 };
 
-struct cache_vap_tree
-{
+struct cache_vap_tree {
 	struct vap_tree vaps;
 	int reference_count;
 	uint32_t hash;
@@ -668,8 +623,7 @@ struct cache_vap_tree
 	time_t creation_time;
 };
 
-struct cache_frame
-{
+struct cache_frame {
 	uint32_t serial_number;
 	struct cache_vrp4_tree *rtr_vrp4s;
 	struct cache_vrp6_tree *rtr_vrp6s;
@@ -677,8 +631,7 @@ struct cache_frame
 	struct cache_vap_tree *rtr_vaps;
 };
 
-struct cache
-{
+struct cache {
 	struct cache_frame *frames;
 	int head;
 	int tail;
@@ -701,13 +654,12 @@ struct cache
 #define SCHED_TYPE_HANDSHAKE_TIMEOUT	1
 #define SCHED_TYPE_IDLE_TIMEOUT		2
 
-struct sched
-{
+struct sched {
 	RB_ENTRY(sched) entry;
 	time_t event_time;
 	uint32_t type;
 	struct rtr_socket *rtr_socket;
-} PACKED;
+} __packed;
 
 RB_HEAD(sched_tree, sched);
 RB_PROTOTYPE(sched_tree, sched, entry, schedcmp)
