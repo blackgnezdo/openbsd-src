@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwzvar.h,v 1.19 2026/09/29 11:40:46 kirill Exp $	*/
+/*	$OpenBSD: qwzvar.h,v 1.23 2026/09/30 11:04:31 kirill Exp $	*/
 
 /*
  * Copyright (c) 2018-2019 The Linux Foundation.
@@ -1814,11 +1814,8 @@ struct qwz_vif {
 	uint8_t search_type;
 	int8_t bank_id;	/* WCN7850/WiFi7 TX bank profile id, -1 if unset */
 
-	struct qwz_softc *sc;
-
 	uint16_t tx_seq_no;
 	struct wmi_wmm_params_all_arg wmm_params;
-	TAILQ_ENTRY(qwz_vif) entry;
 	union {
 		struct {
 			uint32_t uapsd;
@@ -1865,8 +1862,6 @@ struct qwz_vif {
 
 	struct qwz_txmgmt_queue txmgmt;
 };
-
-TAILQ_HEAD(qwz_vif_list, qwz_vif);
 
 struct qwz_survey_info {
 	int8_t noise;
@@ -2011,6 +2006,8 @@ struct qwz_softc {
 
 	int			attached;
 	int			fw_initialized;
+	int			ce_initialized;
+	int			powered;
 	struct {
 		u_char *data;
 		size_t size;
@@ -2076,7 +2073,7 @@ struct qwz_softc {
 
 	uint32_t pktlog_defs_checksum;
 
-	struct qwz_vif_list vif_list;
+	struct qwz_vif	sc_vif;
 	struct qwz_pdev pdevs[MAX_RADIOS];
 	struct {
 		enum WMI_HOST_WLAN_BAND supported_bands;
@@ -2146,7 +2143,9 @@ int	qwz_ext_intr(void *);
 int	qwz_dp_service_srng(struct qwz_softc *, int);
 
 int	qwz_init_hw_params(struct qwz_softc *);
-int	qwz_attach(struct qwz_softc *);
+int	qwz_vif_alloc(struct qwz_softc *);
+void	qwz_vif_free(struct qwz_softc *);
+void	qwz_attach(struct qwz_softc *);
 void	qwz_detach(struct qwz_softc *);
 int	qwz_activate(struct device *, int);
 
@@ -2155,6 +2154,7 @@ void	qwz_ce_cleanup_pipes(struct qwz_softc *);
 
 int	qwz_ioctl(struct ifnet *, u_long, caddr_t);
 void	qwz_start(struct ifnet *);
+void	qwz_stop(struct ifnet *);
 void	qwz_watchdog(struct ifnet *);
 int	qwz_media_change(struct ifnet *);
 void	qwz_init_task(void *);
