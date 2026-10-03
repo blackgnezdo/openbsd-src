@@ -1,4 +1,4 @@
-/*	$OpenBSD: nca.c,v 1.11 2026/07/09 12:02:23 job Exp $ */
+/*	$OpenBSD: nca.c,v 1.13 2026/10/01 13:31:14 tb Exp $ */
 /*
  * Copyright (c) 2026 Job Snijders <job@bsd.nl>
  * Copyright (c) 2025 Theo Buehler <tb@openbsd.org>
@@ -32,6 +32,21 @@
 #include "extern.h"
 
 extern int rrdpon;
+
+static void
+nonfunc_ca_free(struct nonfunc_ca *nca)
+{
+	if (nca == NULL)
+		return;
+
+	free(nca->aki);
+	free(nca->ski);
+	free(nca->location);
+	free(nca->carepo);
+	free(nca->mfturi);
+	free(nca->notify);
+	free(nca);
+}
 
 /*
  * Add a given CA cert into the non-functional CA tree.
@@ -89,8 +104,13 @@ nca_tree_insert_cert(struct nca_tree *tree, const struct cert *cert,
 		}
 	}
 
-	if (RB_INSERT(nca_tree, tree, nca) != NULL)
-		errx(1, "non-functional CA tree corrupted");
+	if (RB_INSERT(nca_tree, tree, nca) != NULL) {
+		int defer = nca->defer;
+
+		warnx("duplicate non-functional CA at %s", nca->location);
+		nonfunc_ca_free(nca);
+		return defer;
+	}
 
 	return nca->defer;
 }
@@ -102,13 +122,7 @@ nca_tree_remove_cert(struct nca_tree *tree, int cid)
 
 	if ((found = RB_FIND(nca_tree, tree, &needle)) != NULL) {
 		RB_REMOVE(nca_tree, tree, found);
-		free(found->aki);
-		free(found->ski);
-		free(found->location);
-		free(found->carepo);
-		free(found->mfturi);
-		free(found->notify);
-		free(found);
+		nonfunc_ca_free(found);
 	}
 }
 
@@ -378,8 +392,12 @@ nca_history_load(void)
 				err(1, NULL);
 		}
 
-		if (RB_INSERT(nca_hist_tree, &ncas_hist, nca_hist) != NULL)
-			err(1, "ncas_hist_tree corrupted");
+		if (RB_INSERT(nca_hist_tree, &ncas_hist, nca_hist) != NULL) {
+			warnx("duplicate entry for ncas_hist_tree at %s",
+			    nca_hist->location);
+			nca_hist_free(nca_hist);
+			nca_hist = NULL;
+		}
 	}
 
 	if (ferror(f))

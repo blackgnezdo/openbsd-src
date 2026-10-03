@@ -1,4 +1,4 @@
-/*	$OpenBSD: ccr.c,v 1.44 2026/08/25 08:41:14 job Exp $ */
+/*	$OpenBSD: ccr.c,v 1.46 2026/09/30 15:54:48 tb Exp $ */
 /*
  * Copyright (c) 2025 Job Snijders <job@openbsd.org>
  *
@@ -751,6 +751,25 @@ ccr_mft_new(void)
 	return ccr_mft;
 }
 
+static void
+ccr_mft_free(struct ccr_mft *ccr_mft)
+{
+	struct ccr_mft_sub_ski *sub_ski;
+
+	if (ccr_mft == NULL)
+		return;
+
+	while (!SIMPLEQ_EMPTY(&ccr_mft->subordinates)) {
+		sub_ski = SIMPLEQ_FIRST(&ccr_mft->subordinates);
+		SIMPLEQ_REMOVE_HEAD(&ccr_mft->subordinates, entry);
+		free(sub_ski);
+	}
+
+	free(ccr_mft->seqnum);
+	free(ccr_mft->sia);
+	free(ccr_mft);
+}
+
 void
 ccr_insert_mft(struct ccr_mft_tree *tree, const struct mft *mft)
 {
@@ -772,8 +791,10 @@ ccr_insert_mft(struct ccr_mft_tree *tree, const struct mft *mft)
 	ccr_mft->size = mft->mftsize;
 	ccr_mft->thisupdate = mft->thisupdate;
 
-	if (RB_INSERT(ccr_mft_tree, tree, ccr_mft) != NULL)
-		errx(1, "CCR MFT tree corrupted");
+	if (RB_INSERT(ccr_mft_tree, tree, ccr_mft) != NULL) {
+		warnx("duplicate CCR MFT at %s", ccr_mft->sia);
+		ccr_mft_free(ccr_mft);
+	}
 }
 
 void
@@ -852,25 +873,6 @@ output_ccr_der(FILE *out, struct validation_data *vd, struct stats *st)
 		err(1, "fwrite");
 
 	return 0;
-}
-
-static void
-ccr_mft_free(struct ccr_mft *ccr_mft)
-{
-	struct ccr_mft_sub_ski *sub_ski;
-
-	if (ccr_mft == NULL)
-		return;
-
-	while (!SIMPLEQ_EMPTY(&ccr_mft->subordinates)) {
-		sub_ski = SIMPLEQ_FIRST(&ccr_mft->subordinates);
-		SIMPLEQ_REMOVE_HEAD(&ccr_mft->subordinates, entry);
-		free(sub_ski);
-	}
-
-	free(ccr_mft->seqnum);
-	free(ccr_mft->sia);
-	free(ccr_mft);
 }
 
 static void

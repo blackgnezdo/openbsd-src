@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_qwz_pci.c,v 1.18 2026/09/30 11:04:31 kirill Exp $	*/
+/*	$OpenBSD: if_qwz_pci.c,v 1.20 2026/10/01 10:18:14 kirill Exp $	*/
 
 /*
  * Copyright 2023 Stefan Sperling <stsp@openbsd.org>
@@ -995,7 +995,7 @@ qwz_pci_attach(struct device *parent, struct device *self, void *aux)
 	memcpy(ifp->if_xname, sc->sc_dev.dv_xname, IFNAMSIZ);
 	if_attach(ifp);
 	ieee80211_ifattach(ifp);
-	ieee80211_media_init(ifp, qwz_media_change, ieee80211_media_status);
+	ieee80211_media_init(ifp, ieee80211_media_change, ieee80211_media_status);
 
 	ic->ic_node_alloc = qwz_node_alloc;
 
@@ -3033,16 +3033,15 @@ qwz_mhi_fw_load_handler(struct qwz_pci_softc *psc)
 	u_char *data;
 	size_t len;
 
-	amss_path[0] = '\0';
+	ret = snprintf(amss_path, sizeof(amss_path), "%s-%s-%s",
+	    ATH12K_FW_DIR, sc->hw_params.fw.dir, ATH12K_AMSS_FILE);
+	if (ret < 0 || ret >= sizeof(amss_path))
+		return ENOSPC;
+
 	if (sc->fw_img[QWZ_FW_AMSS].data) {
 		data = sc->fw_img[QWZ_FW_AMSS].data;
 		len = sc->fw_img[QWZ_FW_AMSS].size;
 	} else {
-		ret = snprintf(amss_path, sizeof(amss_path), "%s-%s-%s",
-		    ATH12K_FW_DIR, sc->hw_params.fw.dir, ATH12K_AMSS_FILE);
-		if (ret < 0 || ret >= sizeof(amss_path))
-			return ENOSPC;
-
 		ret = loadfirmware(amss_path, &data, &len);
 		if (ret) {
 			printf("%s: could not read %s (error %d)\n",
