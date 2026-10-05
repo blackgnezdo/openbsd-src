@@ -1,4 +1,4 @@
-/*	$OpenBSD: bytestring.h,v 1.30 2026/10/04 09:23:40 tb Exp $	*/
+/*	$OpenBSD: bytestring.h,v 1.1 2026/10/04 09:37:56 tb Exp $	*/
 /*
  * Copyright (c) 2014, Google Inc.
  *
