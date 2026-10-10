@@ -1,4 +1,4 @@
-/* $OpenBSD: options-table.c,v 1.248 2026/10/02 15:04:27 nicm Exp $ */
+/* $OpenBSD: options-table.c,v 1.252 2026/10/09 13:12:14 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -184,7 +184,8 @@ static const char *options_table_copy_mode_line_numbers_list[] = {
 	"#[pop-default]" \
 	"#[norange default]"
 #define OPTIONS_TABLE_STATUS_FORMAT2 \
-	"#[align=left]#{R: ,#{n:#{session_name}}}P: " \
+	"#[align=left]" \
+	"#{R: ,#{e|-:#{w;T;=/#{status-left-length}:status-left},3}}P: " \
 	"#[norange default]" \
 	"#[list=on align=#{status-justify}]" \
 	"#[list=left-marker]<#[list=right-marker]>#[list=on]" \
@@ -195,7 +196,8 @@ static const char *options_table_copy_mode_line_numbers_list[] = {
 		"#[push-default]" \
 		"#{T:window-pane-status-format}" \
 		"#[pop-default]" \
-		"#[norange list=on default]  " \
+		"#[norange list=on default]" \
+		"#{?loop_last_flag,,#{E:window-status-separator}}" \
 	"," \
 		"#[range=pane|#{pane_id} list=focus " \
 			"#{?#{!=:#{E:pane-status-current-style},default}," \
@@ -206,10 +208,12 @@ static const char *options_table_copy_mode_line_numbers_list[] = {
 		"#[push-default]" \
 		"#{T:window-pane-current-status-format}" \
 		"#[pop-default]" \
-		"#[norange list=on default] " \
+		"#[norange list=on default]" \
+		"#{?loop_last_flag,,#{E:window-status-separator}}" \
 	"}"
 #define OPTIONS_TABLE_STATUS_FORMAT3 \
-	"#[align=left]#{R: ,#{n:#{session_name}}}S: " \
+	"#[align=left]" \
+	"#{R: ,#{e|-:#{w;T;=/#{status-left-length}:status-left},3}}S: " \
 	"#[norange default]" \
 	"#[list=on align=#{status-justify}]" \
 	"#[list=left-marker]<#[list=right-marker]>#[list=on]" \
@@ -326,7 +330,8 @@ const struct options_table_entry options_table[] = {
 			 "server-info=show-messages -JT,"
 			 "info=show-messages -JT,"
 			 "choose-window=choose-tree -w,"
-			 "choose-session=choose-tree -s",
+			 "choose-session=choose-tree -s,"
+			 "help=list-commands -h",
 	  .separator = ",",
 	  .text = "Array of command aliases. "
 		  "Each entry is an alias and a command separated by '='."
@@ -1411,8 +1416,12 @@ const struct options_table_entry options_table[] = {
 			 "#{t/p:top_line_time}#{?#{e|>:#{top_line_time},0}, ,}"
 			 "[#{copy_position}/#{copy_position_limit}]"
 			 "#{?search_timed_out, (timed out),"
-			 "#{?search_count, (#{search_count}"
-			 "#{?search_count_partial,+,} results),}}",
+			 "#{?search_count_present, ("
+			 "#{?#{==:#{search_count},0},0 matches,"
+			 "#{?search_count_partial,#{search_count}+ matches,"
+			 "#{?#{==:#{search_count},1},1 of 1 match,"
+			 "#{?search_count_current,#{search_count_current} of "
+			 "#{search_count} matches,#{search_count} matches}}}}),}}",
 	  .text = "Format of the position indicator in copy mode."
 	},
 
@@ -1772,6 +1781,14 @@ const struct options_table_entry options_table[] = {
 	  .flags = OPTIONS_TABLE_IS_STYLE,
 	  .separator = ",",
 	  .text = "Default style of the active pane."
+	},
+
+	{ .name = "window-default-command",
+	  .type = OPTIONS_TABLE_STRING,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .default_str = "",
+	  .text = "Default command to run in new panes. If set, "
+		  "overrides 'default-command'."
 	},
 
 	{ .name = "window-pane-current-status-format",

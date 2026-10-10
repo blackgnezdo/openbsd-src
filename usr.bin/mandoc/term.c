@@ -1,4 +1,4 @@
-/* $OpenBSD: term.c,v 1.155 2026/01/06 21:16:12 schwarze Exp $ */
+/* $OpenBSD: term.c,v 1.157 2026/10/07 15:56:51 schwarze Exp $ */
 /*
  * Copyright (c) 2010-2022, 2025, 2026 Ingo Schwarze <schwarze@openbsd.org>
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -615,7 +615,9 @@ term_word(struct termp *p, const char *word)
 			bufferc(p, ASCII_NBRZW);
 			continue;
 		case ESCAPE_SPECIAL:
-			if (p->enc == TERMENC_ASCII) {
+			if (*seq == ':' && sz == 1)
+				bufferc(p, ASCII_BREAK);
+			else if (p->enc == TERMENC_ASCII) {
 				cp = mchars_spec2str(seq, sz, &ssz);
 				if (cp != NULL)
 					encode(p, cp, ssz);
@@ -722,7 +724,7 @@ term_word(struct termp *p, const char *word)
 				lsz = p->tcol->rmargin - p->tcol->offset;
 			} else
 				lsz = bu;
-			if (*cp == seq[-1])
+			if (cp == seq + sz)
 				uc = -1;
 			else if (*cp == '\\') {
 				seq = cp + 1;

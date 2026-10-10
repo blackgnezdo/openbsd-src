@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-join-pane.c,v 1.76 2026/10/02 12:48:52 nicm Exp $ */
+/* $OpenBSD: cmd-join-pane.c,v 1.78 2026/10/09 13:12:14 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 George Nachman <tmux@georgester.com>
@@ -37,6 +37,7 @@ static void		cmd_join_pane_mouse_move(struct client *,
 
 const struct cmd_entry cmd_join_pane_entry = {
 	.name = "join-pane",
+	.description = "Move a pane into another window.",
 	.alias = "joinp",
 
 	.args = { "bdfhvp:l:s:t:", 0, 0, NULL },
@@ -51,6 +52,7 @@ const struct cmd_entry cmd_join_pane_entry = {
 
 const struct cmd_entry cmd_move_pane_entry = {
 	.name = "move-pane",
+	.description = "Move a pane or reposition a floating pane.",
 	.alias = "movep",
 
 	.args = { "bdD::fhMvl:L::P:R::s:t:U::X:Y:z:", 0, 0, NULL },
@@ -504,7 +506,8 @@ cmd_join_pane_exec(struct cmd *self, struct cmdq_item *item)
 	layout_close_pane(src_wp);
 
 	server_client_remove_pane(src_wp);
-	window_lost_pane(src_w, src_wp);
+	if (src_w != dst_w)
+		window_lost_pane(src_w, src_wp);
 	TAILQ_REMOVE(&src_w->panes, src_wp, entry);
 	TAILQ_REMOVE(&src_w->z_index, src_wp, zentry);
 

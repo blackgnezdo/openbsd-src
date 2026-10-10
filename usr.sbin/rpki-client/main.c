@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.316 2026/09/30 20:48:11 rcovelli Exp $ */
+/*	$OpenBSD: main.c,v 1.318 2026/10/09 10:05:12 tb Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -470,7 +470,7 @@ queue_add_from_mft(const struct mft *mft)
 			err(1, NULL);
 
 		entityq_add(npath, nfile, f->type, f->location, rp,
-		    data, datasz, mft->talid, mft->certid, mftaki);
+		    data, datasz, mft->talid, mft->issuerid, mftaki);
 	}
 }
 
@@ -690,7 +690,7 @@ entity_process(struct ibuf *b, struct validation_data *vd, struct stats *st)
 		if (mft->seqnum_gap)
 			repo_stat_inc(rp, talid, type, STYPE_SEQNUM_GAP);
 		queue_add_from_mft(mft);
-		nca_tree_remove_cert(&vd->ncas, mft->certid);
+		nca_tree_remove_cert(&vd->ncas, mft->issuerid);
 		ccr_insert_mft(&vd->ccr.mfts, mft);
 		mft_free(mft);
 		break;
@@ -995,6 +995,7 @@ process_start(const char *title, int *fd)
 			err(1, "fchdir");
 		if (!filemode && timeout > 0)
 			alarm(timeout);
+		rtrx_close();
 		close(pair[1]);
 		*fd = pair[0];
 	} else {

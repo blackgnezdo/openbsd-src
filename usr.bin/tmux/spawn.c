@@ -1,4 +1,4 @@
-/* $OpenBSD: spawn.c,v 1.54 2026/10/02 13:20:42 nicm Exp $ */
+/* $OpenBSD: spawn.c,v 1.57 2026/10/08 07:50:05 nicm Exp $ */
 
 /*
  * Copyright (c) 2019 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -379,7 +379,9 @@ spawn_pane(struct spawn_context *sc, char **cause)
 	 * directory.
 	 */
 	if (sc->argc == 0 && (~sc->flags & SPAWN_RESPAWN)) {
-		cmd = options_get_string(s->options, "default-command");
+		cmd = options_get_string(w->options, "window-default-command");
+		if (cmd == NULL || *cmd == '\0')
+			cmd = options_get_string(s->options, "default-command");
 		if (cmd != NULL && *cmd != '\0') {
 			argc = 1;
 			argv = (char **)&cmd;
@@ -460,6 +462,8 @@ spawn_pane(struct spawn_context *sc, char **cause)
 	/* If the command is empty, don't fork a child process. */
 	if (sc->flags & SPAWN_EMPTY) {
 		new_wp->flags |= PANE_EMPTY;
+		new_wp->pid = 0;
+		*new_wp->tty = '\0';
 		new_wp->base.mode &= ~MODE_CURSOR;
 		new_wp->base.mode |= MODE_CRLF;
 		goto complete;
@@ -681,7 +685,7 @@ spawn_editor_finish(struct window_pane *wp)
 
 struct spawn_editor_state *
 spawn_editor(struct client *c, const char *buf, size_t len,
-    spawn_finish_edit_cb cb, void *arg)
+    const char *editor, spawn_finish_edit_cb cb, void *arg)
 {
 	struct spawn_editor_state	*es;
 	struct spawn_context		 sc = { 0 };
@@ -695,13 +699,13 @@ spawn_editor(struct client *c, const char *buf, size_t len,
 	FILE				*f;
 	char				*cmd, *cause = NULL;
 	char				 path[] = _PATH_TMP "tmux.XXXXXXXX";
-	const char			*editor;
 	int				 fd;
 
 	if (w->modal != NULL)
 		return (NULL);
 
-	editor = options_get_string(global_options, "editor");
+	if (editor == NULL)
+		editor = options_get_string(global_options, "editor");
 	fd = mkstemp(path);
 	if (fd == -1)
 		return (NULL);

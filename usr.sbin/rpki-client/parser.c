@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.189 2026/09/24 14:44:03 tb Exp $ */
+/*	$OpenBSD: parser.c,v 1.192 2026/10/09 10:05:12 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -226,8 +226,9 @@ proc_parser_roa(char *file, const unsigned char *der, size_t len,
 	}
 
 	roa->talid = a->cert->talid;
+	roa->issuerid = entp->certid;
 
-	roa->expires = x509_find_expires(cert->notafter, a, &crls);
+	roa->expires = x509_find_expires(cert->notafter, a, crl);
 	cert_free(cert);
 
 	return roa;
@@ -268,8 +269,9 @@ proc_parser_spl(char *file, const unsigned char *der, size_t len,
 	}
 
 	spl->talid = a->cert->talid;
+	spl->issuerid = entp->certid;
 
-	spl->expires = x509_find_expires(cert->notafter, a, &crls);
+	spl->expires = x509_find_expires(cert->notafter, a, crl);
 	cert_free(cert);
 
 	return spl;
@@ -447,7 +449,7 @@ proc_parser_mft_pre(struct entity *entp, char *file, struct crl **crl,
 
 	mft->repoid = entp->repoid;
 	mft->talid = a->cert->talid;
-	mft->certid = entp->certid;
+	mft->issuerid = entp->certid;
 
 	now = get_current_time();
 	/* check that now is not before from */
@@ -632,6 +634,7 @@ proc_parser_cert(char *file, const unsigned char *der, size_t len,
 	}
 
 	cert->talid = a->cert->talid;
+	cert->issuerid = a->cert->certid;
 
 	cert->path = parse_filepath(entp->repoid, entp->path, entp->file,
 	    DIR_VALID);
@@ -653,7 +656,7 @@ proc_parser_cert(char *file, const unsigned char *der, size_t len,
 			errx(1, "%s: corrupted entity", file);
 
 		memcpy(cert->mfthash, entp->data, entp->datasz);
-		auth_insert(file, &auths, cert, a);
+		auth_insert(file, &auths, cert, a, crl);
 	}
 
 	return cert;
@@ -742,7 +745,8 @@ proc_parser_root_cert(struct entity *entp, struct cert **out_cert)
 		free(file2);
 
 		cert1->talid = entp->talid;
-		auth_insert(file1, &auths, cert1, NULL);
+		cert1->issuerid = entp->talid;
+		auth_insert(file1, &auths, cert1, NULL, NULL);
 
 		*out_cert = cert1;
 		return file1;
@@ -754,9 +758,10 @@ proc_parser_root_cert(struct entity *entp, struct cert **out_cert)
 
 		if (cert2 != NULL) {
 			cert2->talid = entp->talid;
+			cert2->issuerid = entp->talid;
 			if ((cert2->path = strdup(file2)) == NULL)
 				err(1, NULL);
-			auth_insert(file2, &auths, cert2, NULL);
+			auth_insert(file2, &auths, cert2, NULL, NULL);
 		}
 
 		*out_cert = cert2;
@@ -792,8 +797,9 @@ proc_parser_aspa(char *file, const unsigned char *der, size_t len,
 	}
 
 	aspa->talid = a->cert->talid;
+	aspa->issuerid = entp->certid;
 
-	aspa->expires = x509_find_expires(cert->notafter, a, &crls);
+	aspa->expires = x509_find_expires(cert->notafter, a, crl);
 	cert_free(cert);
 
 	return aspa;
@@ -838,7 +844,7 @@ proc_parser_tak(char *file, const unsigned char *der, size_t len,
 
 	tak->talid = a->cert->talid;
 
-	tak->expires = x509_find_expires(cert->notafter, a, &crls);
+	tak->expires = x509_find_expires(cert->notafter, a, crl);
 	cert_free(cert);
 
 	return tak;

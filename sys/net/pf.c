@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf.c,v 1.1242 2026/10/02 09:40:22 sashan Exp $ */
+/*	$OpenBSD: pf.c,v 1.1244 2026/10/08 20:37:05 bluhm Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -7706,7 +7706,7 @@ int
 pf_walk_header(struct pf_pdesc *pd, struct ip *h, u_short *reason)
 {
 	struct ip6_ext		 ext;
-	u_int32_t		 hlen, end;
+	u_int32_t		 hlen, end, extlen;
 	int			 hdr_cnt;
 
 	hlen = h->ip_hl << 2;
@@ -7755,7 +7755,16 @@ pf_walk_header(struct pf_pdesc *pd, struct ip *h, u_short *reason)
 				DPFPRINTF(LOG_NOTICE, "IP short exthdr");
 				return (PF_DROP);
 			}
-			pd->off += (ext.ip6e_len + 2) * 4;
+			extlen = (ext.ip6e_len + 2) * 4;
+			if (end < pd->off + extlen) {
+				if ((h->ip_off & htons(IP_MF | IP_OFFMASK))
+				    != 0)
+					return (PF_PASS);
+				DPFPRINTF(LOG_NOTICE, "IP long exthdr");
+				REASON_SET(reason, PFRES_SHORT);
+				return (PF_DROP);
+			}
+			pd->off += extlen;
 			pd->proto = ext.ip6e_nxt;
 			break;
 		default:
@@ -7844,7 +7853,7 @@ pf_walk_header6(struct pf_pdesc *pd, struct ip6_hdr *h, u_short *reason)
 	struct ip6_ext		 ext;
 	struct icmp6_hdr	 icmp6;
 	struct ip6_rthdr	 rthdr;
-	u_int32_t		 end;
+	u_int32_t		 end, extlen;
 	int			 hdr_cnt, fraghdr_cnt = 0, rthdr_cnt = 0;
 
 	pd->off += sizeof(struct ip6_hdr);
@@ -7956,9 +7965,20 @@ pf_walk_header6(struct pf_pdesc *pd, struct ip6_hdr *h, u_short *reason)
 				return (PF_DROP);
 			}
 			if (pd->proto == IPPROTO_AH)
-				pd->off += (ext.ip6e_len + 2) * 4;
+				extlen = (ext.ip6e_len + 2) * 4;
 			else
-				pd->off += (ext.ip6e_len + 1) * 8;
+				extlen = (ext.ip6e_len + 1) * 8;
+			if (end < pd->off + extlen) {
+				if (pd->fragoff != 0) {
+					pd->off = pd->fragoff;
+					pd->proto = IPPROTO_FRAGMENT;
+					return (PF_PASS);
+				}
+				DPFPRINTF(LOG_NOTICE, "IPv6 long exthdr");
+				REASON_SET(reason, PFRES_SHORT);
+				return (PF_DROP);
+			}
+			pd->off += extlen;
 			pd->proto = ext.ip6e_nxt;
 			break;
 		case IPPROTO_ICMPV6:
