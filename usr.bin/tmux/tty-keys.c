@@ -1,4 +1,4 @@
-/* $OpenBSD: tty-keys.c,v 1.216 2026/10/06 17:49:45 nicm Exp $ */
+/* $OpenBSD: tty-keys.c,v 1.220 2026/10/16 12:01:33 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1675,6 +1675,8 @@ tty_keys_extended_device_attributes(struct tty *tty, const char *buf,
 		tty_default_features(c, "mintty", 0);
 	else if (strncmp(tmp, "foot(", 5) == 0)
 		tty_default_features(c, "foot", 0);
+	else if (strncmp(tmp, "kitty(", 6) == 0)
+		tty_default_features(c, "kitty", 0);
 	else if (strncmp(tmp, "WezTerm ", 7) == 0)
 		tty_default_features(c, "WezTerm", 0);
 	else if (strncmp(tmp, "ghostty ", 8) == 0)
@@ -1783,8 +1785,12 @@ tty_keys_colours1(struct tty *tty, const char *buf, size_t len, size_t *size,
 
 	n = tty_keys_colours(tty, buf, len, size, &tty->fg, &tty->bg);
 	if (n == 0) {
-		if (tty->bg != bg)
+		if (tty->bg != bg) {
 			server_client_update_theme_colours(c);
+			if (tty->flags & TTY_OPENED)
+				tty_invalidate(tty);
+			server_redraw_client(c);
+		}
 		session_theme_changed(c->session);
 	}
 	return (n);
@@ -1912,7 +1918,8 @@ tty_keys_winsz(struct tty *tty, const char *buf, size_t len, size_t *size,
 			return (0);
 
 		/* Window size in characters. */
-		tty_set_size(tty, sx, sy, tty->xpixel, tty->ypixel);
+		if (tty_set_size(tty, sx, sy, tty->xpixel, tty->ypixel))
+			server_redraw_client(c);
 		return (0);
 	} else if (sscanf(tmp, "4;%u;%u", &ypixel, &xpixel) == 2) {
 		*size = end + 1;
@@ -1922,8 +1929,10 @@ tty_keys_winsz(struct tty *tty, const char *buf, size_t len, size_t *size,
 		/* Window size in pixels. */
 		char_x = (xpixel && tty->sx) ? xpixel / tty->sx : 0;
 		char_y = (ypixel && tty->sy) ? ypixel / tty->sy : 0;
-		tty_set_size(tty, tty->sx, tty->sy, char_x, char_y);
+		if (tty_set_size(tty, tty->sx, tty->sy, char_x, char_y))
+			server_redraw_client(c);
 		tty_invalidate(tty);
+		recalculate_sizes();
 
 		tty->flags &= ~TTY_WINSIZEQUERY;
 		return (0);

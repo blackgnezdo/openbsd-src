@@ -1,4 +1,4 @@
-/* $OpenBSD: channels.c,v 1.470 2026/09/16 06:23:15 djm Exp $ */
+/* $OpenBSD: channels.c,v 1.472 2026/10/15 05:50:32 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -2738,7 +2738,7 @@ channel_handler(struct ssh *ssh, int table, struct timespec *timeout)
 				if (timeout != NULL &&
 				    c->type == SSH_CHANNEL_OPEN &&
 				    channel_get_expiry(ssh, c) != 0) {
-					ptimeout_deadline_monotime(timeout,
+					ptimeout_deadline_monotime_double(timeout,
 					    channel_get_expiry(ssh, c));
 				}
 			} else if (timeout != NULL) {
@@ -2746,7 +2746,7 @@ channel_handler(struct ssh *ssh, int table, struct timespec *timeout)
 				 * Arrange for poll() wakeup when channel pause
 				 * timer expires.
 				 */
-				ptimeout_deadline_monotime(timeout,
+				ptimeout_deadline_monotime_double(timeout,
 				    c->notbefore);
 			}
 		}
@@ -3549,7 +3549,12 @@ channel_input_data(int type, uint32_t seq, struct ssh *ssh)
 		return 0;
 	}
 	if (win_len > c->local_window) {
-		c->local_window_exceeded += win_len - c->local_window;
+		u_int delta = win_len - c->local_window;
+
+		if (c->local_window_exceeded > UINT_MAX - delta)
+			c->local_window_exceeded = UINT_MAX;
+		else
+			c->local_window_exceeded += delta;
 		logit("channel %d: rcvd too much data %zu, win %u/%u "
 		    "(excess %u)", c->self, win_len, c->local_window,
 		    c->local_window_max, c->local_window_exceeded);

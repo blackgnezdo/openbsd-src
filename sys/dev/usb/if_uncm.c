@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_uncm.c,v 1.1 2026/10/06 12:31:56 stsp Exp $ */
+/*	$OpenBSD: if_uncm.c,v 1.5 2026/10/16 09:39:35 stsp Exp $ */
 
 /*
  * Copyright (c) 2016 genua mbH
@@ -82,6 +82,7 @@ struct uncm_softc {
 	struct usbd_interface	*sc_ctrl_iface;
 	struct usbd_pipe	*sc_ctrl_pipe;
 	struct usb_cdc_notification sc_intr_msg;
+	int			 sc_intr_size;
 	struct usbd_interface	*sc_data_iface;
 
 	int			 sc_data_ifaceidx;
@@ -107,6 +108,13 @@ struct uncm_softc {
 };
 
 #define UNCM_RX_NTB_MAX		16384
+
+#define UNCM_NTB16_MINSZ	(sizeof(struct ncm_header16) +	\
+				 sizeof(struct ncm_pointer16) +	\
+				 sizeof(struct ncm_pointer16_dgram))
+#define UNCM_NTB32_MINSZ	(sizeof(struct ncm_header32) +	\
+				 sizeof(struct ncm_pointer32) +	\
+				 sizeof(struct ncm_pointer32_dgram))
 
 int		 uncm_match(struct device *, void *, void *);
 void		 uncm_attach(struct device *, struct device *, void *);
@@ -183,7 +191,7 @@ uncm_attach(struct device *parent, struct device *self, void *aux)
 	int	current_ifaceno = -1;
 	int	data_ifaceno = -1;
 	int	mac_idx = -1;
-	int	ctrl_ep;
+	int	ctrl_ep, ctrl_maxpkt = 0;
 	int	altnum, i, s;
 	uint32_t maxpktlen;
 
@@ -192,16 +200,17 @@ uncm_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_ctrl_ifaceno = uaa->ifaceno;
 	sc->sc_maxpktlen = ETHER_MAX_LEN - ETHER_CRC_LEN;
 	sc->sc_link = LINK_STATE_UNKNOWN;
+
 	ml_init(&sc->sc_tx_ml);
 	usb_init_task(&sc->sc_link_task, uncm_link_task, sc,
 	    USB_TASK_TYPE_GENERIC);
+
 	usbd_desc_iter_init(sc->sc_udev, &iter);
 	while ((desc = usbd_desc_iter_next(&iter))) {
 		if (desc->bDescriptorType == UDESC_IFACE_ASSOC) {
 			ad = (usb_interface_assoc_descriptor_t *)desc;
 			if (ad->bFirstInterface == uaa->ifaceno &&
 			    ad->bInterfaceCount > 1) {
-				/* Fall back to the interface following control. */
 				data_ifaceno = uaa->ifaceno + 1;
 			}
 			continue;
@@ -245,6 +254,7 @@ uncm_attach(struct device *parent, struct device *self, void *aux)
 			break;
 		}
 	}
+
 	if (data_ifaceno == -1) {
 		printf("%s: no data interface number\n", DEVNAM(sc));
 		goto fail;
@@ -260,6 +270,7 @@ uncm_attach(struct device *parent, struct device *self, void *aux)
 			usbd_claim_iface(sc->sc_udev, i);
 		}
 	}
+
 	if (sc->sc_data_iface == NULL) {
 		printf("%s: no data interface found\n", DEVNAM(sc));
 		goto fail;
@@ -272,9 +283,12 @@ uncm_attach(struct device *parent, struct device *self, void *aux)
 		if (ed == NULL)
 			break;
 		if (UE_GET_XFERTYPE(ed->bmAttributes) == UE_INTERRUPT &&
-		    UE_GET_DIR(ed->bEndpointAddress) == UE_DIR_IN)
+		    UE_GET_DIR(ed->bEndpointAddress) == UE_DIR_IN) {
 			ctrl_ep = ed->bEndpointAddress;
+			ctrl_maxpkt = UE_GET_SIZE(UGETW(ed->wMaxPacketSize));
+		}
 	}
+
 	if (ctrl_ep == -1) {
 		printf("%s: missing interrupt endpoint\n", DEVNAM(sc));
 		goto fail;
@@ -316,6 +330,7 @@ uncm_attach(struct device *parent, struct device *self, void *aux)
 		    UE_GET_DIR(ed->bEndpointAddress) == UE_DIR_OUT)
 			sc->sc_tx_ep = ed->bEndpointAddress;
 	}
+
 	if (sc->sc_rx_ep == -1 || sc->sc_tx_ep == -1) {
 		printf("%s: missing bulk endpoints\n", DEVNAM(sc));
 		goto fail;
@@ -326,8 +341,18 @@ uncm_attach(struct device *parent, struct device *self, void *aux)
 	    UE_GET_ADDR(ctrl_ep), data_ifaceno,
 	    UE_GET_ADDR(sc->sc_rx_ep), UE_GET_ADDR(sc->sc_tx_ep));
 
+	/*
+	 * Read one packet per transfer.  Otherwise a full-sized
+	 * SPEED_CHANGE (16 bytes) and the following NETWORK_CONNECTION
+	 * get merged into one transfer and the latter is lost.
+	 */
+	sc->sc_intr_size = sizeof(sc->sc_intr_msg);
+	if (ctrl_maxpkt >= UCDC_NOTIFICATION_LENGTH &&
+	    ctrl_maxpkt < sc->sc_intr_size)
+		sc->sc_intr_size = ctrl_maxpkt;
+
 	if (usbd_open_pipe_intr(sc->sc_ctrl_iface, ctrl_ep, USBD_SHORT_XFER_OK,
-	    &sc->sc_ctrl_pipe, sc, &sc->sc_intr_msg, sizeof(sc->sc_intr_msg),
+	    &sc->sc_ctrl_pipe, sc, &sc->sc_intr_msg, sc->sc_intr_size,
 	    uncm_intr, USBD_DEFAULT_INTERVAL)) {
 		printf("%s: failed to open control pipe\n", DEVNAM(sc));
 		goto fail;
@@ -378,11 +403,13 @@ uncm_detach(struct device *self, int flags)
 	if (ifp->if_flags & IFF_RUNNING)
 		uncm_stop(sc);
 
-	usb_rem_wait_task(sc->sc_udev, &sc->sc_link_task);
 	if (sc->sc_ctrl_pipe) {
 		usbd_close_pipe(sc->sc_ctrl_pipe);
 		sc->sc_ctrl_pipe = NULL;
 	}
+
+	usb_rem_wait_task(sc->sc_udev, &sc->sc_link_task);
+
 	if (ifp->if_softc != NULL) {
 		ether_ifdetach(ifp);
 		if_detach(ifp);
@@ -438,12 +465,14 @@ uncm_ntb_setup(struct uncm_softc *sc)
 {
 	usb_device_request_t req;
 	struct ncm_ntb_parameters np;
+	int	toosmall = 0;
 
 	req.bmRequestType = UT_READ_CLASS_INTERFACE;
 	req.bRequest = NCM_GET_NTB_PARAMETERS;
 	USETW(req.wValue, 0);
 	USETW(req.wIndex, sc->sc_ctrl_ifaceno);
 	USETW(req.wLength, sizeof(np));
+
 	if (usbd_do_request(sc->sc_udev, &req, &np) == USBD_NORMAL_COMPLETION &&
 	    UGETW(np.wLength) == sizeof(np)) {
 		sc->sc_rx_bufsz = MIN(UGETDW(np.dwNtbInMaxSize), UINT16_MAX);
@@ -453,10 +482,10 @@ uncm_ntb_setup(struct uncm_softc *sc)
 		sc->sc_ndp_div = UGETW(np.wNdpOutDivisor);
 		sc->sc_ndp_remainder = UGETW(np.wNdpOutPayloadRemainder);
 
-		if (!powerof2(sc->sc_align) || sc->sc_align == 0 ||
+		if (!powerof2(sc->sc_align) || sc->sc_align < 4 ||
 		    sc->sc_align >= sc->sc_tx_bufsz)
 			sc->sc_align = sizeof(uint32_t);
-		if (!powerof2(sc->sc_ndp_div) || sc->sc_ndp_div == 0 ||
+		if (!powerof2(sc->sc_ndp_div) || sc->sc_ndp_div < 4 ||
 		    sc->sc_ndp_div >= sc->sc_tx_bufsz)
 			sc->sc_ndp_div = sizeof(uint32_t);
 		if (sc->sc_ndp_remainder >= sc->sc_ndp_div)
@@ -476,19 +505,17 @@ uncm_ntb_setup(struct uncm_softc *sc)
 		sc->sc_ncm_supported_formats = NCM_FORMAT_NTB16_MASK;
 	}
 
-	if (sc->sc_rx_bufsz < sizeof(struct ncm_header16) +
-	    sizeof(struct ncm_pointer16) +
-	    sizeof(struct ncm_pointer16_dgram) ||
-	    sc->sc_tx_bufsz < sizeof(struct ncm_header16) +
-	    sizeof(struct ncm_pointer16) +
-	    sizeof(struct ncm_pointer16_dgram) ||
-	    ((sc->sc_ncm_supported_formats & NCM_FORMAT_NTB32_MASK) &&
-	    (sc->sc_rx_bufsz < sizeof(struct ncm_header32) +
-	    sizeof(struct ncm_pointer32) +
-	    sizeof(struct ncm_pointer32_dgram) ||
-	    sc->sc_tx_bufsz < sizeof(struct ncm_header32) +
-	    sizeof(struct ncm_pointer32) +
-	    sizeof(struct ncm_pointer32_dgram)))) {
+	if (sc->sc_rx_bufsz < UNCM_NTB16_MINSZ ||
+	    sc->sc_tx_bufsz < UNCM_NTB16_MINSZ)
+		toosmall = 1;
+
+	if (sc->sc_ncm_supported_formats & NCM_FORMAT_NTB32_MASK) {
+		if (sc->sc_rx_bufsz < UNCM_NTB32_MINSZ ||
+		    sc->sc_tx_bufsz < UNCM_NTB32_MINSZ)
+			toosmall = 1;
+	}
+
+	if (toosmall) {
 		DPRINTF("%s: invalid NTB size %d/%d\n", DEVNAM(sc),
 		    sc->sc_rx_bufsz, sc->sc_tx_bufsz);
 		sc->sc_ncm_supported_formats = 0;
@@ -519,9 +546,9 @@ uncm_ntb_setup_format(struct uncm_softc *sc)
 	if (usbd_do_request(sc->sc_udev, &req, wFmt) != USBD_NORMAL_COMPLETION)
 		goto fail;
 	fmt = UGETW(wFmt);
-	if ((sc->sc_ncm_supported_formats & (1UL << fmt)) == 0)
-		goto fail;
 	if (fmt != NCM_FORMAT_NTB16 && fmt != NCM_FORMAT_NTB32)
+		goto fail;
+	if ((sc->sc_ncm_supported_formats & (1UL << fmt)) == 0)
 		goto fail;
 	sc->sc_ncm_format = fmt;
 
@@ -549,6 +576,7 @@ uncm_ntb_setup_input_size(struct uncm_softc *sc)
 	USETW(req.wValue, 0);
 	USETW(req.wIndex, sc->sc_ctrl_ifaceno);
 	USETW(req.wLength, sizeof(dwSize));
+
 	if (usbd_do_request(sc->sc_udev, &req, dwSize) ==
 	    USBD_NORMAL_COMPLETION)
 		sc->sc_rx_bufsz = UNCM_RX_NTB_MAX;
@@ -566,11 +594,11 @@ uncm_alloc_xfers(struct uncm_softc *sc)
 			    sc->sc_rx_bufsz);
 	}
 
-    if (sc->sc_tx_xfer == NULL) {
+	if (sc->sc_tx_xfer == NULL) {
 		if ((sc->sc_tx_xfer = usbd_alloc_xfer(sc->sc_udev)) != NULL)
 			sc->sc_tx_buf = usbd_alloc_buffer(sc->sc_tx_xfer,
 			    sc->sc_tx_bufsz);
-    }
+	}
 
 	return (sc->sc_rx_buf != NULL && sc->sc_tx_buf != NULL);
 }
@@ -584,13 +612,13 @@ uncm_free_xfers(struct uncm_softc *sc)
 		sc->sc_rx_buf = NULL;
 	}
 
-    if (sc->sc_tx_xfer != NULL) {
+	if (sc->sc_tx_xfer != NULL) {
 		usbd_free_xfer(sc->sc_tx_xfer);
 		sc->sc_tx_xfer = NULL;
 		sc->sc_tx_buf = NULL;
 	}
 
-    ml_purge(&sc->sc_tx_ml);
+	ml_purge(&sc->sc_tx_ml);
 }
 
 void
@@ -713,6 +741,7 @@ uncm_padding(void *buf, size_t bufsz, int offs, int alignment, int remainder)
 	nb = uncm_align(bufsz, offs, alignment, remainder);
 	if (nb > 0)
 		memset(buf + offs, 0, nb);
+
 	return nb;
 }
 
@@ -757,7 +786,15 @@ uncm_start(struct ifnet *ifp)
 		if (m == NULL)
 			break;
 
-		mlen = maxoverhead +  m->m_pkthdr.len;
+		mlen = maxoverhead + m->m_pkthdr.len;
+		if (ndgram == 0 && offs + mlen > sc->sc_tx_bufsz) {
+			/* Drop packets that are too big for an NTB. */
+			ifq_deq_commit(&ifp->if_snd, m);
+			m_freem(m);
+			ifp->if_oerrors++;
+			DPRINTF("%s: packet too large for NTB\n", DEVNAM(sc));
+			continue;
+		}
 		if ((sc->sc_maxdgram != 0 && ndgram >= sc->sc_maxdgram) ||
 		    (offs + len + mlen > sc->sc_tx_bufsz)) {
 			ifq_deq_rollback(&ifp->if_snd, m);
@@ -776,9 +813,11 @@ uncm_start(struct ifnet *ifp)
 	}
 	if (ml_empty(&sc->sc_tx_ml))
 		return;
-	if (uncm_encap(sc, ndgram)) {
-		ifq_set_oactive(&ifp->if_snd);
-		ifp->if_timer = (2 * uncm_xfer_tout) / 1000;
+	ifq_set_oactive(&ifp->if_snd);
+	ifp->if_timer = (2 * uncm_xfer_tout) / 1000;
+	if (!uncm_encap(sc, ndgram)) {
+		ifp->if_timer = 0;
+		ifq_clr_oactive(&ifp->if_snd);
 	}
 }
 
@@ -852,7 +891,7 @@ uncm_encap(struct uncm_softc *sc, int ndgram)
 	int	 offs = 0, plen = 0;
 	int	 dgoffs = 0, poffs;
 	struct mbuf *m;
-	usbd_status  err;
+	usbd_status err;
 
 	KASSERT(sc->sc_ncm_format == NCM_FORMAT_NTB16 ||
 	    sc->sc_ncm_format == NCM_FORMAT_NTB32);
@@ -961,10 +1000,7 @@ uncm_txeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 {
 	struct uncm_softc *sc = priv;
 	struct ifnet *ifp = GET_IFP(sc);
-	int	 s;
 
-	s = splnet();
-	ifq_clr_oactive(&ifp->if_snd);
 	ifp->if_timer = 0;
 
 	if (status != USBD_NORMAL_COMPLETION) {
@@ -976,10 +1012,9 @@ uncm_txeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 				usbd_clear_endpoint_stall_async(sc->sc_tx_pipe);
 		}
 	}
-	if (ifq_empty(&ifp->if_snd) == 0)
-		uncm_start(ifp);
 
-	splx(s);
+	if (ifq_is_oactive(&ifp->if_snd))
+		ifq_restart(&ifp->if_snd);
 }
 
 /*
@@ -990,7 +1025,6 @@ void
 uncm_decap(struct uncm_softc *sc, struct usbd_xfer *xfer)
 {
 	struct ifnet *ifp = GET_IFP(sc);
-	int	s;
 	void *buf;
 	uint32_t len;
 	char *dp;
@@ -1007,7 +1041,6 @@ uncm_decap(struct uncm_softc *sc, struct usbd_xfer *xfer)
 
 	usbd_get_xfer_status(xfer, NULL, &buf, &len, NULL);
 	DPRINTFN(4, "%s: recv %d bytes\n", DEVNAM(sc), len);
-	s = splnet();
 	if (len < sizeof(*hdr16))
 		goto toosmall;
 
@@ -1051,9 +1084,11 @@ uncm_decap(struct uncm_softc *sc, struct usbd_xfer *xfer)
 
 	if ((uint64_t)len < ptroff + sizeof(*ptr16))
 		goto toosmall;
+
 	ptr16 = (struct ncm_pointer16 *)(buf + ptroff);
 	psig = UGETDW(ptr16->dwSignature);
 	ptrlen = UGETW(ptr16->wLength);
+
 	if ((uint64_t)len < (uint64_t)ptrlen + ptroff)
 		goto toosmall;
 
@@ -1131,13 +1166,11 @@ uncm_decap(struct uncm_softc *sc, struct usbd_xfer *xfer)
 	}
 done:
 	if_input(ifp, &ml);
-	splx(s);
 	return;
 toosmall:
 	DPRINTF("%s: packet too small (%d)\n", DEVNAM(sc), len);
 fail:
 	ifp->if_ierrors++;
-	splx(s);
 }
 
 void
@@ -1145,54 +1178,86 @@ uncm_intr(struct usbd_xfer *xfer, void *priv, usbd_status status)
 {
 	struct uncm_softc *sc = priv;
 	struct ifnet *ifp = GET_IFP(sc);
+	struct usb_cdc_notification *msg;
 	uint32_t up, down;
-	int	total_len;
+	uint8_t *buf;
+	int	total_len, off, dlen;
 
 	if (usbd_is_dying(sc->sc_udev))
 		return;
 
 	if (status != USBD_NORMAL_COMPLETION) {
+		if (status == USBD_NOT_STARTED || status == USBD_CANCELLED)
+			return;
 		DPRINTF("%s: notification error: %s\n", DEVNAM(sc),
 		    usbd_errstr(status));
 		if (status == USBD_STALLED)
 			usbd_clear_endpoint_stall_async(sc->sc_ctrl_pipe);
 		return;
 	}
+
 	usbd_get_xfer_status(xfer, NULL, NULL, &total_len, NULL);
+
 	if (total_len < UCDC_NOTIFICATION_LENGTH) {
 		DPRINTF("%s: short notification (%d<%d)\n", DEVNAM(sc),
 		    total_len, UCDC_NOTIFICATION_LENGTH);
 		return;
 	}
-	if (sc->sc_intr_msg.bmRequestType != UCDC_NOTIFICATION) {
-		DPRINTF("%s: unexpected notification (type=0x%02x)\n",
-		    DEVNAM(sc), sc->sc_intr_msg.bmRequestType);
-		return;
-	}
 
-	switch (sc->sc_intr_msg.bNotification) {
-	case UCDC_N_NETWORK_CONNECTION:
-		if (ifp->if_flags & IFF_DEBUG)
-			log(LOG_DEBUG, "%s: network %sconnected\n", DEVNAM(sc),
-			    UGETW(sc->sc_intr_msg.wValue) ? "" : "dis");
-		sc->sc_link = UGETW(sc->sc_intr_msg.wValue) ?
-		    LINK_STATE_UP : LINK_STATE_DOWN;
-		usb_add_task(sc->sc_udev, &sc->sc_link_task);
-		break;
-	case UCDC_N_CONNECTION_SPEED_CHANGE:
-		if (total_len >= UCDC_NOTIFICATION_LENGTH + 8) {
-			down = UGETDW(&sc->sc_intr_msg.data[0]);
-			up = UGETDW(&sc->sc_intr_msg.data[4]);
-			sc->sc_baudrate = MIN(up, down);
-			DPRINTFN(2, "%s: speed down %u up %u\n", DEVNAM(sc),
-			    down, up);
-			usb_add_task(sc->sc_udev, &sc->sc_link_task);
+	DPRINTFN(4, "%s: recv %d bytes of notifications\n", DEVNAM(sc),
+	    total_len);
+
+	/*
+	 * A transfer may contain more than one notification: a packet
+	 * of exactly wMaxPacketSize does not end the transfer, and a
+	 * device with a large wMaxPacketSize may also pack several
+	 * notifications into one packet.  Use each notification's
+	 * wLength to find the next one.
+	 */
+	buf = (uint8_t *)&sc->sc_intr_msg;
+	for (off = 0; off + UCDC_NOTIFICATION_LENGTH <= total_len;
+	    off += UCDC_NOTIFICATION_LENGTH + dlen) {
+		msg = (struct usb_cdc_notification *)(buf + off);
+		dlen = UGETW(msg->wLength);
+
+		if (off + UCDC_NOTIFICATION_LENGTH + dlen > total_len) {
+			DPRINTF("%s: truncated notification at offset %d\n",
+			    DEVNAM(sc), off);
+			break;
 		}
-		break;
-	default:
-		DPRINTF("%s: unexpected notification (0x%02x)\n",
-		    DEVNAM(sc), sc->sc_intr_msg.bNotification);
-		break;
+
+		/* Framing is lost; do not parse the rest. */
+		if (msg->bmRequestType != UCDC_NOTIFICATION) {
+			DPRINTF("%s: unexpected notification (type=0x%02x)\n",
+			    DEVNAM(sc), msg->bmRequestType);
+			break;
+		}
+
+		switch (msg->bNotification) {
+		case UCDC_N_NETWORK_CONNECTION:
+			if (ifp->if_flags & IFF_DEBUG)
+				log(LOG_DEBUG, "%s: network %sconnected\n",
+				    DEVNAM(sc),
+				    UGETW(msg->wValue) ? "" : "dis");
+			sc->sc_link = UGETW(msg->wValue) ?
+			    LINK_STATE_UP : LINK_STATE_DOWN;
+			usb_add_task(sc->sc_udev, &sc->sc_link_task);
+			break;
+		case UCDC_N_CONNECTION_SPEED_CHANGE:
+			if (dlen >= 8) {
+				down = UGETDW(&msg->data[0]);
+				up = UGETDW(&msg->data[4]);
+				sc->sc_baudrate = MIN(up, down);
+				DPRINTFN(2, "%s: speed down %u up %u\n",
+				    DEVNAM(sc), down, up);
+				usb_add_task(sc->sc_udev, &sc->sc_link_task);
+			}
+			break;
+		default:
+			DPRINTF("%s: unexpected notification (0x%02x)\n",
+			    DEVNAM(sc), msg->bNotification);
+			break;
+		}
 	}
 }
 
@@ -1201,26 +1266,23 @@ uncm_link_task(void *arg)
 {
 	struct uncm_softc *sc = arg;
 	struct ifnet *ifp = GET_IFP(sc);
-	int	 s;
 
 	if (usbd_is_dying(sc->sc_udev))
 		return;
 
-	s = splnet();
 	ifp->if_baudrate = sc->sc_baudrate;
 	if (sc->sc_link != LINK_STATE_UNKNOWN &&
 	    ifp->if_link_state != sc->sc_link) {
 		if (ifp->if_flags & IFF_DEBUG)
 			log(LOG_DEBUG, "%s: link state changed from %s to %s\n",
 			    DEVNAM(sc),
-			    LINK_STATE_IS_UP(ifp->if_link_state) ? "up" : "down",
+			    LINK_STATE_IS_UP(ifp->if_link_state) ?
+			    "up" : "down",
 			    LINK_STATE_IS_UP(sc->sc_link) ? "up" : "down");
 		ifp->if_link_state = sc->sc_link;
 		if_link_state_change(ifp);
 		if (LINK_STATE_IS_UP(sc->sc_link) &&
 		    (ifp->if_flags & IFF_RUNNING) && !ifq_empty(&ifp->if_snd))
-			uncm_start(ifp);
+			ifq_start(&ifp->if_snd);
 	}
-	splx(s);
 }
-

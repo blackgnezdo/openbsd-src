@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-rtrx.c,v 1.9 2026/10/06 06:55:41 claudio Exp $	*/
+/*	$OpenBSD: output-rtrx.c,v 1.11 2026/10/15 11:26:57 claudio Exp $	*/
 /*
  * Copyright (c) 2026 Ralph Covelli <rcovelli@he.net>
  *
@@ -172,7 +172,7 @@ rtrx_write(char *buf, int size)
 {
 	int offset = 0, ret;
 
-	if (rtrx_sock < 0)
+	if (rtrx_sock == -1)
 		return -1;
 	if (size > PDU_MAX_LENGTH)
 		return 0;
@@ -194,7 +194,7 @@ rtrx_read(char *buf, int size)
 {
 	int offset = 0, ret;
 
-	if (rtrx_sock < 0)
+	if (rtrx_sock == -1)
 		return -1;
 	if (size > PDU_MAX_LENGTH)
 		return 0;
@@ -217,26 +217,23 @@ rtrx_connect(void)
 	struct sockaddr_un  serv_addr;
 	int sockfd;
 
-	sockfd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
-	if (sockfd < 0) {
+	sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (sockfd == -1) {
 		rtrx_errno = errno;
 		return;
 	}
 
-	memset(&serv_addr, 0, sizeof serv_addr);
+	memset(&serv_addr, 0, sizeof(serv_addr));
 
 	serv_addr.sun_family = AF_UNIX;
 	strncpy(serv_addr.sun_path, rtrx_filename,
 	    sizeof(serv_addr.sun_path) - 1);
 
-	if (connect(sockfd, (struct sockaddr *) &serv_addr,
-	    sizeof serv_addr) < 0) {
-		if (errno != EINPROGRESS) {
-			warnx("cannot connect to rtrd");
-			rtrx_errno = errno;
-			close(sockfd);
-			return;
-		}
+	if (connect(sockfd, (struct sockaddr *)&serv_addr,
+	    sizeof(serv_addr)) == -1) {
+		rtrx_errno = errno;
+		close(sockfd);
+		return;
 	}
 
 	rtrx_sock = sockfd;
@@ -259,7 +256,7 @@ rtrx_open_controller(void)
 	struct pdu_open_controller oc;
 	uint32_t length;
 
-	if (rtrx_sock < 0)
+	if (rtrx_sock == -1)
 		return -1;
 
 	oc.version = RTR_VERSION;
@@ -286,7 +283,7 @@ rtrx_close_controller(void)
 	struct pdu_close_controller cc;
 	uint32_t length;
 
-	if (rtrx_sock < 0)
+	if (rtrx_sock == -1)
 		return -1;
 
 	cc.version = RTR_VERSION;
@@ -309,7 +306,7 @@ rtrx_start_of_import(void)
 	struct pdu_start_of_import soi;
 	uint32_t length;
 
-	if (rtrx_sock < 0)
+	if (rtrx_sock == -1)
 		return -1;
 
 	soi.version = RTR_VERSION;
@@ -333,7 +330,7 @@ rtrx_vrp_import(struct vrp *rpki_vrp)
 	struct pdu_ipv6_prefix_import ip6;
 	uint32_t length;
 
-	if (rtrx_sock < 0)
+	if (rtrx_sock == -1)
 		return -1;
 
 	if (rpki_vrp->afi == AFI_IPV4) {
@@ -391,7 +388,7 @@ rtrx_brk_import(struct brk *rpki_brk)
 	unsigned char *pk_der = NULL;
 	size_t pk_len;
 
-	if (rtrx_sock < 0)
+	if (rtrx_sock == -1)
 		return -1;
 
 	rkey = (struct pdu_router_key_import *)&buf;
@@ -436,7 +433,7 @@ rtrx_vap_import(struct vap *rpki_vap)
 	uint32_t p_count;
 	size_t i;
 
-	if (rtrx_sock < 0)
+	if (rtrx_sock == -1)
 		return -1;
 
 	if (rpki_vap->overflowed)
@@ -475,7 +472,7 @@ rtrx_end_of_import(void)
 	struct pdu_end_of_import eoi;
 	uint32_t length;
 
-	if (rtrx_sock < 0)
+	if (rtrx_sock == -1)
 		return -1;
 
 	eoi.version = RTR_VERSION;
@@ -498,7 +495,7 @@ rtrx_push_import(void)
 	struct pdu_push_import pi;
 	uint32_t length;
 
-	if (rtrx_sock < 0)
+	if (rtrx_sock == -1)
 		return -1;
 
 	pi.version = RTR_VERSION;
@@ -518,23 +515,18 @@ rtrx_push_import(void)
 int
 output_rtrx(FILE *out, struct validation_data *vd, struct stats *st)
 {
-	struct vrp	*rpki_vrp;
-	struct brk	*rpki_brk;
-	struct vap	*rpki_vap;
-	int val;
-	struct sockaddr_storage	ss;
-	socklen_t		len;
+	struct vrp *rpki_vrp;
+	struct brk *rpki_brk;
+	struct vap *rpki_vap;
+	struct sockaddr_storage ss;
+	socklen_t len;
 
-	if (rtrx_sock < 0) {
+	if (rtrx_sock == -1) {
 		errno = rtrx_errno;
 		return -1;
 	}
 	len = sizeof(ss);
 	if (getpeername(rtrx_sock, (struct sockaddr *)&ss, &len) == -1)
-		goto failure;
-	if ((val = fcntl(rtrx_sock, F_GETFL, 0)) == -1)
-		goto failure;
-	if (fcntl(rtrx_sock, F_SETFL, val & ~O_NONBLOCK) == -1)
 		goto failure;
 
 	if (rtrx_open_controller() < 0)

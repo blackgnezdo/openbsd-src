@@ -1,4 +1,4 @@
-/*	$OpenBSD: repo.c,v 1.92 2026/10/01 13:06:56 claudio Exp $ */
+/*	$OpenBSD: repo.c,v 1.96 2026/10/15 09:09:22 tb Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -1432,10 +1432,10 @@ repo_talid(const struct repo *rp)
 }
 
 int
-repo_queued(struct repo *rp, struct entity *p)
+repo_queued(struct repo *rp, struct entity *ent)
 {
 	if (repo_state(rp) == REPO_LOADING) {
-		TAILQ_INSERT_TAIL(&rp->queue, p, entries);
+		TAILQ_INSERT_TAIL(&rp->queue, ent, entries);
 		return 1;
 	}
 	return 0;
@@ -1547,16 +1547,19 @@ repostats_new_files_inc(struct repo *rp, const char *file)
 }
 
 void
-repo_stat_add_nca(struct nonfunc_ca *nca)
+repo_stat_count_ca(struct ca *ca)
 {
 	struct repo *rp;
 
-	SLIST_FOREACH(rp, &repos, entry) {
-		if (rp->id == nca->repoid) {
-			rp->stats[nca->talid].certs_nonfunc++;
+	if (!ca->nonfunc)
+		return;
 
-			if (nca->defer)
-				rp->stats[nca->talid].certs_nonfunc_deferred++;
+	SLIST_FOREACH(rp, &repos, entry) {
+		if (rp->id == ca->repoid) {
+			rp->stats[ca->talid].certs_nonfunc++;
+
+			if (ca->defer)
+				rp->stats[ca->talid].certs_nonfunc_deferred++;
 
 			break;
 		}

@@ -1,4 +1,4 @@
-/*	$OpenBSD: httpd.h,v 1.185 2026/10/02 04:47:07 rsadowski Exp $	*/
+/*	$OpenBSD: httpd.h,v 1.188 2026/10/15 10:59:00 rsadowski Exp $	*/
 
 /*
  * Copyright (c) 2006 - 2015 Reyk Floeter <reyk@openbsd.org>
@@ -179,7 +179,6 @@ enum imsg_type {
 	IMSG_CTL_PROCFD,
 	IMSG_CTL_RESET,
 	IMSG_CTL_SHUTDOWN,
-	IMSG_CTL_RELOAD,
 	IMSG_CTL_NOTIFY,
 	IMSG_CTL_END,
 	IMSG_CTL_START,

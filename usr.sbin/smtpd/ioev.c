@@ -1,4 +1,4 @@
-/*	$OpenBSD: ioev.c,v 1.49 2023/02/08 08:20:54 tb Exp $	*/
+/*	$OpenBSD: ioev.c,v 1.51 2026/10/15 14:15:08 deraadt Exp $	*/
 /*
  * Copyright (c) 2012 Eric Faurot <eric@openbsd.org>
  *

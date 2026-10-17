@@ -1,4 +1,4 @@
-/*	$OpenBSD: init.c,v 1.29 2026/09/15 15:40:08 deraadt Exp $ */
+/*	$OpenBSD: init.c,v 1.31 2026/10/13 12:43:38 deraadt Exp $ */
 /*
  * Copyright (c) 2014,2015 Philip Guenther <guenther@openbsd.org>
  *
@@ -22,6 +22,7 @@
 #include <sys/syscall.h>
 #include <sys/timetc.h>		/* timekeep */
 #include <sys/auxv.h>		/* _hwcap */
+#include <sys/stat.h>
 
 #ifndef PIC
 #include <sys/mman.h>
@@ -32,6 +33,7 @@
 #include <link.h>
 #include <stdlib.h>		/* atexit */
 #include <string.h>
+#include <syslog.h>
 #include <unistd.h>
 
 #include "init.h"
@@ -43,6 +45,8 @@
 #else
 # define TIB_ALIGN	__alignof__(struct tib)
 #endif
+
+mode_t	_permit_setugid __attribute__((weak));
 
 /* XXX should be in an include file shared with csu */
 char	***_csu_finish(char **_argv, char **_envp, void (*_cleanup)(void));
@@ -83,6 +87,7 @@ void
 _libc_preinit(int argc, char **argv, char **envp, dl_cb_cb *cb)
 {
 	AuxInfo	*aux;
+	char sugidmsg[400], *suid = NULL, *sgid = NULL;
 #ifndef PIC
 	Elf_Phdr *phdr = NULL;
 	int phnum = 0;
@@ -134,6 +139,30 @@ _libc_preinit(int argc, char **argv, char **envp, dl_cb_cb *cb)
 			break;
 		case AUX_openbsd_execpath:
 			_execpath = (void *)aux->au_v;
+			break;
+		case AUX_openbsd_execmode:
+			if ((aux->au_v & S_ISUID) && !(_permit_setugid & S_ISUID))
+				suid = "setuid";
+			if ((aux->au_v & S_ISGID) && !(_permit_setugid & S_ISGID))
+				sgid = "setgid";
+			if (!suid && !sgid)
+				break;
+
+			strlcpy(sugidmsg, _execpath ? _execpath : argv[0],
+			    sizeof sugidmsg);
+			strlcat(sugidmsg, ": not supposed to be ",
+			    sizeof sugidmsg);
+			if (suid) {
+				strlcat(sugidmsg, suid, sizeof sugidmsg);
+				if (sgid)
+					strlcat(sugidmsg, "+", sizeof sugidmsg);
+			}
+			if (sgid)
+				strlcat(sugidmsg, sgid, sizeof sugidmsg);
+			strlcat(sugidmsg, ", aborting\n", sizeof sugidmsg);
+			sendsyslog(sugidmsg, strlen(sugidmsg), 0);
+			write(STDERR_FILENO, sugidmsg, strlen(sugidmsg));
+			/* SOON THIS WILL ABORT */
 			break;
 		}
 	}

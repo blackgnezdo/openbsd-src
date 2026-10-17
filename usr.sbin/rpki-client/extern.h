@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.304 2026/10/09 10:05:12 tb Exp $ */
+/*	$OpenBSD: extern.h,v 1.311 2026/10/16 19:39:31 job Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -158,8 +158,8 @@ struct cert {
 	unsigned char	 mfthash[SHA256_DIGEST_LENGTH]; /* of the parent mft */
 };
 
-struct nca_hist {
-	RB_ENTRY(nca_hist)	 entry;
+struct ca_state {
+	RB_ENTRY(ca_state)	 entry;
 	char			*aki;
 	char			*ski;
 	char			*location;
@@ -177,8 +177,8 @@ struct nca_hist {
  * Initially all CA and TA certs are added to this tree.
  * They are removed once they are the issuer of a valid mft.
  */
-struct nonfunc_ca {
-	RB_ENTRY(nonfunc_ca)	 entry;
+struct ca {
+	RB_ENTRY(ca)		 entry;
 	char			*aki;
 	char			*ski;
 	char			*location;
@@ -188,6 +188,10 @@ struct nonfunc_ca {
 	int			 certid;
 	unsigned int		 repoid;
 	int			 talid;
+	enum cert_purpose	 purpose;
+
+	/* non-functional CA handling */
+	int			 nonfunc;
 	time_t			 since;
 	time_t			 last_attempt;
 	unsigned int		 attempts;
@@ -197,8 +201,8 @@ struct nonfunc_ca {
 /*
  * Tree of nonfunc CAs, sorted by certid.
  */
-RB_HEAD(nca_tree, nonfunc_ca);
-RB_PROTOTYPE(nca_tree, nonfunc_ca, entry, ncacmp);
+RB_HEAD(ca_tree, ca);
+RB_PROTOTYPE(ca_tree, ca, entry, certidcmp);
 
 /*
  * The TAL file conforms to RFC 8630.
@@ -539,7 +543,7 @@ struct validation_data {
 	struct brk_tree	brks;
 	struct vap_tree	vaps;
 	struct vsp_tree	vsps;
-	struct nca_tree ncas;
+	struct ca_tree cas;
 	struct ccr ccr;
 };
 
@@ -769,7 +773,8 @@ void		 cert_free(struct cert *);
 void		 auth_tree_free(struct auth_tree *);
 struct cert	*cert_parse_ca_or_brk(const char *, const unsigned char *,
 		    size_t);
-struct cert	*cert_parse_ee_cert(const char *, int, X509 *);
+struct cert	*cert_parse_ee_cert(const char *, int, const unsigned char *,
+		    size_t);
 struct cert	*cert_parse_ta(const char *, const unsigned char *, size_t,
 		    const unsigned char *, size_t);
 struct cert	*cert_parse_filemode(const char *, const unsigned char *,
@@ -780,9 +785,10 @@ struct cert	*cert_read(struct ibuf *);
 void		 cert_insert_brks(struct brk_tree *, struct cert *);
 
 void		 nca_history_load(void);
-void		 nca_history_save(struct nca_tree *, time_t);
-int		 nca_skip_sync(struct nca_tree *, const struct cert *);
-void		 nca_tree_remove_cert(struct nca_tree *, int);
+void		 nca_history_save(struct ca_tree *, time_t);
+int		 nca_skip_sync(struct ca *);
+void		 ca_clear_nonfunc(struct ca_tree *, int);
+struct ca	*ca_tree_insert_cert(struct ca_tree *, const struct cert *);
 
 enum rtype	 rtype_from_file_extension(const char *);
 void		 mft_buffer(struct ibuf *, const struct mft *);
@@ -849,6 +855,8 @@ int		 valid_spl(const char *, struct cert *, struct spl *);
 /* Working with CMS. */
 void		*signed_object_parse(struct cert **, const char *, enum rtype,
 		    int, const unsigned char *, size_t);
+enum rtype	 cms_rtype_from_der(const char *, const unsigned char *,
+		    size_t);
 
 /* Work with RFC 3779 IP addresses, prefixes, ranges. */
 
@@ -942,7 +950,7 @@ void		 repo_cleanup(struct filepath_tree *, int);
 int		 repo_check_timeout(int);
 void		 repostats_new_files_inc(struct repo *, const char *);
 void		 repo_stat_inc(struct repo *, int, enum rtype, enum stype);
-void		 repo_stat_add_nca(struct nonfunc_ca *);
+void		 repo_stat_count_ca(struct ca *);
 void		 repo_tal_stats_collect(void (*)(const struct repo *,
 		    const struct repotalstats *, void *), int, void *);
 void		 repo_stats_collect(void (*)(const struct repo *,

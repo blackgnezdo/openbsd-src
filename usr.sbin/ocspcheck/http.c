@@ -1,4 +1,4 @@
-/*	$Id: http.c,v 1.17 2023/04/19 12:58:16 jsg Exp $ */
+/*	$Id: http.c,v 1.21 2026/10/16 06:42:46 kenjiro Exp $ */
 /*
  * Copyright (c) 2016 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -33,6 +33,10 @@
 #include <unistd.h>
 
 #include "http.h"
+
+#define HTTP_MAXHEADERLENGTH	(64 * 1024)
+
+#define HTTP_MAX_BODY_SIZE	(20 * 1024)
 
 /*
  * A buffer for transferring HTTP/S data.
@@ -218,7 +222,7 @@ http_free(struct http *http)
 
 struct http *
 http_alloc(const struct source *addrs, size_t addrsz,
-    const char *host, short port, const char *path)
+    const char *host, short port, int use_tls, const char *path)
 {
 	struct sockaddr_storage ss;
 	int		 family, fd, c;
@@ -296,7 +300,7 @@ again:
 
 	/* If necessary, do our TLS setup. */
 
-	if (port != 443) {
+	if (!use_tls) {
 		http->writer = dosyswrite;
 		http->reader = dosysread;
 		return http;
@@ -416,6 +420,11 @@ http_body_read(const struct http *http, struct httpxfer *trans, size_t *sz)
 		else if (ssz == 0)
 			break;
 
+		if (trans->bbufsz > HTTP_MAX_BODY_SIZE ||
+		    (size_t)ssz > HTTP_MAX_BODY_SIZE - trans->bbufsz) {
+			warnx("%s: body too large", http->src.ip);
+			return NULL;
+		}
 		pp = recallocarray(trans->bbuf,
 		    trans->bbufsz, trans->bbufsz + ssz, 1);
 		if (pp == NULL) {
@@ -611,6 +620,10 @@ http_head_read(const struct http *http, struct httpxfer *trans, size_t *sz)
 			return NULL;
 		else if (ssz == 0)
 			break;
+		if ((size_t)ssz > HTTP_MAXHEADERLENGTH - trans->hbufsz) {
+			warnx("%s: header too large", http->src.ip);
+			return NULL;
+		}
 		pp = realloc(trans->hbuf, trans->hbufsz + ssz);
 		if (pp == NULL) {
 			warn("realloc");
@@ -672,7 +685,7 @@ http_get_free(struct httpget *g)
 
 struct httpget *
 http_get(const struct source *addrs, size_t addrsz, const char *domain,
-    short port, const char *path, const void *post, size_t postsz)
+    short port, int use_tls, const char *path, const void *post, size_t postsz)
 {
 	struct http	*h;
 	struct httpxfer	*x;
@@ -682,7 +695,7 @@ http_get(const struct source *addrs, size_t addrsz, const char *domain,
 	int		 code;
 	char		*bod, *headr;
 
-	h = http_alloc(addrs, addrsz, domain, port, path);
+	h = http_alloc(addrs, addrsz, domain, port, use_tls, path);
 	if (h == NULL)
 		return NULL;
 
@@ -729,49 +742,3 @@ http_get(const struct source *addrs, size_t addrsz, const char *domain,
 	g->http = h;
 	return g;
 }
-
-#if 0
-int
-main(void)
-{
-	struct httpget	*g;
-	struct httphead	*httph;
-	size_t		 i, httphsz;
-	struct source	 addrs[2];
-	size_t		 addrsz;
-
-#if 0
-	addrs[0].ip = "127.0.0.1";
-	addrs[0].family = 4;
-	addrsz = 1;
-#else
-	addrs[0].ip = "2a00:1450:400a:806::2004";
-	addrs[0].family = 6;
-	addrs[1].ip = "193.135.3.123";
-	addrs[1].family = 4;
-	addrsz = 2;
-#endif
-
-	if (http_init() == -1)
-		errx(EXIT_FAILURE, "http_init");
-
-#if 0
-	g = http_get(addrs, addrsz, "localhost", 80, "/index.html");
-#else
-	g = http_get(addrs, addrsz, "www.google.ch", 80, "/index.html",
-	    NULL, 0);
-#endif
-
-	if (g == NULL)
-		errx(EXIT_FAILURE, "http_get");
-
-	httph = http_head_parse(g->http, g->xfer, &httphsz);
-	warnx("code: %d", g->code);
-
-	for (i = 0; i < httphsz; i++)
-		warnx("head: [%s]=[%s]", httph[i].key, httph[i].val);
-
-	http_get_free(g);
-	return (EXIT_SUCCESS);
-}
-#endif

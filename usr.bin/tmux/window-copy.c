@@ -1,4 +1,4 @@
-/* $OpenBSD: window-copy.c,v 1.437 2026/10/08 07:50:05 nicm Exp $ */
+/* $OpenBSD: window-copy.c,v 1.439 2026/10/16 12:17:03 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -87,6 +87,8 @@ static int	window_copy_last_regex(struct grid *, u_int, u_int, u_int,
 		    int);
 static int	window_copy_search_mark_at(struct window_copy_mode_data *,
 		    u_int, u_int, u_int *);
+static int	window_copy_search_mark_at_cursor(
+		    struct window_copy_mode_data *, u_int *, int *);
 static int	window_copy_grow_searchpos(struct window_copy_mode_data *,
 		    u_int, u_int, u_int);
 static void	window_copy_search_set_index(struct window_copy_mode_data *,
@@ -537,7 +539,8 @@ window_copy_sync_backing(struct window_mode_entry *wme)
 		if (collected > 0) {
 			grid_free_lines(dg, 0, collected);
 			memmove(&dg->linedata[0], &dg->linedata[collected],
-			    (old_hsize + sy - collected) * sizeof *dg->linedata);
+			    (old_hsize + sy - collected) *
+			    sizeof *dg->linedata);
 			memset(&dg->linedata[old_hsize + sy - collected], 0,
 			    collected * sizeof *dg->linedata);
 		}
@@ -556,7 +559,7 @@ window_copy_sync_backing(struct window_mode_entry *wme)
 		 */
 		dg->hsize = new_hsize;
 
-		/* Copy the newly scrolled history, then refresh the viewport. */
+		/* Copy the newly scrolled history, then refresh the view. */
 		if (added > 0)
 			grid_duplicate_lines(dg, kept, sg, kept, added);
 		grid_duplicate_lines(dg, new_hsize, sg, new_hsize, sy);
@@ -2314,6 +2317,7 @@ window_copy_cmd_selection_mode(struct window_copy_cmd_state *cs)
 {
 	struct window_mode_entry	*wme = cs->wme;
 	struct options			*so = cs->s->options;
+	struct options			*oo = wme->wp->window->options;
 	struct window_copy_mode_data	*data = wme->data;
 	struct grid_reader		 gr;
 	const char			*s = args_string(cs->wargs, 0);
@@ -2333,7 +2337,8 @@ window_copy_cmd_selection_mode(struct window_copy_cmd_state *cs)
 
 	/*
 	 * Set up the reset positions normally initialized by select-word or
-	 * select-line, including when changing the mode of an existing selection.
+	 * select-line, including when changing the mode of an existing
+	 * selection.
 	 */
 	if (data->cursordrag == CURSORDRAG_SEL) {
 		fx = data->endselx;
@@ -2360,8 +2365,7 @@ window_copy_cmd_selection_mode(struct window_copy_cmd_state *cs)
 	grid_reader_start(&gr, data->backing->grid, ex, ey);
 	if (data->selflag == SEL_WORD) {
 		grid_reader_cursor_next_word_end(&gr, data->separators);
-		if (options_get_number(wme->wp->window->options, "mode-keys") ==
-		    MODEKEY_VI)
+		if (options_get_number(oo, "mode-keys") == MODEKEY_VI)
 			grid_reader_cursor_left(&gr, 1);
 	} else
 		grid_reader_cursor_end_of_line(&gr, 1, 0);
@@ -5107,12 +5111,31 @@ window_copy_search_mark_at(struct window_copy_mode_data *data, u_int px,
 	struct screen	*s = data->backing;
 	struct grid	*gd = s->grid;
 
+	if (px >= gd->sx)
+		return (-1);
 	if (py < gd->hsize - data->oy)
 		return (-1);
 	if (py > gd->hsize - data->oy + gd->sy - 1)
 		return (-1);
 	*at = ((py - (gd->hsize - data->oy)) * gd->sx) + px;
 	return (0);
+}
+
+/*
+ * Get the search mark position of the cursor. If the cursor is after the last
+ * column, use the last cell and set after.
+ */
+static int
+window_copy_search_mark_at_cursor(struct window_copy_mode_data *data,
+    u_int *at, int *after)
+{
+	u_int	cx = data->cx, cy, sx = screen_size_x(data->backing);
+
+	cy = screen_hsize(data->backing) - data->oy + data->cy;
+	*after = (cx >= sx);
+	if (*after)
+		cx = sx - 1;
+	return (window_copy_search_mark_at(data, cx, cy, at));
 }
 
 static u_int
@@ -5434,20 +5457,20 @@ window_copy_match_at_cursor(struct window_copy_mode_data *data)
 {
 	struct grid	*gd = data->backing->grid;
 	struct grid_cell gc;
-	u_int		 at, start, end, cy, px, py;
+	u_int		 at, start, end, px, py;
 	u_int		 sx = screen_size_x(data->backing);
 	char		*buf = NULL;
 	size_t		 len = 0;
+	int		 after;
 
 	if (data->searchmark == NULL)
 		return (NULL);
 
-	cy = screen_hsize(data->backing) - data->oy + data->cy;
-	if (window_copy_search_mark_at(data, data->cx, cy, &at) != 0)
+	if (window_copy_search_mark_at_cursor(data, &at, &after) != 0)
 		return (NULL);
 	if (data->searchmark[at] == 0) {
 		/* Allow one position after the match. */
-		if (at == 0 || data->searchmark[--at] == 0)
+		if (after || at == 0 || data->searchmark[--at] == 0)
 			return (NULL);
 	}
 	window_copy_match_start_end(data, at, &start, &end);
@@ -5487,7 +5510,7 @@ window_copy_update_style(struct window_mode_entry *wme, u_int fx, u_int fy,
 	struct window_pane		*wp = wme->wp;
 	struct window_copy_mode_data	*data = wme->data;
 	u_int				 mark, start, end, cy, cursor, current;
-	int				 inv = 0, found = 0;
+	int				 inv = 0, found = 0, after;
 	int				 keys;
 
 	cy = screen_hsize(data->backing) - data->oy + data->cy;
@@ -5522,16 +5545,16 @@ window_copy_update_style(struct window_mode_entry *wme, u_int fx, u_int fy,
 	if (mark == 0)
 		return;
 
-	if (window_copy_search_mark_at(data, data->cx, cy, &cursor) == 0) {
+	if (window_copy_search_mark_at_cursor(data, &cursor, &after) == 0) {
 		keys = options_get_number(wp->window->options, "mode-keys");
-		if (cursor != 0 &&
+		if ((after || cursor != 0) &&
 		    keys == MODEKEY_EMACS &&
 		    data->searchdirection) {
-			if (data->searchmark[cursor - 1] == mark) {
+			if (!after)
 				cursor--;
+			if (data->searchmark[cursor] == mark)
 				found = 1;
-			}
-		} else if (data->searchmark[cursor] == mark)
+		} else if (!after && data->searchmark[cursor] == mark)
 			found = 1;
 		if (found) {
 			window_copy_match_start_end(data, cursor, &start, &end);
@@ -5581,8 +5604,8 @@ window_copy_write_one(struct window_mode_entry *wme,
 			if (gc.flags & GRID_FLAG_PADDING) {
 				if (ctx->s->cy == py && ctx->s->cx <= px + fx) {
 					gc.flags &= ~GRID_FLAG_PADDING;
-					screen_write_cursormove(ctx, px + fx, py,
-					    0);
+					screen_write_cursormove(ctx, px + fx,
+					    py, 0);
 					screen_write_putc(ctx, &gc, ' ');
 				}
 			} else if (gc.flags & GRID_FLAG_TAB) {
@@ -5881,7 +5904,7 @@ window_copy_redraw_lines(struct window_mode_entry *wme, u_int py, u_int ny)
 	struct window_copy_mode_data	*data = wme->data;
 	struct screen			*s = &data->screen;
 	struct screen_write_ctx 	 ctx;
-	u_int				 i;
+	u_int				 i, off;
 
 	if (window_copy_line_number_width(wme) != 0) {
 		screen_write_start(&ctx, &data->screen);
@@ -5901,9 +5924,8 @@ window_copy_redraw_lines(struct window_mode_entry *wme, u_int py, u_int ny)
 		screen_write_start_pane(&ctx, wp, NULL);
 	for (i = py; i < py + ny; i++)
 		window_copy_write_line(wme, &ctx, i);
-	screen_write_cursormove(&ctx,
-	    window_copy_cursor_offset(wme, data->cx, screen_size_x(s)), data->cy,
-	    0);
+	off = window_copy_cursor_offset(wme, data->cx, screen_size_x(s));
+	screen_write_cursormove(&ctx, off, data->cy, 0);
 	screen_write_stop(&ctx);
 
 	window_pane_scrollbar_redraw(wp);

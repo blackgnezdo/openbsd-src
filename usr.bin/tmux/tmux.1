@@ -1,4 +1,4 @@
-.\" $OpenBSD: tmux.1,v 1.1182 2026/10/09 13:12:14 nicm Exp $
+.\" $OpenBSD: tmux.1,v 1.1190 2026/10/16 16:49:13 nicm Exp $
 .\"
 .\" Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
 .\"
@@ -14,7 +14,7 @@
 .\" IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
 .\" OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: October 9 2026 $
+.Dd $Mdocdate: October 16 2026 $
 .Dt TMUX 1
 .Os
 .Sh NAME
@@ -3205,6 +3205,7 @@ command works only if at least one client is attached.
 .Ic switch\-mode
 .Op Fl krsZw
 .Op Fl F Ar format
+.Op Fl f Ar path
 .Op Fl O Ar sort\-order
 .Op Fl t Ar target\-pane
 .Op Ar command
@@ -3250,6 +3251,24 @@ If
 is not given, "switch\-client \-Zt \[aq]%%\[aq]" is used.
 .Fl F
 specifies the format for each item in the list.
+.Pp
+.Fl f
+reads choices from
+.Ar path
+instead of listing sessions or windows.
+Each line is one choice.
+With
+.Fl f ,
+.Ql switch_item
+contains the original line and the default display format is
+.Ql #{switch_item} .
+Fuzzy matching uses the displayed text.
+When a choice is selected,
+.Ql %%
+and
+.Ql %1
+are replaced by the original line
+.Pp
 .Fl k
 kills the pane when the mode is exited.
 .Pp
@@ -3744,7 +3763,7 @@ but a different format may be specified with
 .Fl F .
 .Tg newp
 .It Xo Ic new\-pane
-.Op Fl AbCDefhIkKLMOPvWZ
+.Op Fl AbCDdEfhIkKLMOPvWZ
 .Op Fl B Ar border\-lines
 .Op Fl c Ar start\-directory
 .Op Fl e Ar environment
@@ -4168,7 +4187,7 @@ the command behaves like
 .Ic last\-window .
 .Tg splitw
 .It Xo Ic split\-window
-.Op Fl bdefhIkPvZ
+.Op Fl bdEfhIkPvWZ
 .Op Fl B Ar border\-lines
 .Op Fl c Ar start\-directory
 .Op Fl e Ar environment
@@ -5192,12 +5211,16 @@ Supports extended keys.
 Supports focus reporting.
 .It hyperlinks
 Supports OSC 8 hyperlinks.
+.It imagescroll
+Moves image content with scroll regions.
 .It ignorefkeys
 Ignore function keys from
 .Xr terminfo 5
 and use the
 .Nm
 internal set only.
+.It kittygraphics
+Supports the Kitty graphics protocol.
 .It margins
 Supports DECSLRM margins.
 .It mouse
@@ -5615,6 +5638,41 @@ is on.
 Formats are expanded, see the
 .Sx FORMATS
 section.
+.It Xo Ic side\-status
+.Op Cm off | left | right
+.Xc
+Show a vertical status line at the left or right of the terminal.
+The side status line uses the
+.Ic side\-status\-style
+colours, draws a vertical line on the edge next to the window area and is
+updated every
+.Ic status\-interval
+seconds like the status line.
+.It Ic side\-status\-format Ar format
+Specify the format used for the side status line.
+The format may produce multiple rows using the
+.Ic nl
+style or a newline character.
+.Pp
+Rows drawn with
+.Ic list=on
+are trimmed to the available height and scrolled to keep the row drawn with
+.Ic list=focus
+visible; rows drawn with
+.Ic list=left\-marker
+and
+.Ic list=right\-marker
+replace the first and last visible list row when rows are hidden above or
+below.
+.It Ic side\-status\-style Ar style
+Set the style of the side status line.
+For how to specify
+.Ar style ,
+see the
+.Sx STYLES
+section.
+.It Ic side\-status\-width Ar width
+Set the width of the side status line.
 .It Xo Ic silence\-action
 .Op Cm any | none | current | other
 .Xc
@@ -7443,6 +7501,7 @@ The following variables are available, where appropriate:
 .It Li "history_size" Ta "" Ta "Size of history in lines"
 .It Li "hook" Ta "" Ta "Name of running hook, if any"
 .It Li "hook_client" Ta "" Ta "Name of client where hook was run, if any"
+.It Li "hook_command_line" Ta "" Ta "Command line reported for an OSC 133 command hook, if any"
 .It Li "hook_fire_count" Ta "" Ta "Number of times hook has fired"
 .It Li "hook_fire_time" Ta "" Ta "Time hook last fired"
 .It Li "hook_last" Ta "" Ta "Previous value for a monitor hook"
@@ -7457,6 +7516,7 @@ The following variables are available, where appropriate:
 .It Li "hook_window_name" Ta "" Ta "Name of window where hook was run, if any"
 .It Li "host" Ta "#H" Ta "Hostname of local host"
 .It Li "host_short" Ta "#h" Ta "Hostname of local host (no domain name)"
+.It Li "image_support" Ta "" Ta "1 if server has support for images"
 .It Li "insert_flag" Ta "" Ta "Pane insert flag"
 .It Li "key_string" Ta "" Ta "String representation of the key binding"
 .It Li "key_repeat" Ta "" Ta "1 if key binding is repeatable"
@@ -7473,6 +7533,8 @@ The following variables are available, where appropriate:
 .It Li "line" Ta "" Ta "Line number in the list"
 .It Li "loop_index" Ta "" Ta "Index of item in the W:, P:, S:, or L: loop"
 .It Li "loop_last_flag" Ta "" Ta "1 if last window, pane, session, client in the W:, P:, S:, or L: loop"
+.It Li "mouse_absolute_x" Ta "" Ta "Mouse X position in terminal, if any"
+.It Li "mouse_absolute_y" Ta "" Ta "Mouse Y position in terminal, if any"
 .It Li "mouse_all_flag" Ta "" Ta "Pane mouse all flag"
 .It Li "mouse_any_flag" Ta "" Ta "Pane mouse any flag"
 .It Li "mouse_button_flag" Ta "" Ta "Pane mouse button flag"
@@ -7510,6 +7572,7 @@ The following variables are available, where appropriate:
 .It Li "pane_bottom" Ta "" Ta "Bottom of pane"
 .It Li "pane_command_duration" Ta "" Ta "Current or most recent OSC 133 command duration in seconds"
 .It Li "pane_command_end_time" Ta "" Ta "Time most recent OSC 133 command ended"
+.It Li "pane_command_line" Ta "" Ta "Current or most recent OSC 133 command line, if reported"
 .It Li "pane_command_running" Ta "" Ta "1 if an OSC 133 command is running"
 .It Li "pane_command_start_time" Ta "" Ta "Time current or most recent OSC 133 command started"
 .It Li "pane_command_status" Ta "" Ta "Exit status from most recent OSC 133 command"
@@ -7611,8 +7674,8 @@ The following variables are available, where appropriate:
 .It Li "session_stack" Ta "" Ta "Window indexes in most recent order"
 .It Li "session_windows" Ta "" Ta "Number of windows in session"
 .It Li "socket_path" Ta "" Ta "Server socket path"
-.It Li "sixel_support" Ta "" Ta "1 if server has support for SIXEL"
 .It Li "start_time" Ta "" Ta "Server start time"
+.It Li "switch_item" Ta "" Ta "Original input line in switch mode"
 .It Li "synchronized_output_flag" Ta "" Ta "1 if pane has synchronized output enabled"
 .It Li "uid" Ta "" Ta "Server UID"
 .It Li "user" Ta "" Ta "Server user"
@@ -7788,6 +7851,8 @@ and
 .Ic list=right\-marker
 mark the text to be used to mark that text has been trimmed from the left or
 right of the list if there is not enough space.
+.It Ic nl
+End the current row when drawn over multiple rows
 .It Ic noattr
 Do not copy attributes from the default style.
 .It Xo Ic push\-default ,
@@ -8968,6 +9033,8 @@ These are set automatically if the
 capability is present.
 .It Em \&Hls
 Set or clear a hyperlink annotation.
+.It Em \&Iscrl
+Indicates that the terminal moves image content with scroll regions.
 .It Em \&Nobr
 Tell
 .Nm

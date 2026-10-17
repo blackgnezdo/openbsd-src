@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.246 2026/10/09 08:36:50 job Exp $ */
+/*	$OpenBSD: cert.c,v 1.248 2026/10/14 06:41:29 tb Exp $ */
 /*
  * Copyright (c) 2022,2025 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -19,6 +19,7 @@
 
 #include <assert.h>
 #include <err.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1540,40 +1541,6 @@ cert_parse_internal(const char *fn, X509 *x)
 }
 
 /*
- * Parse an EE cert extracted from a CMS signed object. Store all cert and
- * extension data we need later in the returned struct cert.
- * Check the certificate's purpose and validate the TA constraints.
- * Returns cert on success and NULL on failure.
- */
-struct cert *
-cert_parse_ee_cert(const char *fn, int talid, X509 *x)
-{
-	struct cert		*cert = NULL;
-
-	if (!X509_up_ref(x))
-		goto out;
-
-	if ((cert = cert_parse_internal(fn, x)) == NULL)
-		goto out;
-	cert->talid = talid;
-
-	if (cert->purpose != CERT_PURPOSE_EE) {
-		warnx("%s: expected EE cert, got %s", fn,
-		    purpose2str(cert->purpose));
-		goto out;
-	}
-
-	if (!constraints_validate(fn, cert))
-		goto out;
-
-	return cert;
-
- out:
-	cert_free(cert);
-	return NULL;
-}
-
-/*
  * This is a generic parser for resource certificates and can only do as much
  * validation as can be extracted from the bare DER. Callers should at least
  * check the cert->purpose and consider any further validation.
@@ -1584,6 +1551,11 @@ cert_deserialize_and_parse(const char *fn, const unsigned char *der, size_t len)
 	struct cert		*cert = NULL;
 	const unsigned char	*oder;
 	X509			*x = NULL;
+
+	if (len > INT_MAX) {
+		warnx("%s: overlong DER", fn);
+		goto out;
+	}
 
 	oder = der;
 	if ((x = d2i_X509(NULL, &der, len)) == NULL) {
@@ -1608,6 +1580,38 @@ cert_deserialize_and_parse(const char *fn, const unsigned char *der, size_t len)
  out:
 	cert_free(cert);
 	X509_free(x);
+	return NULL;
+}
+
+/*
+ * Parse an EE cert extracted from a CMS signed object. Store all cert and
+ * extension data we need later in the returned struct cert.
+ * Check the certificate's purpose and validate the TA constraints.
+ * Returns cert on success and NULL on failure.
+ */
+struct cert *
+cert_parse_ee_cert(const char *fn, int talid, const unsigned char *der,
+    size_t len)
+{
+	struct cert *cert = NULL;
+
+	if ((cert = cert_deserialize_and_parse(fn, der, len)) == NULL)
+		goto out;
+	cert->talid = talid;
+
+	if (cert->purpose != CERT_PURPOSE_EE) {
+		warnx("%s: expected EE cert, got %s", fn,
+		    purpose2str(cert->purpose));
+		goto out;
+	}
+
+	if (!constraints_validate(fn, cert))
+		goto out;
+
+	return cert;
+
+ out:
+	cert_free(cert);
 	return NULL;
 }
 
@@ -1821,6 +1825,7 @@ void
 cert_buffer(struct ibuf *b, const struct cert *cert)
 {
 	io_simple_buffer(b, &cert->notafter, sizeof(cert->notafter));
+	io_simple_buffer(b, &cert->expires, sizeof(cert->expires));
 	io_simple_buffer(b, &cert->purpose, sizeof(cert->purpose));
 	io_simple_buffer(b, &cert->talid, sizeof(cert->talid));
 	io_simple_buffer(b, &cert->issuerid, sizeof(cert->issuerid));
@@ -1877,6 +1882,7 @@ cert_read(struct ibuf *b)
 		err(1, NULL);
 
 	io_read_buf(b, &cert->notafter, sizeof(cert->notafter));
+	io_read_buf(b, &cert->expires, sizeof(cert->expires));
 	io_read_buf(b, &cert->purpose, sizeof(cert->purpose));
 	io_read_buf(b, &cert->talid, sizeof(cert->talid));
 	io_read_buf(b, &cert->issuerid, sizeof(cert->issuerid));
@@ -2043,7 +2049,7 @@ insert_brk(struct brk_tree *tree, struct cert *cert, uint32_t asid)
 		err(1, NULL);
 
 	b->asid = asid;
-	b->expires = cert->notafter;
+	b->expires = cert->expires;
 	b->talid = cert->talid;
 	if ((b->ski = strdup(cert->ski)) == NULL)
 		err(1, NULL);

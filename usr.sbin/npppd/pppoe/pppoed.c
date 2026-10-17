@@ -1,4 +1,4 @@
-/*	$OpenBSD: pppoed.c,v 1.26 2025/02/03 07:46:06 yasuoka Exp $	*/
+/*	$OpenBSD: pppoed.c,v 1.29 2026/10/17 09:53:05 yasuoka Exp $	*/
 
 /*-
  * Copyright (c) 2009 Internet Initiative Japan Inc.
@@ -28,9 +28,8 @@
 /**@file
  * This file provides the PPPoE(RFC2516) server(access concentrator)
  * implementation.
- * $Id: pppoed.c,v 1.26 2025/02/03 07:46:06 yasuoka Exp $
+ * $Id: pppoed.c,v 1.29 2026/10/17 09:53:05 yasuoka Exp $
  */
-#include <sys/param.h>	/* ALIGN */
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -70,6 +69,7 @@
 #include "pppoe_local.h"
 
 #define MINIMUM(a, b)	(((a) < (b)) ? (a) : (b))
+#define ROUNDUP(a, b)	((((a) + (b) - 1) / (b)) * (b))
 
 static int pppoed_seqno = 0;
 
@@ -629,13 +629,14 @@ pppoed_input(pppoed_listener *_this, uint8_t shost[ETHER_ADDR_LEN], int is_disc,
 	struct pppoe_header *pppoe;
 	struct pppoe_tlv *tlv;
 	u_char tlvspace[2048], *p_tlvspace;
+	size_t padding;
 	int session_id;
 	slist tag_list;
 	const char *reason;
 #define tlvspace_remaining() (sizeof(tlvspace) - (p_tlvspace - tlvspace))
 
 	reason = "";
-	p_tlvspace = tlvspace;
+	p_tlvspace = (u_char *)ROUNDUP((uintptr_t)tlvspace, sizeof(uint32_t));
 	session = NULL;
 
 	pppoe = (struct pppoe_header *)pkt;
@@ -718,7 +719,14 @@ pppoed_input(pppoed_listener *_this, uint8_t shost[ETHER_ADDR_LEN], int is_disc,
 			pkt += tlv->length;
 			lpkt -= tlv->length;
 			p_tlvspace += tlv->length;
-			p_tlvspace = (u_char *)ALIGN(p_tlvspace);
+			padding = ROUNDUP((uintptr_t)p_tlvspace,
+			    sizeof(uint32_t)) - (uintptr_t)p_tlvspace;
+			if (padding > tlvspace_remaining()) {
+				reason = "parsing TAGs reached the buffer "
+				    "size limit.";
+				goto fail;
+			}
+			p_tlvspace += padding;
 		}
 #ifdef	PPPOED_DEBUG
 		if (debuglevel >= 2)
@@ -873,6 +881,7 @@ pppoed_recv_PADI(pppoed_listener *_this, uint8_t shost[ETHER_ADDR_LEN],
 
 	tlv_hostuniq = NULL;
 	tlv_service_name = NULL;
+	sn[0] = '\0';
 
 	service_name = "";
 	if (_this->conf->service_name != NULL)
@@ -960,14 +969,10 @@ pppoed_recv_PADI(pppoed_listener *_this, uint8_t shost[ETHER_ADDR_LEN],
 	 * Tag - ac-cookie
 	 */
 	if (_this->self->acookie_hash != NULL) {
-		/*
-		 * search next ac-cookie.
-		 * (XXX it will loop in uint32_t boundaly)
-		 */
+		/* search next ac-cookie.  */
 		do {
-			_this->self->acookie_next += 1;
-		}
-		while(hash_lookup(_this->self->acookie_hash,
+			_this->self->acookie_next++;
+		} while(hash_lookup(_this->self->acookie_hash,
 		    (void *)(intptr_t)_this->self->acookie_next) != NULL);
 
 		tlv.type = htons(PPPOE_TAG_AC_COOKIE);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: apmd.c,v 1.113 2025/05/24 02:56:41 kn Exp $	*/
+/*	$OpenBSD: apmd.c,v 1.115 2026/10/12 19:35:00 kettenis Exp $	*/
 
 /*
  *  Copyright (c) 1995, 1996 John T. Kohl
@@ -617,6 +617,14 @@ main(int argc, char *argv[])
 				powerstatus = powerbak;
 				powerchange = 1;
 			}
+
+			/*
+			 * No further action if there is no battery or
+			 * if its status isn't know.
+			 */
+			if (pinfo.battery_state == APM_BATTERY_ABSENT ||
+			    pinfo.battery_state == APM_BATT_UNKNOWN)
+				break;
 
 			if (!powerstatus && autoaction &&
 			    autolimit > (int)pinfo.battery_life) {

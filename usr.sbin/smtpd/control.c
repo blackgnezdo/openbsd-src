@@ -1,4 +1,4 @@
-/*	$OpenBSD: control.c,v 1.132 2024/11/21 13:42:22 claudio Exp $	*/
+/*	$OpenBSD: control.c,v 1.134 2026/10/15 14:15:08 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2012 Gilles Chehade <gilles@poolp.org>
