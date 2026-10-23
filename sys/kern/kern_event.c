@@ -129,8 +129,6 @@ int	filt_procmodify(struct kevent *kev, struct knote *kn);
 int	filt_procprocess(struct knote *kn, struct kevent *kev);
 int	filt_sigattach(struct knote *kn);
 void	filt_sigdetach(struct knote *kn);
-int	filt_sigmodify(struct kevent *kev, struct knote *kn);
-int	filt_sigprocess(struct knote *kn, struct kevent *kev);
 int	filt_signal(struct knote *kn, long hint);
 int	filt_fileattach(struct knote *kn);
 void	filt_timerexpire(void *knx);
@@ -168,8 +166,8 @@ const struct filterops sig_filtops = {
 	.f_attach	= filt_sigattach,
 	.f_detach	= filt_sigdetach,
 	.f_event	= filt_signal,
-	.f_modify	= filt_sigmodify,
-	.f_process	= filt_sigprocess,
+	.f_modify	= filt_procmodify,
+	.f_process	= filt_procprocess,
 };
 
 const struct filterops file_filtops = {
@@ -207,7 +205,7 @@ const struct filterops user_filtops = {
 struct	pool knote_pool;
 struct	pool kqueue_pool;
 struct	mutex kqueue_klist_lock = MUTEX_INITIALIZER(IPL_MPFLOOR);
-struct	mutex kqueue_ps_list_lock = MUTEX_INITIALIZER(IPL_MPFLOOR);
+struct	rwlock kqueue_ps_list_lock = RWLOCK_INITIALIZER("kqpsl");
 unsigned int kq_usereventsmax = 1024;	/* per process */
 
 #define KN_HASH(val, mask)	(((val) ^ (val >> 8)) & (mask))
@@ -364,6 +362,7 @@ int
 filt_procattach(struct knote *kn)
 {
 	struct process *pr;
+	int nolock;
 
 	if ((curproc->p_p->ps_flags & PS_PLEDGE) &&
 	    (curproc->p_pledge & PLEDGE_PROC) == 0)
@@ -391,9 +390,18 @@ filt_procattach(struct knote *kn)
 		kn->kn_data = kn->kn_sdata;		/* ppid */
 		kn->kn_fflags = NOTE_CHILD;
 		kn->kn_flags &= ~EV_FLAG1;
+		rw_assert_wrlock(&kqueue_ps_list_lock);
 	}
 
-	klist_insert(&pr->ps_klist, kn);
+	/* this needs both the ps_mtx and exclusive kqueue_ps_list_lock. */
+	nolock = (rw_status(&kqueue_ps_list_lock) == RW_WRITE);
+	if (!nolock)
+		rw_enter_write(&kqueue_ps_list_lock);
+	mtx_enter(&pr->ps_mtx);
+	klist_insert_locked(&pr->ps_klist, kn);
+	mtx_leave(&pr->ps_mtx);
+	if (!nolock)
+		rw_exit_write(&kqueue_ps_list_lock);
 
 	KERNEL_UNLOCK();
 
@@ -415,35 +423,27 @@ fail:
 void
 filt_procdetach(struct knote *kn)
 {
-	struct process *pr = NULL;
-	struct kqueue *kq = kn->kn_kq;
+	/*
+	 * We set KN_DETACHED with both kqueue_ps_list_lock rwlock
+	 * and &kq->kq_lock held. One of them is enough here.
+	 */
+	rw_enter_write(&kqueue_ps_list_lock);
+	if ((kn->kn_status & KN_DETACHED) == 0) {
+		struct process *pr = kn->kn_ptr.p_process;
 
-	/* NOTE_EXIT is run with kqueue_ps_list_lock held. */
-	mtx_enter(&kqueue_ps_list_lock);
-
-	mtx_enter(&kq->kq_lock);
-	if ((kn->kn_status & KN_DETACHED) == 0)
-		pr = kn->kn_ptr.p_process;
-	mtx_leave(&kq->kq_lock);
-
-	if (pr != NULL) {
 		mtx_enter(&pr->ps_mtx);
-		if ((kn->kn_status & KN_DETACHED) == 0)
-			klist_remove_locked(&pr->ps_klist, kn);
+		klist_remove_locked(&pr->ps_klist, kn);
 		mtx_leave(&pr->ps_mtx);
 	}
-
-	mtx_leave(&kqueue_ps_list_lock);
+	rw_exit_write(&kqueue_ps_list_lock);
 }
 
 int
 filt_proc(struct knote *kn, long hint)
 {
+	struct process *pr = kn->kn_ptr.p_process;
 	struct kqueue *kq = kn->kn_kq;
 	u_int event;
-
-	if (kn->kn_filter != EVFILT_PROC)
-		return (0);
 
 	/*
 	 * mask off extra data
@@ -460,19 +460,48 @@ filt_proc(struct knote *kn, long hint)
 	 * process is gone, so flag the event as finished and remove it
 	 * from the process's klist
 	 */
-	if (event == NOTE_EXIT && (kn->kn_sfflags & event)) {
+	if (event == NOTE_EXIT) {
 		struct process *pr = kn->kn_ptr.p_process;
 
-		MUTEX_ASSERT_LOCKED(&kqueue_ps_list_lock);
+		rw_assert_wrlock(&kqueue_ps_list_lock);
 		mtx_enter(&kq->kq_lock);
 		kn->kn_status |= KN_DETACHED;
-		kn->kn_ptr.p_process = NULL;
 		mtx_leave(&kq->kq_lock);
 
 		klist_remove_locked(&pr->ps_klist, kn);
 		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
 		kn->kn_data = W_EXITCODE(pr->ps_xexit, pr->ps_xsig);
+		kn->kn_ptr.p_process = NULL;
 		return (1);
+	}
+
+	/*
+	 * process forked, and user wants to track the new process,
+	 * so attach a new knote to it, and immediately report an
+	 * event with the parent's pid.
+	 */
+	if ((event == NOTE_FORK) && (kn->kn_sfflags & NOTE_TRACK)) {
+		struct kevent kev;
+		int error;
+
+		/*
+		 * register knote with new process.
+		 */
+		memset(&kev, 0, sizeof(kev));
+		kev.ident = hint & NOTE_PDATAMASK;	/* pid */
+		kev.filter = kn->kn_filter;
+		kev.flags = kn->kn_flags | EV_ADD | EV_ENABLE | EV_FLAG1;
+		kev.fflags = kn->kn_sfflags;
+		kev.data = kn->kn_id;			/* parent */
+		kev.udata = kn->kn_udata;		/* preserve udata */
+
+		rw_assert_wrlock(&kqueue_ps_list_lock);
+		mtx_leave(&pr->ps_mtx);
+		error = kqueue_register(kq, &kev, 0, NULL);
+		mtx_enter(&pr->ps_mtx);
+
+		if (error)
+			kn->kn_fflags |= NOTE_TRACKERR;
 	}
 
 	return (kn->kn_fflags != 0);
@@ -481,19 +510,12 @@ filt_proc(struct knote *kn, long hint)
 int
 filt_procmodify(struct kevent *kev, struct knote *kn)
 {
-	struct process *pr = NULL;
-	struct kqueue *kq = kn->kn_kq;
 	int active;
 
-	/* NOTE_EXIT is run with kqueue_ps_list_lock held. */
-	mtx_enter(&kqueue_ps_list_lock);
+	rw_enter_write(&kqueue_ps_list_lock);
+	if ((kn->kn_status & KN_DETACHED) == 0) {
+		struct process *pr = kn->kn_ptr.p_process;
 
-	mtx_enter(&kq->kq_lock);
-	if ((kn->kn_status & KN_DETACHED) == 0)
-		pr = kn->kn_ptr.p_process;
-	mtx_leave(&kq->kq_lock);
-
-	if (pr != NULL) {
 		mtx_enter(&pr->ps_mtx);
 		active = knote_modify(kev, kn);
 		mtx_leave(&pr->ps_mtx);
@@ -501,27 +523,22 @@ filt_procmodify(struct kevent *kev, struct knote *kn)
 		knote_assign(kev, kn);
 		active = (kn->kn_fflags != 0);
 	}
+	rw_exit_write(&kqueue_ps_list_lock);
 
-	mtx_leave(&kqueue_ps_list_lock);
 	return (active);
 }
 
 int
 filt_procprocess(struct knote *kn, struct kevent *kev)
 {
-	struct process *pr = NULL;
-	struct kqueue *kq = kn->kn_kq;
-	int active;
+	int active, do_lock = (rw_status(&kqueue_ps_list_lock) != RW_WRITE);
 
-	/* NOTE_EXIT is run with kqueue_ps_list_lock held. */
-	mtx_enter(&kqueue_ps_list_lock);
+	if (do_lock)
+		rw_enter_write(&kqueue_ps_list_lock);
 
-	mtx_enter(&kq->kq_lock);
-	if ((kn->kn_status & KN_DETACHED) == 0)
-		pr = kn->kn_ptr.p_process;
-	mtx_leave(&kq->kq_lock);
+	if ((kn->kn_status & KN_DETACHED) == 0) {
+		struct process *pr = kn->kn_ptr.p_process;
 
-	if (pr != NULL) {
 		mtx_enter(&pr->ps_mtx);
 		active = knote_process(kn, kev);
 		mtx_leave(&pr->ps_mtx);
@@ -531,7 +548,9 @@ filt_procprocess(struct knote *kn, struct kevent *kev)
 			knote_submit(kn, kev);
 	}
 
-	mtx_leave(&kqueue_ps_list_lock);
+	if (do_lock)
+		rw_exit_write(&kqueue_ps_list_lock);
+
 	return (active);
 }
 
@@ -552,7 +571,12 @@ filt_sigattach(struct knote *kn)
 	kn->kn_ptr.p_process = pr;
 	kn->kn_flags |= EV_CLEAR;		/* automatically set */
 
-	klist_insert(&pr->ps_klist, kn);
+	/* this needs both the ps_mtx and exclusive kqueue_ps_list_lock. */
+	rw_enter_write(&kqueue_ps_list_lock);
+	mtx_enter(&pr->ps_mtx);
+	klist_insert_locked(&pr->ps_klist, kn);
+	mtx_leave(&pr->ps_mtx);
+	rw_exit_write(&kqueue_ps_list_lock);
 
 	return (0);
 }
@@ -562,7 +586,11 @@ filt_sigdetach(struct knote *kn)
 {
 	struct process *pr = kn->kn_ptr.p_process;
 
-	klist_remove(&pr->ps_klist, kn);
+	rw_enter_write(&kqueue_ps_list_lock);
+	mtx_enter(&pr->ps_mtx);
+	klist_remove_locked(&pr->ps_klist, kn);
+	mtx_leave(&pr->ps_mtx);
+	rw_exit_write(&kqueue_ps_list_lock);
 }
 
 int
@@ -575,32 +603,6 @@ filt_signal(struct knote *kn, long hint)
 			kn->kn_data++;
 	}
 	return (kn->kn_data != 0);
-}
-
-int
-filt_sigmodify(struct kevent *kev, struct knote *kn)
-{
-	struct process *pr = kn->kn_ptr.p_process;
-	int active;
-
-	mtx_enter(&pr->ps_mtx);
-	active = knote_modify(kev, kn);
-	mtx_leave(&pr->ps_mtx);
-
-	return (active);
-}
-
-int
-filt_sigprocess(struct knote *kn, struct kevent *kev)
-{
-	struct process *pr = kn->kn_ptr.p_process;
-	int active;
-
-	mtx_enter(&pr->ps_mtx);
-	active = knote_process(kn, kev);
-	mtx_leave(&pr->ps_mtx);
-
-	return (active);
 }
 
 #define NOTE_TIMER_UNITMASK \
@@ -1450,10 +1452,7 @@ again:
 			    KN_HASH((u_long)kev->ident, kq->kq_knhashmask)];
 		}
 	}
-	if (kev->filter == EVFILT_PROC && (kev->flags & EV_FLAG1)) {
-		/* internal process traking filter, do not coalesce */
-		;
-	} else if (list != NULL) {
+	if (list != NULL) {
 		SLIST_FOREACH(kn, list, kn_link) {
 			if (kev->filter == kn->kn_filter &&
 			    kev->ident == kn->kn_id &&
@@ -2225,76 +2224,32 @@ knote_fdclose(struct proc *p, int fd)
 }
 
 /*
- * handle a process fork, including the triggering of NOTE_TRACK notes
+ * handle a process exiting, including the triggering of NOTE_EXIT notes
+ * XXX this could be more efficient, doing a single pass down the klist
  */
+void
+knote_processexit(struct process *pr)
+{
+	/* this needs both the ps_mtx and exclusive kqueue_ps_list_lock. */
+	rw_enter_write(&kqueue_ps_list_lock);
+	mtx_enter(&pr->ps_mtx);
+	knote_locked(&pr->ps_klist, NOTE_EXIT);
+	mtx_leave(&pr->ps_mtx);
+	rw_exit_write(&kqueue_ps_list_lock);
+
+	/* remove other knotes hanging off the process */
+	klist_invalidate(&pr->ps_klist);
+}
+
 void
 knote_processfork(struct process *pr, pid_t pid)
 {
-	struct knote marker = { .kn_fop = &proc_filtops };
-	struct knlist *list = &pr->ps_klist.kl_list;
-	struct knote *kn, *prev = NULL;
-	struct kqueue *kq;
-	struct kevent kev;
-	int error;
-	int skip = 0;
-
- again:
+	/* this needs both the ps_mtx and exclusive kqueue_ps_list_lock. */
+	rw_enter_write(&kqueue_ps_list_lock);
 	mtx_enter(&pr->ps_mtx);
-	SLIST_FOREACH(kn, list, kn_selnext) {
-		if (skip) {
-			if (kn == &marker) {
-				SLIST_REMOVE_AFTER(prev, kn_selnext);
-				skip = 0;
-				/* XXX this is tricky */
-				if (error && (prev->kn_sfflags & NOTE_TRACK))
-					prev->kn_fflags |= NOTE_TRACKERR;
-			}
-			prev = kn;
-			continue;
-		}
-
-		if (kn->kn_fop->f_event(kn, NOTE_FORK | pid)) {
-			kq = kn->kn_kq;
-			mtx_enter(&kq->kq_lock);
-			knote_activate(kn);
-			mtx_leave(&kq->kq_lock);
-		}
-
-		if ((kn->kn_sfflags & NOTE_TRACK) == 0)
-			continue;
-
-		/*
-		 * process forked, and user wants to track the new process,
-		 * so attach a new knote to it, and immediately report an
-		 * event with the parent's pid. To do this the lock needs
-		 * to be released, so insert a marker and restart the scan
-		 * after the insert.
-		 */
-
-		SLIST_INSERT_AFTER(kn, &marker, kn_selnext);
-		skip = 1;
-
-		/* register knote clone with new process. */
-		memset(&kev, 0, sizeof(kev));
-		kev.ident = pid & NOTE_PDATAMASK;	/* pid */
-		kev.filter = kn->kn_filter;
-		kev.flags = kn->kn_flags | EV_ADD | EV_ENABLE;
-		kev.fflags = kn->kn_sfflags;
-		kev.udata = kn->kn_udata;		/* preserve udata */
-
-		mtx_leave(&pr->ps_mtx);
-		error = kqueue_register(kq, &kev, 0, NULL);
-		if (error == 0) {
-			/* register child knote with new process. */
-			kev.flags = kn->kn_flags | EV_ADD | EV_ENABLE;
-			kev.flags |= EV_ONESHOT | EV_FLAG1;
-			kev.data = kn->kn_id;			/* parent */
-			error = kqueue_register(kq, &kev, 0, NULL);
-		}
-		goto again;
-	}
-
+	knote_locked(&pr->ps_klist, NOTE_FORK | pid);
 	mtx_leave(&pr->ps_mtx);
+	rw_exit_write(&kqueue_ps_list_lock);
 }
 
 void
