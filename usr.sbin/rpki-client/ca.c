@@ -1,4 +1,4 @@
-/*	$OpenBSD: ca.c,v 1.2 2026/10/16 19:39:31 job Exp $ */
+/*	$OpenBSD: ca.c,v 1.8 2026/10/23 11:39:02 tb Exp $ */
 /*
  * Copyright (c) 2026 Job Snijders <job@bsd.nl>
  *
@@ -35,6 +35,7 @@
 extern int rrdpon;
 
 static void ca_free(struct ca *);
+static time_t ca_state_get_first_confirmed(const struct cert *);
 
 static inline int
 certidcmp(const struct ca *a, const struct ca *b)
@@ -97,6 +98,18 @@ ca_tree_insert_cert(struct ca_tree *ca_tree, const struct cert *cert)
 	if (cert->purpose != CERT_PURPOSE_TA)
 		ca->nonfunc = 1;
 
+	if (cert->purpose == CERT_PURPOSE_TA) {
+		ca->confirmed = 1;
+		ca->first_confirmed = now;
+		ca->issuer = NULL;
+	} else {
+		ca->confirmed = 0;
+		ca->first_confirmed = ca_state_get_first_confirmed(cert);
+		ca->issuer = ca_lookup_by_certid(ca_tree, cert->issuerid);
+		if (ca->issuer == NULL)
+			errx(1, "ca tree corrupted");
+	}
+
 	if ((old_ca = RB_INSERT(ca_tree, ca_tree, ca)) != NULL) {
 		warnx("duplicate CA at %s", ca->location);
 		ca_free(ca);
@@ -117,8 +130,40 @@ ca_free(struct ca *ca)
 	free(ca->location);
 	free(ca->carepo);
 	free(ca->mfturi);
+	free(ca->baseuri);
 	free(ca->notify);
 	free(ca);
+}
+
+void
+ca_set_confirmed(struct ca_tree *ca_tree, int certid)
+{
+	struct ca *ca;
+
+	if ((ca = ca_lookup_by_certid(ca_tree, certid)) == NULL)
+		errx(1, "ca_tree corrupted");
+
+	do {
+		if (ca->confirmed)
+			return;
+
+		ca->confirmed = 1;
+
+		if (ca->first_confirmed == 0)
+			ca->first_confirmed = get_current_time();
+
+	} while ((ca = ca->issuer) != NULL);
+}
+
+int
+ca_check_confirmed(struct ca_tree *ca_tree, int certid)
+{
+	struct ca *ca;
+
+	if ((ca = ca_lookup_by_certid(ca_tree, certid)) != NULL)
+		return ca->confirmed;
+
+	return 0;
 }
 
 void
@@ -131,7 +176,7 @@ ca_clear_nonfunc(struct ca_tree *ca_tree, int cid)
 }
 
 static inline int
-ca_state_cmp(const struct ca_state *a, const struct ca_state *b)
+ca_cmp(const struct ca *a, const struct ca *b)
 {
 	int cmp;
 
@@ -162,34 +207,50 @@ ca_state_cmp(const struct ca_state *a, const struct ca_state *b)
 	return 0;
 }
 
-static RB_HEAD(ca_state_tree, ca_state) ca_state_tree = \
-    RB_INITIALIZER(&ca_state_tree);
+static RB_HEAD(ca_state_tree, ca) ca_state_tree \
+    = RB_INITIALIZER(&ca_state_tree);
 
-RB_GENERATE_STATIC(ca_state_tree, ca_state, entry, ca_state_cmp);
+RB_GENERATE_STATIC(ca_state_tree, ca, entry, ca_cmp);
 
-static void
-ca_state_free(struct ca_state *ca_state)
+static time_t
+ca_state_get_first_confirmed(const struct cert *cert)
 {
-	if (ca_state == NULL)
-		return;
+	struct ca *ca, needle;
 
-	free(ca_state->aki);
-	free(ca_state->ski);
-	free(ca_state->location);
-	free(ca_state->mfturi);
-	free(ca_state->baseuri);
-	free(ca_state->notify);
-	free(ca_state);
+	needle.aki = cert->aki;
+	needle.ski = cert->ski;
+	needle.location = cert->path;
+	needle.mfturi = cert->mft;
+
+	if ((ca = RB_FIND(ca_state_tree, &ca_state_tree, &needle)) != NULL)
+		return ca->first_confirmed;
+
+	return 0;
 }
 
 static void
 ca_state_tree_free(void)
 {
-	struct ca_state *ca_state, *ca_state_tmp;
+	struct ca *ca, *ca_tmp;
 
-	RB_FOREACH_SAFE(ca_state, ca_state_tree, &ca_state_tree, ca_state_tmp) {
-		RB_REMOVE(ca_state_tree, &ca_state_tree, ca_state);
-		ca_state_free(ca_state);
+	RB_FOREACH_SAFE(ca, ca_state_tree, &ca_state_tree, ca_tmp) {
+		RB_REMOVE(ca_state_tree, &ca_state_tree, ca);
+		ca_free(ca);
+	}
+}
+
+static RB_HEAD(nca_tree, ca) nca_tree = RB_INITIALIZER(&nca_tree);
+
+RB_GENERATE_STATIC(nca_tree, ca, entry, ca_cmp);
+
+static void
+nca_tree_free(void)
+{
+	struct ca *nca, *nca_tmp;
+
+	RB_FOREACH_SAFE(nca, nca_tree, &nca_tree, nca_tmp) {
+		RB_REMOVE(nca_tree, &nca_tree, nca);
+		ca_free(nca);
 	}
 }
 
@@ -199,17 +260,17 @@ ca_state_tree_free(void)
  * Return 1 to schedule a retry, 0 otherwise.
  */
 static int
-nca_decide_retry(const struct ca_state *ca_state)
+nca_decide_retry(const struct ca *nca)
 {
 	time_t now = get_current_time();
 
 	/* First, just retry a few times consecutively. */
-	if (ca_state->attempts < 3)
+	if (nca->attempts < 3)
 		return 1;
 
 	/* Then, insert 90 minute pauses between the retries. */
-	if ((now - ca_state->since < 24 * 60 * 60) &&
-	    (now > ca_state->last_attempt + 90 * 60))
+	if ((now - nca->since < 24 * 60 * 60) &&
+	    (now > nca->last_attempt + 90 * 60))
 		return 1;
 
 	/* Add jitter to spread the retries around in time. */
@@ -220,8 +281,8 @@ nca_decide_retry(const struct ca_state *ca_state)
 	 * After 24 hours, settle on retrying only once per day (modulo any
 	 * RRDP rpkiNotify-based batching, as arranged by the caller).
 	 */
-	if ((now - ca_state->since > 24 * 60 * 60) &&
-	    (now - ca_state->last_attempt > 24 * 60 * 60))
+	if ((now - nca->since > 24 * 60 * 60) &&
+	    (now - nca->last_attempt > 24 * 60 * 60))
 		return 1;
 
 	return 0;
@@ -237,32 +298,32 @@ static struct strlist batchlist = LIST_HEAD_INITIALIZER(batchlist);
 static void
 ncas_plan_retries(void)
 {
-	struct ca_state *ca_state;
+	struct ca *nca;
 	struct strlistentry *sle, *sle_tmp;
 
-	RB_FOREACH(ca_state, ca_state_tree, &ca_state_tree) {
-		if (nca_decide_retry(ca_state) == 0) {
-			ca_state->defer = 1;
+	RB_FOREACH(nca, nca_tree, &nca_tree) {
+		if (nca_decide_retry(nca) == 0) {
+			nca->defer = 1;
 			continue;
 		}
 
-		strlist_insert(&batchlist, ca_state->baseuri);
+		strlist_insert(&batchlist, nca->baseuri);
 
-		if (ca_state->notify != NULL && rrdpon)
-			strlist_insert(&batchlist, ca_state->notify);
+		if (nca->notify != NULL && rrdpon)
+			strlist_insert(&batchlist, nca->notify);
 	}
 
-	RB_FOREACH(ca_state, ca_state_tree, &ca_state_tree) {
-		if (strlist_find(&batchlist, ca_state->baseuri,
-		    strlen(ca_state->baseuri))) {
-			ca_state->defer = 0;
+	RB_FOREACH(nca, nca_tree, &nca_tree) {
+		if (strlist_find(&batchlist, nca->baseuri,
+		    strlen(nca->baseuri))) {
+			nca->defer = 0;
 			continue;
 		}
 
-		if (ca_state->notify != NULL && rrdpon) {
-			if (strlist_find(&batchlist, ca_state->notify,
-			    strlen(ca_state->notify))) {
-				ca_state->defer = 0;
+		if (nca->notify != NULL && rrdpon) {
+			if (strlist_find(&batchlist, nca->notify,
+			    strlen(nca->notify))) {
+				nca->defer = 0;
 			}
 		}
 	}
@@ -282,7 +343,7 @@ nca_history_load(void)
 	size_t linesize = 0;
 	ssize_t linelen;
 	const char *errstr;
-	struct ca_state *ca_state = NULL;
+	struct ca *nca = NULL;
 	time_t now;
 
 	now = get_current_time();
@@ -301,42 +362,41 @@ nca_history_load(void)
 		if (line[linelen - 1] == '\n')
 			line[linelen - 1] = '\0';
 
-		if ((ca_state = calloc(1, sizeof(*ca_state))) == NULL)
+		if ((nca = calloc(1, sizeof(*nca))) == NULL)
 			err(1, NULL);
 
 		l = line;
 
 		if ((aki = strsep(&l, " ")) == NULL)
 			goto err;
-		if ((ca_state->aki = strdup(aki)) == NULL)
+		if ((nca->aki = strdup(aki)) == NULL)
 			err(1, NULL);
 
 		if ((ski = strsep(&l, " ")) == NULL)
 			goto err;
-		if ((ca_state->ski = strdup(ski)) == NULL)
+		if ((nca->ski = strdup(ski)) == NULL)
 			err(1, NULL);
 
 		if ((since = strsep(&l, " ")) == NULL)
 			goto err;
-		ca_state->since = strtonum(since, 1, LLONG_MAX, &errstr);
+		nca->since = strtonum(since, 1, LLONG_MAX, &errstr);
 		if (errstr != NULL)
 			goto err;
-		if (ca_state->since > now)
+		if (nca->since > now)
 			goto err;
 
 		if ((last_attempt = strsep(&l, " ")) == NULL)
 			goto err;
-		ca_state->last_attempt = strtonum(last_attempt, 1,
-		    LLONG_MAX, &errstr);
+		nca->last_attempt = strtonum(last_attempt, 1, LLONG_MAX,
+		    &errstr);
 		if (errstr != NULL)
 			goto err;
-		if (ca_state->last_attempt > now)
+		if (nca->last_attempt > now)
 			goto err;
 
 		if ((attempts = strsep(&l, " ")) == NULL)
 			goto err;
-		ca_state->attempts = strtonum(attempts, 1, LLONG_MAX,
-		    &errstr);
+		nca->attempts = strtonum(attempts, 1, LLONG_MAX, &errstr);
 		if (errstr != NULL)
 			goto err;
 
@@ -350,7 +410,7 @@ nca_history_load(void)
 			goto err;
 		if (!valid_uri(loc, strlen(loc), NULL))
 			goto err;
-		if ((ca_state->location = strdup(loc)) == NULL)
+		if ((nca->location = strdup(loc)) == NULL)
 			err(1, NULL);
 
 		if ((mfturi = strsep(&l, " ")) == NULL)
@@ -363,9 +423,9 @@ nca_history_load(void)
 			goto err;
 		if (!valid_uri(mfturi, strlen(mfturi), RSYNC_PROTO))
 			goto err;
-		if (!rsync_base_uri(mfturi, &ca_state->baseuri))
+		if (!rsync_base_uri(mfturi, &nca->baseuri))
 			goto err;
-		if ((ca_state->mfturi = strdup(mfturi)) == NULL)
+		if ((nca->mfturi = strdup(mfturi)) == NULL)
 			err(1, NULL);
 
 		notify = l;
@@ -380,16 +440,14 @@ nca_history_load(void)
 				goto err;
 			if (!valid_uri(notify, strlen(notify), HTTPS_PROTO))
 				goto err;
-			if ((ca_state->notify = strdup(notify)) == NULL)
+			if ((nca->notify = strdup(notify)) == NULL)
 				err(1, NULL);
 		}
 
-		if (RB_INSERT(ca_state_tree, &ca_state_tree,
-		    ca_state) != NULL) {
-			warnx("duplicate entry for ca_state_tree_tree at %s",
-			    ca_state->location);
-			ca_state_free(ca_state);
-			ca_state = NULL;
+		if (RB_INSERT(nca_tree, &nca_tree, nca) != NULL) {
+			warnx("duplicate nca_tree entry for %s", nca->location);
+			ca_free(nca);
+			nca = NULL;
 		}
 	}
 
@@ -410,9 +468,9 @@ nca_history_load(void)
 
 	free(line);
 
-	ca_state_free(ca_state);
+	ca_free(nca);
 
-	ca_state_tree_free();
+	nca_tree_free();
 }
 
 /*
@@ -422,7 +480,7 @@ nca_history_load(void)
 int
 nca_skip_sync(struct ca *ca)
 {
-	struct ca_state *ca_state, needle;
+	struct ca *nca, needle;
 
 	if (ca->purpose == CERT_PURPOSE_TA)
 		return 0;
@@ -432,17 +490,16 @@ nca_skip_sync(struct ca *ca)
 	needle.location = ca->location;
 	needle.mfturi = ca->mfturi;
 
-	ca_state = RB_FIND(ca_state_tree, &ca_state_tree, &needle);
-	if (ca_state == NULL)
+	if ((nca = RB_FIND(nca_tree, &nca_tree, &needle)) == NULL)
 		return 0;
 
 	/* determined by ncas_plan_retries */
-	ca->defer = ca_state->defer;
+	ca->defer = nca->defer;
 
 	/* state from the previous run */
-	ca->since = ca_state->since;
-	ca->last_attempt = ca_state->last_attempt;
-	ca->attempts = ca_state->attempts;
+	ca->since = nca->since;
+	ca->last_attempt = nca->last_attempt;
+	ca->attempts = nca->attempts;
 
 	if (retry_all_ncas || ca->defer == 0) {
 		if (verbose) {
@@ -469,25 +526,12 @@ ncas_sorted_cmp(const void *ca_a, const void *ca_b)
 	assert(a->purpose == CERT_PURPOSE_CA);
 	assert(b->purpose == CERT_PURPOSE_CA);
 
-	cmp = strcmp(a->aki, b->aki);
-	if (cmp > 0)
+	if (a->since > b->since)
 		return 1;
-	if (cmp < 0)
-		return -1;
-
-	cmp = strcmp(a->mfturi, b->mfturi);
-	if (cmp > 0)
-		return 1;
-	if (cmp < 0)
+	if (a->since < b->since)
 		return -1;
 
 	cmp = strcmp(a->location, b->location);
-	if (cmp > 0)
-		return 1;
-	if (cmp < 0)
-		return -1;
-
-	cmp = strcmp(a->ski, b->ski);
 	if (cmp > 0)
 		return 1;
 	if (cmp < 0)
@@ -516,13 +560,6 @@ nca_history_save(struct ca_tree *ca_tree, time_t buildtime)
 		return;
 	}
 
-	if ((fd = mkostemp(temp, O_CLOEXEC)) == -1)
-		goto err;
-	(void)fchmod(fd, 0644);
-
-	if ((f = fdopen(fd, "w")) == NULL)
-		err(1, "fopen");
-
 	if ((ncas_sorted = calloc(ncas_num, sizeof(ncas_sorted[0]))) == NULL)
 		err(1, NULL);
 
@@ -532,6 +569,13 @@ nca_history_save(struct ca_tree *ca_tree, time_t buildtime)
 	}
 
 	qsort(ncas_sorted, ncas_num, sizeof(ncas_sorted[0]), ncas_sorted_cmp);
+
+	if ((fd = mkostemp(temp, O_CLOEXEC)) == -1)
+		goto err;
+	(void)fchmod(fd, 0644);
+
+	if ((f = fdopen(fd, "w")) == NULL)
+		err(1, "fdopen");
 
 	for (idx = 0; idx < ncas_num; idx++) {
 		ca = ncas_sorted[idx];
@@ -567,7 +611,7 @@ nca_history_save(struct ca_tree *ca_tree, time_t buildtime)
 		goto err;
 
 	free(ncas_sorted);
-	ca_state_tree_free();
+	nca_tree_free();
 
 	return;
 
@@ -577,5 +621,206 @@ nca_history_save(struct ca_tree *ca_tree, time_t buildtime)
 		fclose(f);
 	unlink(temp);
 	free(ncas_sorted);
+	nca_tree_free();
+}
+
+void
+ca_state_load(void)
+{
+	FILE *f;
+	char *line = NULL;
+	size_t linesize = 0;
+	ssize_t linelen;
+	const char *errstr;
+	struct ca *ca = NULL;
+	time_t now;
+
+	now = get_current_time();
+
+	if ((f = fopen(CA_STATE, "r")) == NULL) {
+		if (errno == ENOENT)
+			return;
+		err(1, "failed to open %s", CA_STATE);
+	}
+
+	while ((linelen = getline(&line, &linesize, f)) != -1) {
+		char *l, *aki, *ski, *loc, *mfturi, *since;
+		size_t loc_len, mfturi_len;
+
+		if (line[linelen - 1] == '\n')
+			line[linelen - 1] = '\0';
+
+		if ((ca = calloc(1, sizeof(*ca))) == NULL)
+			err(1, NULL);
+
+		l = line;
+
+		if ((aki = strsep(&l, " ")) == NULL)
+			goto err;
+		if ((ca->aki = strdup(aki)) == NULL)
+			err(1, NULL);
+
+		if ((ski = strsep(&l, " ")) == NULL)
+			goto err;
+		if ((ca->ski = strdup(ski)) == NULL)
+			err(1, NULL);
+
+		if ((since = strsep(&l, " ")) == NULL)
+			goto err;
+		ca->first_confirmed = strtonum(since, 1, LLONG_MAX, &errstr);
+		if (errstr != NULL)
+			goto err;
+		if (ca->first_confirmed > now)
+			goto err;
+
+		if ((loc = strsep(&l, " ")) == NULL)
+			goto err;
+
+		/* minimal example cert location: ab.cd/a/b.cer */
+		if ((loc_len = strlen(loc)) < 13)
+			goto err;
+		if (strcmp(loc + loc_len - 4, ".cer") != 0)
+			goto err;
+		if (!valid_uri(loc, strlen(loc), NULL))
+			goto err;
+		if ((ca->location = strdup(loc)) == NULL)
+			err(1, NULL);
+
+		mfturi = l;
+		if (mfturi == NULL)
+			goto err;
+
+		/* minimal example mft location: rsync://a.bc/d/e.mft */
+		if ((mfturi_len = strlen(mfturi)) < 20)
+			goto err;
+		if (strcmp(mfturi + mfturi_len - 4, ".mft") != 0)
+			goto err;
+		if (!valid_uri(mfturi, strlen(mfturi), RSYNC_PROTO))
+			goto err;
+		if (!rsync_base_uri(mfturi, NULL))
+			goto err;
+		if ((ca->mfturi = strdup(mfturi)) == NULL)
+			err(1, NULL);
+
+		if (RB_INSERT(ca_state_tree, &ca_state_tree, ca) != NULL) {
+			warnx("duplicate entry for ca state tree at %s",
+			    ca->location);
+			ca_free(ca);
+			ca = NULL;
+		}
+	}
+
+	if (ferror(f))
+		goto err;
+
+	fclose(f);
+	free(line);
+
+	return;
+
+ err:
+	warnx("error reading %s", CA_STATE);
+	fclose(f);
+	unlink(CA_STATE);
+
+	free(line);
+
+	ca_free(ca);
+
+	ca_state_tree_free();
+}
+
+static inline int
+cas_sorted_cmp(const void *ca_a, const void *ca_b)
+{
+	int cmp;
+	const struct ca *a = *(const struct ca **)ca_a;
+	const struct ca *b = *(const struct ca **)ca_b;
+
+	assert(a->purpose == CERT_PURPOSE_CA);
+	assert(b->purpose == CERT_PURPOSE_CA);
+
+	cmp = strcmp(a->location, b->location);
+	if (cmp > 0)
+		return 1;
+	if (cmp < 0)
+		return -1;
+
+	return 0;
+}
+
+void
+ca_state_save(struct ca_tree *ca_tree, time_t buildtime)
+{
+	char temp[] = CA_STATE ".XXXXXXXX";
+	FILE *f = NULL;
+	int fd;
+	struct ca *ca, **cas_sorted = NULL;
+	size_t cas_num = 0, idx = 0;
+	struct timespec ts[2];
+
+	RB_FOREACH(ca, ca_tree, ca_tree) {
+		if (ca->confirmed && ca->purpose == CERT_PURPOSE_CA)
+			cas_num++;
+	}
+
+	if (cas_num == 0) {
+		unlink(CA_STATE);
+		return;
+	}
+
+	if ((cas_sorted = calloc(cas_num, sizeof(cas_sorted[0]))) == NULL)
+		err(1, NULL);
+
+	RB_FOREACH(ca, ca_tree, ca_tree) {
+		if (ca->confirmed && ca->purpose == CERT_PURPOSE_CA)
+			cas_sorted[idx++] = ca;
+	}
+
+	qsort(cas_sorted, cas_num, sizeof(cas_sorted[0]), cas_sorted_cmp);
+
+	if ((fd = mkostemp(temp, O_CLOEXEC)) == -1)
+		goto err;
+	(void)fchmod(fd, 0644);
+
+	if ((f = fdopen(fd, "w")) == NULL)
+		err(1, "fdopen");
+
+	for (idx = 0; idx < cas_num; idx++) {
+		ca = cas_sorted[idx];
+
+		if (fprintf(f, "%s %s %lld %s %s\n", ca->aki, ca->ski,
+		    (long long)ca->first_confirmed, ca->location,
+		    ca->mfturi) < 0)
+			goto err;
+	}
+
+	if (fclose(f) != 0) {
+		f = NULL;
+		goto err;
+	}
+	f = NULL;
+
+	ts[0].tv_nsec = UTIME_OMIT;
+	ts[1].tv_sec = buildtime;
+	ts[1].tv_nsec = 0;
+
+	if (utimensat(AT_FDCWD, temp, ts, 0) == -1)
+		goto err;
+
+	if (rename(temp, CA_STATE) == -1)
+		goto err;
+
+	free(cas_sorted);
+	ca_state_tree_free();
+
+	return;
+
+ err:
+	warn("error saving CA state to %s", temp);
+	if (f != NULL)
+		fclose(f);
+	unlink(temp);
+	free(cas_sorted);
 	ca_state_tree_free();
 }

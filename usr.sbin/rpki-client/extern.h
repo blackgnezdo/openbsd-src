@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.311 2026/10/16 19:39:31 job Exp $ */
+/*	$OpenBSD: extern.h,v 1.316 2026/10/22 20:29:26 job Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -158,32 +158,18 @@ struct cert {
 	unsigned char	 mfthash[SHA256_DIGEST_LENGTH]; /* of the parent mft */
 };
 
-struct ca_state {
-	RB_ENTRY(ca_state)	 entry;
-	char			*aki;
-	char			*ski;
-	char			*location;
-	char			*mfturi;
-	char			*baseuri;
-	char			*notify;
-	time_t			 since;
-	time_t			 last_attempt;
-	unsigned int		 attempts;
-	int			 defer;
-};
-
 /*
- * Non-functional CA tree element.
- * Initially all CA and TA certs are added to this tree.
- * They are removed once they are the issuer of a valid mft.
+ * CA tree element.
  */
 struct ca {
 	RB_ENTRY(ca)		 entry;
+	struct ca		*issuer;
 	char			*aki;
 	char			*ski;
 	char			*location;
 	char			*carepo;
 	char			*mfturi;
+	char			*baseuri;
 	char			*notify;
 	int			 certid;
 	unsigned int		 repoid;
@@ -196,10 +182,14 @@ struct ca {
 	time_t			 last_attempt;
 	unsigned int		 attempts;
 	int			 defer;
+
+	/* CA confirmation */
+	int			 confirmed;
+	time_t			 first_confirmed;
 };
 
 /*
- * Tree of nonfunc CAs, sorted by certid.
+ * Tree of CAs, sorted by certid.
  */
 RB_HEAD(ca_tree, ca);
 RB_PROTOTYPE(ca_tree, ca, entry, certidcmp);
@@ -308,7 +298,8 @@ struct roa_ip {
 	struct ip_addr	 addr; /* the address prefix itself */
 	unsigned char	 min[16]; /* full range minimum */
 	unsigned char	 max[16]; /* full range maximum */
-	unsigned char	 maxlength; /* max length or zero */
+	unsigned char	 maxlength; /* maxLength if present or prefix length */
+	unsigned char    superfluous; /* maxLength SHOULD NOT be encoded */
 };
 
 /*
@@ -322,6 +313,7 @@ struct roa {
 	int		 talid; /* ROAs are covered by which TAL */
 	int		 issuerid; /* certid of the issuer */
 	int		 valid; /* validated resources */
+	int		 noncanonical; /* ips not ordered per RFC 9582, 4.3.3 */
 	time_t		 signtime; /* CMS signing-time attribute */
 	time_t		 expires; /* when the signature path expires */
 };
@@ -673,6 +665,7 @@ struct repotalstats {
 	uint32_t	 certs_fail; /* invalid certificate */
 	uint32_t	 certs_nonfunc; /* non-functional CA certificates */
 	uint32_t	 certs_nonfunc_deferred;
+	uint32_t	 certs_unconfirmed;
 	uint32_t	 mfts; /* total number of manifests */
 	uint32_t	 mfts_gap; /* manifests with sequence gaps */
 	uint32_t	 mfts_fail; /* failing syntactic parse */
@@ -788,7 +781,12 @@ void		 nca_history_load(void);
 void		 nca_history_save(struct ca_tree *, time_t);
 int		 nca_skip_sync(struct ca *);
 void		 ca_clear_nonfunc(struct ca_tree *, int);
+
+void		 ca_state_load(void);
+void		 ca_state_save(struct ca_tree *, time_t);
 struct ca	*ca_tree_insert_cert(struct ca_tree *, const struct cert *);
+int		 ca_check_confirmed(struct ca_tree *, int);
+void		 ca_set_confirmed(struct ca_tree *, int);
 
 enum rtype	 rtype_from_file_extension(const char *);
 void		 mft_buffer(struct ibuf *, const struct mft *);
@@ -945,7 +943,7 @@ struct repo	*ta_lookup(int, struct tal *);
 struct repo	*repo_lookup(int, const char *, const char *);
 struct repo	*repo_byid(unsigned int);
 int		 repo_queued(struct repo *, struct entity *);
-void		 repo_printinfo(size_t);
+void		 repo_printinfo(size_t, size_t);
 void		 repo_cleanup(struct filepath_tree *, int);
 int		 repo_check_timeout(int);
 void		 repostats_new_files_inc(struct repo *, const char *);
@@ -1150,6 +1148,7 @@ int	mkpathat(int, const char *);
 #define RSYNC_PROTO		"rsync://"
 #define RSYNC_PROTO_LEN		(sizeof(RSYNC_PROTO) - 1)
 
+#define CA_STATE		".ca_state"
 #define NCA_HISTORY		".nca_history"
 
 /* Compat helpers for OpenSSL < 4 and LibreSSL. */

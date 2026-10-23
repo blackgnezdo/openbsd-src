@@ -1,4 +1,4 @@
-/*	$OpenBSD: print.c,v 1.79 2026/07/07 13:38:54 claudio Exp $ */
+/*	$OpenBSD: print.c,v 1.81 2026/10/22 06:15:57 tb Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -524,6 +524,7 @@ roa_print(const struct cert *c, const struct roa *p)
 		json_do_int("signing_time", p->signtime);
 		json_do_int("valid_since", c->notbefore);
 		json_do_int("valid_until", c->notafter);
+		json_do_bool("noncanonical", p->noncanonical);
 		if (p->expires)
 			json_do_int("expires", p->expires);
 	} else {
@@ -550,11 +551,18 @@ roa_print(const struct cert *c, const struct roa *p)
 			json_do_string("prefix", buf);
 			json_do_uint("asid", p->asid);
 			json_do_uint("maxlen", p->ips[i].maxlength);
+			json_do_bool("superfluous_maxlen",
+			    p->ips[i].superfluous);
 			json_do_end();
 		} else {
+			const char *superfluous = "";
+
 			if (i > 0)
 				printf("%26s", "");
-			printf("%s maxlen: %hhu\n", buf, p->ips[i].maxlength);
+			if (p->ips[i].superfluous)
+				superfluous = " (superfluous maxlen)";
+			printf("%s maxlen: %hhu%s\n", buf, p->ips[i].maxlength,
+			    superfluous);
 		}
 	}
 	if (outformats & FORMAT_JSON)

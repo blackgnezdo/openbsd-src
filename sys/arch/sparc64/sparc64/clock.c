@@ -1,4 +1,4 @@
-/*	$OpenBSD: clock.c,v 1.89 2026/06/24 19:57:11 miod Exp $	*/
+/*	$OpenBSD: clock.c,v 1.95 2026/10/21 18:07:52 miod Exp $	*/
 /*	$NetBSD: clock.c,v 1.41 2001/07/24 19:29:25 eeh Exp $ */
 
 /*
@@ -130,8 +130,8 @@ void	sys_tick_start(void);
 void	stick_start(void);
 
 int	tickintr(void *);
-int	sys_tickintr(void *);
-int	stickintr(void *);
+void	sparc64_raise_clockintr(void *);
+
 
 /* %TICK is at most a 63-bit counter. */
 #define TICK_COUNT_MASK 0x7fffffffffffffff
@@ -140,11 +140,10 @@ uint64_t tick_nsec_cycle_ratio;
 uint64_t tick_nsec_max;
 
 void tick_rearm(void *, uint64_t);
-void tick_trigger(void *);
 
 const struct intrclock tick_intrclock = {
 	.ic_rearm = tick_rearm,
-	.ic_trigger = tick_trigger
+	.ic_trigger = sparc64_raise_clockintr
 };
 
 /* %STICK is at most a 63-bit counter. */
@@ -154,27 +153,23 @@ uint64_t sys_tick_nsec_cycle_ratio;
 uint64_t sys_tick_nsec_max;
 
 void sys_tick_rearm(void *, uint64_t);
-void sys_tick_trigger(void *);
 
 const struct intrclock sys_tick_intrclock = {
 	.ic_rearm = sys_tick_rearm,
-	.ic_trigger = sys_tick_trigger
+	.ic_trigger = sparc64_raise_clockintr
 };
 
 void stick_rearm(void *, uint64_t);
-void stick_trigger(void *);
 
 const struct intrclock stick_intrclock = {
 	.ic_rearm = stick_rearm,
-	.ic_trigger = stick_trigger
+	.ic_trigger = sparc64_raise_clockintr
 };
-
-void sparc64_raise_clockintr(void);
 
 static struct intrhand level10 = {
 	.ih_fun = tickintr,
-	.ih_number = 1,
-	.ih_pil = 10,
+	.ih_number = 0,
+	.ih_pil = PIL_CLOCK,
 	.ih_name = "clock"
 };
 
@@ -520,9 +515,6 @@ cpu_initclocks(void)
 
 	/* 
 	 * Establish a level 10 interrupt handler 
-	 *
-	 * We will have a conflict with the softint handler,
-	 * so we set the ih_number to 1.
 	 */
 	intr_establish(&level10);
 	evcount_percpu(&level10.ih_count);
@@ -532,17 +524,14 @@ cpu_initclocks(void)
 		    sys_tick_rate * (1ULL << 32) / 1000000000;
 		sys_tick_nsec_max = UINT64_MAX / sys_tick_nsec_cycle_ratio;
 		if (impl == IMPL_HUMMINGBIRD) {
-			level10.ih_fun = stickintr;
 			cpu_start_clock = stick_start;
 		} else {
-			level10.ih_fun = sys_tickintr;
 			cpu_start_clock = sys_tick_start;
 		}
 	} else {
 		tick_nsec_cycle_ratio =
 		    cpu_clockrate * (1ULL << 32) / 1000000000;
 		tick_nsec_max = UINT64_MAX / tick_nsec_cycle_ratio;
-		level10.ih_fun = tickintr;
 		cpu_start_clock = tick_start;
 	}
 
@@ -562,31 +551,13 @@ setstatclockrate(int newhz)
 }
 
 /*
- * Level 10 (clock) interrupts.  If we are using the FORTH PROM for
- * console input, we need to check for that here as well, and generate
- * a software interrupt to read it.
+ * Level 10 (clock) interrupts.
  *
  * %tick is really a level-14 interrupt.  We need to remap this in 
  * locore.s to a level 10.
  */
 int
 tickintr(void *cap)
-{
-	clockintr_dispatch(cap);
-	evcount_inc(&level10.ih_count);
-	return (1);
-}
-
-int
-sys_tickintr(void *cap)
-{
-	clockintr_dispatch(cap);
-	evcount_inc(&level10.ih_count);
-	return (1);
-}
-
-int
-stickintr(void *cap)
 {
 	clockintr_dispatch(cap);
 	evcount_inc(&level10.ih_count);
@@ -616,14 +587,8 @@ tick_rearm(void *unused, uint64_t nsecs)
 	t0 = tick();
 	tickcmpr_set((t0 + cycles) & TICK_COUNT_MASK);
 	if (cycles <= ((tick() - t0) & TICK_COUNT_MASK))
-		sparc64_raise_clockintr();
+		sparc64_raise_clockintr(NULL);
 	intr_restore(s);
-}
-
-void
-tick_trigger(void *unused)
-{
-	sparc64_raise_clockintr();
 }
 
 void
@@ -652,14 +617,8 @@ sys_tick_rearm(void *unused, uint64_t nsecs)
 	t0 = sys_tick();
 	sys_tickcmpr_set((t0 + cycles) & STICK_COUNT_MASK);
 	if (cycles <= ((sys_tick() - t0) & STICK_COUNT_MASK))
-		sparc64_raise_clockintr();
+		sparc64_raise_clockintr(NULL);
 	intr_restore(s);
-}
-
-void
-sys_tick_trigger(void *unused)
-{
-	sparc64_raise_clockintr();
 }
 
 void
@@ -685,14 +644,8 @@ stick_rearm(void *unused, uint64_t nsecs)
 	t0 = stick();
 	stickcmpr_set((t0 + cycles) & STICK_COUNT_MASK);
 	if (cycles <= ((stick() - t0) & STICK_COUNT_MASK))
-		sparc64_raise_clockintr();
+		sparc64_raise_clockintr(NULL);
 	intr_restore(s);
-}
-
-void
-stick_trigger(void *unused)
-{
-	sparc64_raise_clockintr();
 }
 
 u_int
@@ -716,7 +669,7 @@ sys_tick_get_timecount(struct timecounter *tc)
 }
 
 void
-sparc64_raise_clockintr(void)
+sparc64_raise_clockintr(void *unused)
 {
-	send_softint(PIL_CLOCK, &curcpu()->ci_tickintr);
+	softintr_schedule(&curcpu()->ci_tickintr);
 }

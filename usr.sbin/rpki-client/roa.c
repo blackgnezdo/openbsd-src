@@ -1,4 +1,4 @@
-/*	$OpenBSD: roa.c,v 1.94 2026/10/09 08:36:50 job Exp $ */
+/*	$OpenBSD: roa.c,v 1.96 2026/10/22 06:15:57 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -59,6 +59,42 @@ ASN1_SEQUENCE(ROAIPAddress) = {
 	ASN1_OPT(ROAIPAddress, maxLength, ASN1_INTEGER),
 } ASN1_SEQUENCE_END(ROAIPAddress);
 
+/* XXX - This is very similar to vrpcmp() below. Can we dedup? */
+static int
+roa_ip_cmp(const struct roa_ip *a, const struct roa_ip *b)
+{
+	int cmp, length;
+
+	if (a->afi < b->afi)
+		return -1;
+	if (a->afi > b->afi)
+		return -1;
+
+	length = a->afi == AFI_IPV4 ? 4 : 16;
+
+	if ((cmp = memcmp(a->min, b->min, length)) != 0) {
+		if (cmp < 0)
+			return -1;
+		else
+			return 1;
+	}
+
+	/* Inverted comparison: larger prefixes come first. */
+	if ((cmp = memcmp(a->max, b->max, length)) != 0) {
+		if (cmp > 0)
+			return -1;
+		else
+			return 1;
+	}
+
+	if (a->maxlength < b->maxlength)
+		return -1;
+	if (a->maxlength > b->maxlength)
+		return 1;
+
+	return 0;
+}
+
 /*
  * Parses the eContent section of an ROA file, RFC 9582, section 4.
  * Returns zero on failure, non-zero on success.
@@ -77,8 +113,8 @@ roa_parse_econtent(const char *fn, void *obj, const unsigned char *d,
 	const ROAIPAddress		*addr;
 	uint64_t			 maxlen;
 	struct ip_addr			 ipaddr;
-	struct roa_ip			*res;
-	int				 ipaddrblocksz;
+	struct roa_ip			*res, *last = NULL;
+	int				 ipaddrblocksz, superfluous, warned = 0;
 	int				 i, j, rc = 0;
 
 	oder = d;
@@ -133,6 +169,11 @@ roa_parse_econtent(const char *fn, void *obj, const unsigned char *d,
 				    "IPv4 appears twice", fn);
 				goto out;
 			}
+			if (ipv6_seen) {
+				warnx("%s: RFC 9582 section 4.3.3.1: "
+				    "IPv4 should precede IPv6", fn);
+				roa->noncanonical = 1;
+			}
 			break;
 		case AFI_IPV6:
 			if (ipv6_seen++ > 0) {
@@ -159,6 +200,7 @@ roa_parse_econtent(const char *fn, void *obj, const unsigned char *d,
 		if (roa->ips == NULL)
 			err(1, NULL);
 
+		last = NULL;
 		for (j = 0; j < addrsz; j++) {
 			addr = sk_ROAIPAddress_value(addrs, j);
 
@@ -168,6 +210,7 @@ roa_parse_econtent(const char *fn, void *obj, const unsigned char *d,
 				goto out;
 			}
 			maxlen = ipaddr.prefixlen;
+			superfluous = 0;
 
 			if (addr->maxLength != NULL) {
 				if (!ASN1_INTEGER_get_uint64(&maxlen,
@@ -189,15 +232,33 @@ roa_parse_econtent(const char *fn, void *obj, const unsigned char *d,
 					    fn, (unsigned long long)maxlen);
 					goto out;
 				}
+				if (ipaddr.prefixlen == maxlen) {
+					superfluous = 1;
+					if (!warned && verbose > 1) {
+						warnx("%s: superfluous "
+						    "maxLength encoding", fn);
+						warned = 1;
+					}
+				}
 			}
 
 			res = &roa->ips[roa->num_ips++];
 			res->addr = ipaddr;
 			res->afi = afi;
 			res->maxlength = maxlen;
+			res->superfluous = superfluous;
 			ip_roa_compose_ranges(res);
+
+			if (last != NULL) {
+				if (roa_ip_cmp(last, res) >= 0)
+					roa->noncanonical = 1;
+			}
+			last = res;
 		}
 	}
+
+	if (verbose && roa->noncanonical)
+		warnx("%s: RFC 9582, 4.3.3: non-canonical address order", fn);
 
 	rc = 1;
  out:
