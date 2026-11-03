@@ -1,4 +1,4 @@
-/* $OpenBSD: netcat.c,v 1.239 2026/09/20 17:47:16 beck Exp $ */
+/* $OpenBSD: netcat.c,v 1.241 2026/10/31 03:42:10 tb Exp $ */
 /*
  * Copyright (c) 2001 Eric Jackson <ericj@monkey.org>
  * Copyright (c) 2015 Bob Beck.  All rights reserved.
@@ -832,7 +832,7 @@ tls_setup_client(struct tls *tls_ctx, int s, char *host)
 struct tls *
 tls_setup_server(struct tls *tls_ctx, int connfd, char *host)
 {
-	struct tls *tls_cctx;
+	struct tls *tls_cctx = NULL;
 	const char *errstr;
 
 	if (tls_accept_socket(tls_ctx, &tls_cctx, connfd) == -1) {
@@ -860,6 +860,7 @@ tls_setup_server(struct tls *tls_ctx, int connfd, char *host)
 			return tls_cctx;
 		}
 	}
+	tls_free(tls_cctx);
 	return NULL;
 }
 
@@ -1222,8 +1223,11 @@ readwrite(int net_fd, struct tls *tls_ctx)
 				pfd[POLL_NETOUT].events = POLLIN;
 			else if (ret == TLS_WANT_POLLOUT)
 				pfd[POLL_NETOUT].events = POLLOUT;
-			else if (ret == -1)
+			else if (ret == -1) {
 				pfd[POLL_NETOUT].fd = -1;
+				if (tls_ctx != NULL && kflag)
+					return;
+			}
 			/* buffer empty - remove self from polling */
 			if (stdinbufpos == 0)
 				pfd[POLL_NETOUT].events = 0;
@@ -1239,8 +1243,11 @@ readwrite(int net_fd, struct tls *tls_ctx)
 				pfd[POLL_NETIN].events = POLLIN;
 			else if (ret == TLS_WANT_POLLOUT)
 				pfd[POLL_NETIN].events = POLLOUT;
-			else if (ret == -1)
+			else if (ret == -1) {
 				pfd[POLL_NETIN].fd = -1;
+				if (tls_ctx != NULL && kflag)
+					return;
+			}
 			/* eof on net in - remove from pfd */
 			if (ret == 0) {
 				shutdown(pfd[POLL_NETIN].fd, SHUT_RD);
@@ -1305,8 +1312,11 @@ drainbuf(int fd, unsigned char *buf, size_t *bufpos, struct tls *tls)
 
 	if (tls) {
 		n = tls_write(tls, buf, *bufpos);
-		if (n == -1)
-			errx(1, "tls write failed (%s)", tls_error(tls));
+		if (n == -1) {
+			warnx("tls write failed (%s)", tls_error(tls));
+			if (!kflag)
+				exit(1);
+		}
 	} else {
 		n = write(fd, buf, *bufpos);
 		/* don't treat EAGAIN, EINTR as error */
@@ -1334,8 +1344,11 @@ fillbuf(int fd, unsigned char *buf, size_t *bufpos, struct tls *tls)
 
 	if (tls) {
 		n = tls_read(tls, buf + *bufpos, num);
-		if (n == -1)
-			errx(1, "tls read failed (%s)", tls_error(tls));
+		if (n == -1) {
+			warnx("tls read failed (%s)", tls_error(tls));
+			if (!kflag)
+				exit(1);
+		}
 	} else {
 		n = read(fd, buf + *bufpos, num);
 		/* don't treat EAGAIN, EINTR as error */

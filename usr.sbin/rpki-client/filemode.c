@@ -1,4 +1,4 @@
-/*	$OpenBSD: filemode.c,v 1.95 2026/10/15 09:12:03 tb Exp $ */
+/*	$OpenBSD: filemode.c,v 1.97 2026/10/30 10:21:19 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -167,7 +167,7 @@ parse_load_cert(char *uri)
 		goto done;
 	}
 	/* try to load the CRL of this cert */
-	parse_load_crl(cert->crl);
+	parse_load_crl(cert->crldp);
 
 	return cert;
 
@@ -322,8 +322,9 @@ print_signature_path(const char *crl, const char *aia, const struct auth *a)
 		printf("                          %s\n", aia);
 
 	for (; a != NULL; a = a->issuer) {
-		if (a->cert->crl != NULL)
-			printf("                          %s\n", a->cert->crl);
+		if (a->cert->crldp != NULL)
+			printf("                          %s\n",
+			    a->cert->crldp);
 		if (a->issuer != NULL)
 			printf("                          %s\n",
 			    a->issuer->cert->mft);
@@ -553,7 +554,7 @@ proc_parser_file(char *file, unsigned char *in_buf, size_t len)
 	}
 
 	if (aia != NULL) {
-		parse_load_crl(cert->crl);
+		parse_load_crl(cert->crldp);
 		a = parse_load_certchain(aia);
 		c = crl_get(&crls, a);
 
@@ -666,7 +667,7 @@ proc_parser_file(char *file, unsigned char *in_buf, size_t len)
 		printf("\n");
 
 		if (aia != NULL && status) {
-			print_signature_path(cert->crl, aia, a);
+			print_signature_path(cert->crldp, aia, a);
 			if (expires != NULL)
 				printf("Signature path expires:   %s\n",
 				    time2str(*expires));

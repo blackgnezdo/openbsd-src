@@ -1,4 +1,4 @@
-/*	$OpenBSD: ca.c,v 1.8 2026/10/23 11:39:02 tb Exp $ */
+/*	$OpenBSD: ca.c,v 1.16 2026/10/31 16:24:28 job Exp $ */
 /*
  * Copyright (c) 2026 Job Snijders <job@bsd.nl>
  *
@@ -16,6 +16,7 @@
  */
 
 #include <sys/types.h>
+#include <sys/queue.h>
 #include <sys/stat.h>
 #include <sys/tree.h>
 
@@ -35,7 +36,78 @@
 extern int rrdpon;
 
 static void ca_free(struct ca *);
-static time_t ca_state_get_first_confirmed(const struct cert *);
+static void ca_set_state_from_last_run(struct ca *, const struct cert *);
+
+struct carepo {
+	RB_ENTRY(carepo) entry;
+	char *carepo;
+	int talid;
+	unsigned int counter;
+};
+
+static inline int
+carepocmp(const struct carepo *a, const struct carepo *b)
+{
+	int cmp;
+
+	if (a->talid < b->talid)
+		return -1;
+	if (a->talid > b->talid)
+		return 1;
+
+	cmp = strcmp(a->carepo, b->carepo);
+	if (cmp > 0)
+		return 1;
+	if (cmp < 0)
+		return -1;
+	return 0;
+}
+
+static RB_HEAD(carepo_tree, carepo) carepos = RB_INITIALIZER(&carepos);
+
+RB_GENERATE_STATIC(carepo_tree, carepo, entry, carepocmp);
+
+static void
+carepo_free(struct carepo *carepo)
+{
+	free(carepo->carepo);
+	free(carepo);
+}
+
+void
+carepo_tree_free(void)
+{
+	struct carepo *carepo, *carepo_tmp;
+
+	RB_FOREACH_SAFE(carepo, carepo_tree, &carepos, carepo_tmp) {
+		RB_REMOVE(carepo_tree, &carepos, carepo);
+		carepo_free(carepo);
+	}
+}
+
+/*
+ * Increment and return per TAL per carepo counter.
+ */
+static unsigned int
+carepo_increment(const struct ca *ca)
+{
+	struct carepo *carepo, needle;
+
+	needle.talid = ca->talid;
+	needle.carepo = ca->carepo;
+	if ((carepo = RB_FIND(carepo_tree, &carepos, &needle)) == NULL) {
+		if ((carepo = calloc(1, sizeof(*carepo))) == NULL)
+			err(1, NULL);
+		carepo->talid = ca->talid;
+		if ((carepo->carepo = strdup(ca->carepo)) == NULL)
+			err(1, NULL);
+		carepo->counter = 0;
+		if (RB_INSERT(carepo_tree, &carepos, carepo) != NULL)
+			err(1, "carepos tree corrupted");
+	}
+
+	return ++carepo->counter;
+}
 
 static inline int
 certidcmp(const struct ca *a, const struct ca *b)
@@ -98,20 +170,28 @@ ca_tree_insert_cert(struct ca_tree *ca_tree, const struct cert *cert)
 	if (cert->purpose != CERT_PURPOSE_TA)
 		ca->nonfunc = 1;
 
+	ca->confirmed = 0;
+
 	if (cert->purpose == CERT_PURPOSE_TA) {
-		ca->confirmed = 1;
-		ca->first_confirmed = now;
+		ca->confirmed_in_last_run = 1;
 		ca->issuer = NULL;
 	} else {
-		ca->confirmed = 0;
-		ca->first_confirmed = ca_state_get_first_confirmed(cert);
+		ca_set_state_from_last_run(ca, cert);
 		ca->issuer = ca_lookup_by_certid(ca_tree, cert->issuerid);
 		if (ca->issuer == NULL)
 			errx(1, "ca tree corrupted");
+		ca->bad = ca->issuer->bad;
+		if (carepo_increment(ca) > MAX_CA_PER_CAREPO) {
+			warnx("%s: ca repository overflowed %s", ca->location,
+			    ca->carepo);
+			ca->bad = 1;
+		}
 	}
 
 	if ((old_ca = RB_INSERT(ca_tree, ca_tree, ca)) != NULL) {
 		warnx("duplicate CA at %s", ca->location);
+		if (ca->bad)
+			old_ca->bad = 1;
 		ca_free(ca);
 		return old_ca;
 	}
@@ -149,19 +229,19 @@ ca_set_confirmed(struct ca_tree *ca_tree, int certid)
 
 		ca->confirmed = 1;
 
-		if (ca->first_confirmed == 0)
-			ca->first_confirmed = get_current_time();
+		if (!ca->confirmed_in_last_run)
+			ca->confirmed_since = get_current_time();
 
 	} while ((ca = ca->issuer) != NULL);
 }
 
 int
-ca_check_confirmed(struct ca_tree *ca_tree, int certid)
+ca_confirmed_in_last_run(struct ca_tree *ca_tree, const struct cert *cert)
 {
 	struct ca *ca;
 
-	if ((ca = ca_lookup_by_certid(ca_tree, certid)) != NULL)
-		return ca->confirmed;
+	if ((ca = ca_lookup_by_certid(ca_tree, cert->certid)) != NULL)
+		return ca->confirmed_in_last_run;
 
 	return 0;
 }
@@ -212,20 +292,18 @@ static RB_HEAD(ca_state_tree, ca) ca_state_tree \
 
 RB_GENERATE_STATIC(ca_state_tree, ca, entry, ca_cmp);
 
-static time_t
-ca_state_get_first_confirmed(const struct cert *cert)
+static void
+ca_set_state_from_last_run(struct ca *ca, const struct cert *cert)
 {
-	struct ca *ca, needle;
+	struct ca *found;
 
-	needle.aki = cert->aki;
-	needle.ski = cert->ski;
-	needle.location = cert->path;
-	needle.mfturi = cert->mft;
+	assert(ca->purpose == CERT_PURPOSE_CA);
 
-	if ((ca = RB_FIND(ca_state_tree, &ca_state_tree, &needle)) != NULL)
-		return ca->first_confirmed;
+	if ((found = RB_FIND(ca_state_tree, &ca_state_tree, ca)) == NULL)
+		return;
 
-	return 0;
+	ca->confirmed_since = found->confirmed_since;
+	ca->confirmed_in_last_run = found->confirmed_in_last_run;
 }
 
 static void
@@ -237,6 +315,20 @@ ca_state_tree_free(void)
 		RB_REMOVE(ca_state_tree, &ca_state_tree, ca);
 		ca_free(ca);
 	}
+}
+
+int
+ca_is_bad(struct ca_tree *ca_tree, int certid)
+{
+	struct ca *ca;
+
+	if ((ca = ca_lookup_by_certid(ca_tree, certid)) == NULL)
+		return 1;
+
+	if (ca->purpose != CERT_PURPOSE_CA)
+		return 1;
+
+	return ca->bad || ca->issuer->bad;
 }
 
 static RB_HEAD(nca_tree, ca) nca_tree = RB_INITIALIZER(&nca_tree);
@@ -517,6 +609,58 @@ nca_skip_sync(struct ca *ca)
 }
 
 static int
+ca_state_write(const char *fn, time_t buildtime, struct ca **cas,
+    size_t num_cas, int (*ca_print)(FILE *, const struct ca *))
+{
+	char *temp = NULL;
+	FILE *f = NULL;
+	size_t idx;
+	int fd, ret = 0;
+	struct timespec ts[2];
+
+	if (asprintf(&temp, "%s.XXXXXXXX", fn) == -1)
+		err(1, NULL);
+
+	if ((fd = mkostemp(temp, O_CLOEXEC)) == -1)
+		goto err;
+	(void)fchmod(fd, 0644);
+
+	if ((f = fdopen(fd, "w")) == NULL)
+		err(1, "fdopen");
+
+	for (idx = 0; idx < num_cas; idx++) {
+		if (ca_print(f, cas[idx]) < 0)
+			goto err;
+	}
+
+	if (fclose(f) != 0) {
+		f = NULL;
+		goto err;
+	}
+	f = NULL;
+
+	ts[0].tv_nsec = UTIME_OMIT;
+	ts[1].tv_sec = buildtime;
+	ts[1].tv_nsec = 0;
+
+	if (utimensat(AT_FDCWD, temp, ts, 0) == -1)
+		goto err;
+
+	if (rename(temp, fn) == -1)
+		goto err;
+
+	ret = 1;
+
+ err:
+	if (f != NULL)
+		fclose(f);
+	unlink(temp);
+	free(temp);
+
+	return ret;
+}
+
+static int
 ncas_sorted_cmp(const void *ca_a, const void *ca_b)
 {
 	int cmp;
@@ -540,15 +684,21 @@ ncas_sorted_cmp(const void *ca_a, const void *ca_b)
 	return 0;
 }
 
+static int
+ca_print_nonfunctional(FILE *f, const struct ca *ca)
+{
+	assert(ca->nonfunc);
+
+	return fprintf(f, "%s %s %lld %lld %d %s %s %s\n", ca->aki, ca->ski,
+	    (long long)ca->since, (long long)ca->last_attempt, ca->attempts,
+	    ca->location, ca->mfturi, ca->notify == NULL ? "-" : ca->notify);
+}
+
 void
 nca_history_save(struct ca_tree *ca_tree, time_t buildtime)
 {
-	char temp[] = NCA_HISTORY ".XXXXXXXX";
-	FILE *f = NULL;
-	int fd;
 	struct ca *ca, **ncas_sorted = NULL;
 	size_t ncas_num = 0, idx = 0;
-	struct timespec ts[2];
 
 	RB_FOREACH(ca, ca_tree, ca_tree) {
 		if (ca->nonfunc && ca->purpose == CERT_PURPOSE_CA)
@@ -570,56 +720,11 @@ nca_history_save(struct ca_tree *ca_tree, time_t buildtime)
 
 	qsort(ncas_sorted, ncas_num, sizeof(ncas_sorted[0]), ncas_sorted_cmp);
 
-	if ((fd = mkostemp(temp, O_CLOEXEC)) == -1)
-		goto err;
-	(void)fchmod(fd, 0644);
+	if (!ca_state_write(NCA_HISTORY, buildtime, ncas_sorted, ncas_num,
+	    ca_print_nonfunctional))
+		warn("error saving non-functional CA history to %s",
+		    NCA_HISTORY);
 
-	if ((f = fdopen(fd, "w")) == NULL)
-		err(1, "fdopen");
-
-	for (idx = 0; idx < ncas_num; idx++) {
-		ca = ncas_sorted[idx];
-
-		if (fprintf(f, "%s %s %lld %lld %d %s %s", ca->aki, ca->ski,
-		    (long long)ca->since, (long long)ca->last_attempt,
-		    ca->attempts, ca->location, ca->mfturi) < 0)
-			goto err;
-
-		if (ca->notify == NULL) {
-			if (fprintf(f, " -\n") < 0)
-				goto err;
-		} else {
-			if (fprintf(f, " %s\n", ca->notify) < 0)
-				goto err;
-		}
-	}
-
-	if (fclose(f) != 0) {
-		f = NULL;
-		goto err;
-	}
-	f = NULL;
-
-	ts[0].tv_nsec = UTIME_OMIT;
-	ts[1].tv_sec = buildtime;
-	ts[1].tv_nsec = 0;
-
-	if (utimensat(AT_FDCWD, temp, ts, 0) == -1)
-		goto err;
-
-	if (rename(temp, NCA_HISTORY) == -1)
-		goto err;
-
-	free(ncas_sorted);
-	nca_tree_free();
-
-	return;
-
- err:
-	warn("error saving non-functional CA history to %s", temp);
-	if (f != NULL)
-		fclose(f);
-	unlink(temp);
 	free(ncas_sorted);
 	nca_tree_free();
 }
@@ -653,6 +758,8 @@ ca_state_load(void)
 		if ((ca = calloc(1, sizeof(*ca))) == NULL)
 			err(1, NULL);
 
+		ca->confirmed_in_last_run = 1;
+
 		l = line;
 
 		if ((aki = strsep(&l, " ")) == NULL)
@@ -667,10 +774,10 @@ ca_state_load(void)
 
 		if ((since = strsep(&l, " ")) == NULL)
 			goto err;
-		ca->first_confirmed = strtonum(since, 1, LLONG_MAX, &errstr);
+		ca->confirmed_since = strtonum(since, 1, LLONG_MAX, &errstr);
 		if (errstr != NULL)
 			goto err;
-		if (ca->first_confirmed > now)
+		if (ca->confirmed_since > now)
 			goto err;
 
 		if ((loc = strsep(&l, " ")) == NULL)
@@ -749,15 +856,20 @@ cas_sorted_cmp(const void *ca_a, const void *ca_b)
 	return 0;
 }
 
+static int
+ca_print_confirmed(FILE *f, const struct ca *ca)
+{
+	assert(ca->confirmed);
+
+	return fprintf(f, "%s %s %lld %s %s\n", ca->aki, ca->ski,
+	    (long long)ca->confirmed_since, ca->location, ca->mfturi);
+}
+
 void
 ca_state_save(struct ca_tree *ca_tree, time_t buildtime)
 {
-	char temp[] = CA_STATE ".XXXXXXXX";
-	FILE *f = NULL;
-	int fd;
 	struct ca *ca, **cas_sorted = NULL;
 	size_t cas_num = 0, idx = 0;
-	struct timespec ts[2];
 
 	RB_FOREACH(ca, ca_tree, ca_tree) {
 		if (ca->confirmed && ca->purpose == CERT_PURPOSE_CA)
@@ -779,48 +891,10 @@ ca_state_save(struct ca_tree *ca_tree, time_t buildtime)
 
 	qsort(cas_sorted, cas_num, sizeof(cas_sorted[0]), cas_sorted_cmp);
 
-	if ((fd = mkostemp(temp, O_CLOEXEC)) == -1)
-		goto err;
-	(void)fchmod(fd, 0644);
+	if (!ca_state_write(CA_STATE, buildtime, cas_sorted, cas_num,
+	    ca_print_confirmed))
+		warn("error saving CA state to %s", CA_STATE);
 
-	if ((f = fdopen(fd, "w")) == NULL)
-		err(1, "fdopen");
-
-	for (idx = 0; idx < cas_num; idx++) {
-		ca = cas_sorted[idx];
-
-		if (fprintf(f, "%s %s %lld %s %s\n", ca->aki, ca->ski,
-		    (long long)ca->first_confirmed, ca->location,
-		    ca->mfturi) < 0)
-			goto err;
-	}
-
-	if (fclose(f) != 0) {
-		f = NULL;
-		goto err;
-	}
-	f = NULL;
-
-	ts[0].tv_nsec = UTIME_OMIT;
-	ts[1].tv_sec = buildtime;
-	ts[1].tv_nsec = 0;
-
-	if (utimensat(AT_FDCWD, temp, ts, 0) == -1)
-		goto err;
-
-	if (rename(temp, CA_STATE) == -1)
-		goto err;
-
-	free(cas_sorted);
-	ca_state_tree_free();
-
-	return;
-
- err:
-	warn("error saving CA state to %s", temp);
-	if (f != NULL)
-		fclose(f);
-	unlink(temp);
 	free(cas_sorted);
 	ca_state_tree_free();
 }

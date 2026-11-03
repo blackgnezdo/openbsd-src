@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1470 2026/10/23 06:45:15 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1474 2026/10/29 12:59:16 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -179,7 +179,7 @@ enum key_code_mouse_location {
 	KEYC_MOUSE_LOCATION_STATUS_LEFT,
 	KEYC_MOUSE_LOCATION_STATUS_RIGHT,
 	KEYC_MOUSE_LOCATION_STATUS_DEFAULT,
-	KEYC_MOUSE_LOCATION_STATUS_BORDER,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_BORDER,
 	KEYC_MOUSE_LOCATION_BORDER,
 	KEYC_MOUSE_LOCATION_SCROLLBAR_UP,
 	KEYC_MOUSE_LOCATION_SCROLLBAR_SLIDER,
@@ -195,6 +195,20 @@ enum key_code_mouse_location {
 	KEYC_MOUSE_LOCATION_CONTROL7,
 	KEYC_MOUSE_LOCATION_CONTROL8,
 	KEYC_MOUSE_LOCATION_CONTROL9,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_LEFT,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_RIGHT,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_DEFAULT,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_CONTROL0, /* keep order */
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_CONTROL1,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_CONTROL2,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_CONTROL3,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_CONTROL4,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_CONTROL5,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_CONTROL6,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_CONTROL7,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_CONTROL8,
+	KEYC_MOUSE_LOCATION_SIDE_STATUS_CONTROL9,
 	KEYC_MOUSE_LOCATION_NOWHERE /* end */
 };
 
@@ -237,7 +251,7 @@ enum key_code_mouse_location {
 	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, STATUS_LEFT),      \
 	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, STATUS_RIGHT),     \
 	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, STATUS_DEFAULT),   \
-	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, STATUS_BORDER),    \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_BORDER),      \
 	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, BORDER),           \
 	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SCROLLBAR_UP),     \
 	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SCROLLBAR_SLIDER), \
@@ -252,7 +266,21 @@ enum key_code_mouse_location {
 	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, CONTROL6),         \
 	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, CONTROL7),         \
 	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, CONTROL8),         \
-	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, CONTROL9)
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, CONTROL9),                \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS),             \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_LEFT),        \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_RIGHT),       \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_DEFAULT),     \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_CONTROL0),    \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_CONTROL1),    \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_CONTROL2),    \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_CONTROL3),    \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_CONTROL4),    \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_CONTROL5),    \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_CONTROL6),    \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_CONTROL7),    \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_CONTROL8),    \
+	KEYC_MOUSE_KEY(KEYC_ ## t, KEYC_TYPE_ ## t, SIDE_STATUS_CONTROL9)
 #define KEYC_MOUSE_KEY(p, t, l)                                                \
 	p ## _ ## l = KEYC_MAKE_MOUSE_KEY(t, 0, KEYC_MOUSE_LOCATION_ ## l),    \
 	p ## 1_ ## l = KEYC_MAKE_MOUSE_KEY(t, 1, KEYC_MOUSE_LOCATION_ ## l),   \
@@ -274,7 +302,7 @@ enum key_code_mouse_location {
 	{ #s "StatusLeft", KEYC_ ## name ## _STATUS_LEFT },	      \
 	{ #s "StatusRight", KEYC_ ## name ## _STATUS_RIGHT },	      \
 	{ #s "StatusDefault", KEYC_ ## name ## _STATUS_DEFAULT },     \
-	{ #s "StatusBorder", KEYC_ ## name ## _STATUS_BORDER },       \
+	{ #s "SideStatusBorder", KEYC_ ## name ## _SIDE_STATUS_BORDER },      \
 	{ #s "ScrollbarUp", KEYC_ ## name ## _SCROLLBAR_UP },         \
 	{ #s "ScrollbarSlider", KEYC_ ## name ## _SCROLLBAR_SLIDER }, \
 	{ #s "ScrollbarDown", KEYC_ ## name ## _SCROLLBAR_DOWN },     \
@@ -289,7 +317,21 @@ enum key_code_mouse_location {
 	{ #s "Control6", KEYC_ ## name ## _CONTROL6 },		      \
 	{ #s "Control7", KEYC_ ## name ## _CONTROL7 },		      \
 	{ #s "Control8", KEYC_ ## name ## _CONTROL8 },		      \
-	{ #s "Control9", KEYC_ ## name ## _CONTROL9 }
+	{ #s "Control9", KEYC_ ## name ## _CONTROL9 },                        \
+	{ #s "SideStatus", KEYC_ ## name ## _SIDE_STATUS },                   \
+	{ #s "SideStatusLeft", KEYC_ ## name ## _SIDE_STATUS_LEFT },          \
+	{ #s "SideStatusRight", KEYC_ ## name ## _SIDE_STATUS_RIGHT },        \
+	{ #s "SideStatusDefault", KEYC_ ## name ## _SIDE_STATUS_DEFAULT },    \
+	{ #s "SideStatusControl0", KEYC_ ## name ## _SIDE_STATUS_CONTROL0 },  \
+	{ #s "SideStatusControl1", KEYC_ ## name ## _SIDE_STATUS_CONTROL1 },  \
+	{ #s "SideStatusControl2", KEYC_ ## name ## _SIDE_STATUS_CONTROL2 },  \
+	{ #s "SideStatusControl3", KEYC_ ## name ## _SIDE_STATUS_CONTROL3 },  \
+	{ #s "SideStatusControl4", KEYC_ ## name ## _SIDE_STATUS_CONTROL4 },  \
+	{ #s "SideStatusControl5", KEYC_ ## name ## _SIDE_STATUS_CONTROL5 },  \
+	{ #s "SideStatusControl6", KEYC_ ## name ## _SIDE_STATUS_CONTROL6 },  \
+	{ #s "SideStatusControl7", KEYC_ ## name ## _SIDE_STATUS_CONTROL7 },  \
+	{ #s "SideStatusControl8", KEYC_ ## name ## _SIDE_STATUS_CONTROL8 },  \
+	{ #s "SideStatusControl9", KEYC_ ## name ## _SIDE_STATUS_CONTROL9 }
 
 /*
  * A single key. This can be ASCII or Unicode or one of the keys between
@@ -1714,12 +1756,20 @@ struct mouse_event {
 	u_int		sgr_b;
 };
 
+/* Key delivery state. */
+enum key_event_delivery {
+	KEY_EVENT_NOT_OFFERED,
+	KEY_EVENT_NOT_CONSUMED,
+	KEY_EVENT_CONSUMED
+};
+
 /* Key event. */
 struct key_event {
 	struct client		*client;
 
 	key_code		 key;
 	struct mouse_event	 m;
+	enum key_event_delivery	 delivered;
 
 	char			*buf;
 	size_t			 len;
@@ -1758,6 +1808,9 @@ struct tty_style_ctx {
 	u_int			 dim;
 	struct hyperlinks	*hyperlinks;
 };
+
+/* Maximum reported terminal size. */
+#define CLIENT_MAX_TERM_SIZE 10000
 
 /* Client terminal. */
 struct tty {
@@ -1824,6 +1877,8 @@ struct tty {
 #define TTY_BRACKETPASTE 0x8000
 #define TTY_HAVESYNC 0x10000
 #define TTY_HAVEKITTYGRAPHICS 0x20000
+#define TTY_WINSZPIXELS 0x40000
+#define TTY_WINSZAPPLY 0x80000
 #define TTY_ALL_REQUEST_FLAGS \
 	(TTY_HAVEDA|TTY_HAVEDA2|TTY_HAVEXDA|TTY_HAVESYNC|TTY_HAVEKITTYGRAPHICS)
 	int		 flags;
@@ -2037,7 +2092,14 @@ struct cmd_parse_input {
 	struct cmd_find_state	 fs;
 };
 
-/* Command queue flags. */
+/* Command queue item flags. */
+#define CMDQ_FIRED 0x1
+#define CMDQ_WAITING 0x2
+#define CMDQ_KEY 0x4
+#define CMDQ_PROMPT 0x8
+#define CMDQ_KEYOFFERED 0x10
+
+/* Command queue state flags. */
 #define CMDQ_STATE_REPEAT 0x1
 #define CMDQ_STATE_CONTROL 0x2
 #define CMDQ_STATE_NOHOOKS 0x4
@@ -2268,6 +2330,7 @@ struct client {
 	struct side_status_line	 side_status;
 	struct event		 cycle_timer;
 	enum client_theme	 theme;
+	enum client_theme	 active_theme;
 
 	struct input_requests	 input_requests;
 
@@ -2957,6 +3020,7 @@ void	tty_cell(struct tty *, const struct grid_cell *,
 int	tty_init(struct tty *, struct client *);
 void	tty_resize(struct tty *);
 int	tty_set_size(struct tty *, u_int, u_int, u_int, u_int);
+void	tty_size_query(struct tty *);
 void	tty_invalidate(struct tty *);
 void	tty_start_tty(struct tty *);
 void	tty_send_requests(struct tty *);
@@ -3220,6 +3284,7 @@ void printflike(4, 5) cmdq_insert_hook(struct session *, struct cmdq_item *,
 void		 cmdq_continue(struct cmdq_item *);
 u_int		 cmdq_next(struct client *);
 struct cmdq_item *cmdq_running(struct client *);
+void		 cmdq_add_flags(struct cmdq_item *, int);
 void		 cmdq_guard(struct cmdq_item *, const char *, int);
 void printflike(2, 3) cmdq_print(struct cmdq_item *, const char *, ...);
 void 		 cmdq_print_data(struct cmdq_item *, struct evbuffer *);
@@ -3326,6 +3391,7 @@ int	 server_client_check_nested(struct client *);
 int	 server_client_handle_key(struct client *, struct key_event *);
 int	 server_client_handle_key_after(struct client *, struct key_event *,
 	     struct cmdq_item *, struct cmdq_item **);
+int	 server_client_key_prompt(struct cmdq_item *, void *);
 struct client *server_client_create(int);
 int	 server_client_open(struct client *, char **);
 void	 server_client_unref(struct client *);
@@ -3337,6 +3403,7 @@ void	 server_client_exec(struct client *, const char *);
 void	 server_client_loop(void);
 const char *server_client_get_cwd(struct client *, struct session *);
 void	 server_client_set_flags(struct client *, const char *);
+void	 server_client_size_changed(struct client *, u_int, u_int);
 const char *server_client_get_flags(struct client *);
 void	 server_client_remove_pane(struct window_pane *);
 void	 server_client_print(struct client *, int, struct evbuffer *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.316 2026/10/22 20:29:26 job Exp $ */
+/*	$OpenBSD: extern.h,v 1.320 2026/11/03 14:29:03 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -144,7 +144,7 @@ struct cert {
 	char		*repo; /* CA repository (rsync:// uri) */
 	char		*mft; /* manifest (rsync:// uri) */
 	char		*notify; /* RRDP notify (https:// uri) */
-	char		*crl; /* CRL location (rsync:// or NULL) */
+	char		*crldp; /* CRL distribution point (rsync:// or NULL) */
 	char		*signedobj; /* rsync access location for EE certs. */
 	char		*aia; /* AIA (or NULL, for trust anchor) */
 	char		*aki; /* AKI (or NULL, for trust anchor) */
@@ -175,6 +175,7 @@ struct ca {
 	unsigned int		 repoid;
 	int			 talid;
 	enum cert_purpose	 purpose;
+	int			 bad;
 
 	/* non-functional CA handling */
 	int			 nonfunc;
@@ -185,7 +186,8 @@ struct ca {
 
 	/* CA confirmation */
 	int			 confirmed;
-	time_t			 first_confirmed;
+	int			 confirmed_in_last_run;
+	time_t			 confirmed_since;
 };
 
 /*
@@ -282,6 +284,7 @@ struct mft {
 	time_t		 nextupdate; /* from the eContent */
 	time_t		 expires; /* when the signature path expires */
 	size_t		 filesz; /* number of filenames */
+	size_t		 work_items; /* number of files to validate */
 	unsigned int	 repoid;
 	int		 talid;
 	int		 issuerid; /* certid of the issuer */
@@ -666,6 +669,7 @@ struct repotalstats {
 	uint32_t	 certs_nonfunc; /* non-functional CA certificates */
 	uint32_t	 certs_nonfunc_deferred;
 	uint32_t	 certs_unconfirmed;
+	uint32_t	 certs_bad;
 	uint32_t	 mfts; /* total number of manifests */
 	uint32_t	 mfts_gap; /* manifests with sequence gaps */
 	uint32_t	 mfts_fail; /* failing syntactic parse */
@@ -785,8 +789,10 @@ void		 ca_clear_nonfunc(struct ca_tree *, int);
 void		 ca_state_load(void);
 void		 ca_state_save(struct ca_tree *, time_t);
 struct ca	*ca_tree_insert_cert(struct ca_tree *, const struct cert *);
-int		 ca_check_confirmed(struct ca_tree *, int);
+int		 ca_confirmed_in_last_run(struct ca_tree *, const struct cert *);
 void		 ca_set_confirmed(struct ca_tree *, int);
+int		 ca_is_bad(struct ca_tree *, int);
+void		 carepo_tree_free(void);
 
 enum rtype	 rtype_from_file_extension(const char *);
 void		 mft_buffer(struct ibuf *, const struct mft *);
@@ -904,6 +910,9 @@ void		 constraints_parse(void);
 int		 constraints_validate(const char *, const struct cert *);
 
 /* Parser-specific */
+struct entity	*entity_new(const char *, const char *, enum rtype,
+		    enum location, unsigned int, unsigned char *, size_t,
+		    int, int, const char *);
 void		 entity_free(struct entity *);
 void		 entity_read_req(struct ibuf *, struct entity *);
 void		 entityq_flush(struct entityq *, struct repo *);
@@ -1140,6 +1149,8 @@ int	mkpathat(int, const char *);
 
 /* Maximum number of delegated hosting locations (repositories) for each TAL. */
 #define MAX_REPO_PER_TAL	1000
+
+#define MAX_CA_PER_CAREPO	20
 
 #define HTTP_PROTO		"http://"
 #define HTTP_PROTO_LEN		(sizeof(HTTP_PROTO) - 1)

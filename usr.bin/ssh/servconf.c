@@ -1,4 +1,4 @@
-/* $OpenBSD: servconf.c,v 1.459 2026/10/09 10:48:43 dtucker Exp $ */
+/* $OpenBSD: servconf.c,v 1.462 2026/10/30 08:07:36 djm Exp $ */
 /*
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
  *                    All rights reserved
@@ -2171,7 +2171,8 @@ process_server_config_line_depth(ServerOptions *options, char *line,
 			/* requested glob was not in cache */
 			debug2("%s line %d: new include %s",
 			    filename, linenum, arg);
-			if ((r = glob(arg, 0, NULL, &gbuf)) != 0) {
+			if ((r = glob(arg, 0, include_glob_error,
+			    &gbuf)) != 0) {
 				if (r != GLOB_NOMATCH) {
 					fatal("%s line %d: include \"%s\" glob "
 					    "failed", filename, linenum, arg);
@@ -2487,7 +2488,7 @@ process_server_config_line_depth(ServerOptions *options, char *line,
 		if ((value = ssh_digest_alg_by_name(arg)) == -1)
 			fatal("%.200s line %d: Invalid %s algorithm \"%s\".",
 			    filename, linenum, keyword, arg);
-		if (*activep)
+		if (*activep && options->fingerprint_hash == -1)
 			options->fingerprint_hash = value;
 		break;
 
@@ -2549,7 +2550,7 @@ process_server_config_line_depth(ServerOptions *options, char *line,
 		/* peek at first arg for "none" so we can reuse parse_time */
 		if (av[0] != NULL && strcasecmp(av[0], "none") == 0) {
 			(void)argv_next(&ac, &av); /* consume arg */
-			if (*activep)
+			if (*activep && *intptr == -1)
 				*intptr = 0;
 			break;
 		}
@@ -4018,9 +4019,22 @@ copy_set_server_options(ServerOptions *dst, ServerOptions *src, int preauth)
 			v = NULL; \
 		} \
 	} while(0)
+#define CLEAR_ON_NONE_ARRAY(v, nv, none) \
+	do { \
+		if (dst->nv == 1 && \
+		    strcasecmp(dst->v[0], none) == 0) { \
+			free(dst->v[0]); \
+			free(dst->v); \
+			dst->v = NULL; \
+			dst->nv = 0; \
+		} \
+	} while (0)
 	CLEAR_ON_NONE(dst->authorized_principals_file);
 	CLEAR_ON_NONE(dst->trusted_user_ca_keys);
 	CLEAR_ON_NONE(dst->banner);
+	CLEAR_ON_NONE_ARRAY(channel_timeouts, num_channel_timeouts, "none");
+	CLEAR_ON_NONE_ARRAY(revoked_keys_files, num_revoked_keys_files, "none");
+#undef CLEAR_ON_NONE_ARRAY
 
 	/*
 	 * The only things that should be below this point are string options

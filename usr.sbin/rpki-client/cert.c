@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.248 2026/10/14 06:41:29 tb Exp $ */
+/*	$OpenBSD: cert.c,v 1.252 2026/11/03 11:07:45 tb Exp $ */
 /*
  * Copyright (c) 2022,2025 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -587,13 +587,13 @@ cert_aki(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 static int
 cert_crldp(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 {
-	CRL_DIST_POINTS	*crldp = NULL;
+	CRL_DIST_POINTS	*dps = NULL;
 	DIST_POINT	*dp;
 	GENERAL_NAMES	*names;
 	GENERAL_NAME	*name;
 	int		 i, rc = 0;
 
-	assert(cert->crl == NULL);
+	assert(cert->crldp == NULL);
 
 	if (cert->purpose == CERT_PURPOSE_TA) {
 		warnx("%s: RFC 6487 section 4.8.6: CRL distribution point "
@@ -608,19 +608,19 @@ cert_crldp(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 	}
 
 	/* XXX - cast away const for OpenSSL 3 and LibreSSL */
-	if ((crldp = X509V3_EXT_d2i((X509_EXTENSION *)ext)) == NULL) {
+	if ((dps = X509V3_EXT_d2i((X509_EXTENSION *)ext)) == NULL) {
 		warnx("%s: RFC 6487 section 4.8.6: CRL distribution point: "
 		    "failed extension parse", fn);
 		goto out;
 	}
 
-	if (sk_DIST_POINT_num(crldp) != 1) {
+	if (sk_DIST_POINT_num(dps) != 1) {
 		warnx("%s: RFC 6487 section 4.8.6: CRL distribution point: "
-		    "want 1 element, have %d", fn, sk_DIST_POINT_num(crldp));
+		    "want 1 element, have %d", fn, sk_DIST_POINT_num(dps));
 		goto out;
 	}
 
-	dp = sk_DIST_POINT_value(crldp, 0);
+	dp = sk_DIST_POINT_value(dps, 0);
 	if (dp->CRLissuer != NULL) {
 		warnx("%s: RFC 6487 section 4.8.6: CRL CRLIssuer field"
 		    " disallowed", fn);
@@ -651,25 +651,25 @@ cert_crldp(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 
 	names = dp->distpoint->name.fullname;
 	for (i = 0; i < sk_GENERAL_NAME_num(names); i++) {
-		char	*crl = NULL;
+		char *crldp = NULL;
 
 		name = sk_GENERAL_NAME_value(names, i);
 
-		if (!x509_location(fn, "CRL distribution point", name, &crl))
+		if (!x509_location(fn, "CRL distribution point", name, &crldp))
 			goto out;
 
-		if (cert->crl == NULL && strncasecmp(crl, RSYNC_PROTO,
+		if (cert->crldp == NULL && strncmp(crldp, RSYNC_PROTO,
 		    RSYNC_PROTO_LEN) == 0) {
-			cert->crl = crl;
+			cert->crldp = crldp;
 			continue;
 		}
 		if (verbose)
 			warnx("%s: ignoring CRL distribution point %s",
-			    fn, crl);
-		free(crl);
+			    fn, crldp);
+		free(crldp);
 	}
 
-	if (cert->crl == NULL) {
+	if (cert->crldp == NULL) {
 		warnx("%s: RFC 6487 section 4.8.6: no rsync URI in "
 		    "CRL distribution point", fn);
 		goto out;
@@ -677,7 +677,7 @@ cert_crldp(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 
 	rc = 1;
  out:
-	CRL_DIST_POINTS_free(crldp);
+	CRL_DIST_POINTS_free(dps);
 	return rc;
 }
 
@@ -725,7 +725,7 @@ cert_aia(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 			if (!x509_location(fn, "AIA: caIssuers", ad->location,
 			    &caissuers))
 				goto out;
-			if (cert->aia == NULL && strncasecmp(caissuers,
+			if (cert->aia == NULL && strncmp(caissuers,
 			    RSYNC_PROTO, RSYNC_PROTO_LEN) == 0) {
 				cert->aia = caissuers;
 				caissuers = NULL;
@@ -801,7 +801,7 @@ cert_ca_sia(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 			if (!x509_location(fn, "SIA: caRepository",
 			    ad->location, &carepo))
 				goto out;
-			if (cert->repo == NULL && strncasecmp(carepo,
+			if (cert->repo == NULL && strncmp(carepo,
 			    RSYNC_PROTO, RSYNC_PROTO_LEN) == 0) {
 				if (carepo[strlen(carepo) - 1] != '/') {
 					char *carepo_tmp;
@@ -826,7 +826,7 @@ cert_ca_sia(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 			if (!x509_location(fn, "SIA: rpkiManifest",
 			    ad->location, &rpkimft))
 				goto out;
-			if (cert->mft == NULL && strncasecmp(rpkimft,
+			if (cert->mft == NULL && strncmp(rpkimft,
 			    RSYNC_PROTO, RSYNC_PROTO_LEN) == 0) {
 				cert->mft = rpkimft;
 				rpkimft = NULL;
@@ -841,7 +841,7 @@ cert_ca_sia(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 			if (!x509_location(fn, "SIA: rpkiNotify",
 			    ad->location, &notify))
 				goto out;
-			if (strncasecmp(notify, HTTPS_PROTO,
+			if (strncmp(notify, HTTPS_PROTO,
 			    HTTPS_PROTO_LEN) != 0) {
 				warnx("%s: non-https uri in rpkiNotify: %s",
 				    fn, notify);
@@ -950,7 +950,7 @@ cert_ee_sia(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 			if (!x509_location(fn, "SIA: signedObject",
 			    ad->location, &signedobj))
 				goto out;
-			if (cert->signedobj == NULL && strncasecmp(signedobj,
+			if (cert->signedobj == NULL && strncmp(signedobj,
 			    RSYNC_PROTO, RSYNC_PROTO_LEN) == 0) {
 				cert->signedobj = signedobj;
 				signedobj = NULL;
@@ -1801,7 +1801,7 @@ cert_free(struct cert *cert)
 	if (cert == NULL)
 		return;
 
-	free(cert->crl);
+	free(cert->crldp);
 	free(cert->repo);
 	free(cert->path);
 	free(cert->mft);
@@ -1850,14 +1850,14 @@ cert_buffer(struct ibuf *b, const struct cert *cert)
 		io_str_buffer(b, cert->mft);
 		io_opt_str_buffer(b, cert->notify);
 		io_str_buffer(b, cert->repo);
-		io_str_buffer(b, cert->crl);
+		io_str_buffer(b, cert->crldp);
 		io_str_buffer(b, cert->aia);
 		io_str_buffer(b, cert->aki);
 		io_str_buffer(b, cert->ski);
 		io_simple_buffer(b, &cert->mfthash, sizeof(cert->mfthash));
 	} else if (cert->purpose == CERT_PURPOSE_BGPSEC_ROUTER) {
 		/* No SIA, so no mft, notify, repo. */
-		io_str_buffer(b, cert->crl);
+		io_str_buffer(b, cert->crldp);
 		io_str_buffer(b, cert->aia);
 		io_str_buffer(b, cert->aki);
 		io_str_buffer(b, cert->ski);
@@ -1920,14 +1920,14 @@ cert_read(struct ibuf *b)
 		io_read_str(b, &cert->mft);
 		io_read_opt_str(b, &cert->notify);
 		io_read_str(b, &cert->repo);
-		io_read_str(b, &cert->crl);
+		io_read_str(b, &cert->crldp);
 		io_read_str(b, &cert->aia);
 		io_read_str(b, &cert->aki);
 		io_read_str(b, &cert->ski);
 		io_read_buf(b, &cert->mfthash, sizeof(cert->mfthash));
 	} else if (cert->purpose == CERT_PURPOSE_BGPSEC_ROUTER) {
 		/* No SIA, so no mft, notify, repo. */
-		io_read_str(b, &cert->crl);
+		io_read_str(b, &cert->crldp);
 		io_read_str(b, &cert->aia);
 		io_read_str(b, &cert->aki);
 		io_read_str(b, &cert->ski);

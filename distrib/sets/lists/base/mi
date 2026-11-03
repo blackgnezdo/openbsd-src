@@ -136,6 +136,14 @@
 ./etc/firmware/ral-rt2661
 ./etc/firmware/ral-rt2860
 ./etc/firmware/ral-rt3290
+./etc/firmware/rge-license
+./etc/firmware/rge-rtl8125
+./etc/firmware/rge-rtl8125b
+./etc/firmware/rge-rtl8125d-1
+./etc/firmware/rge-rtl8125d-2
+./etc/firmware/rge-rtl8126-1
+./etc/firmware/rge-rtl8126-2
+./etc/firmware/rge-rtl8127
 ./etc/firmware/rsu-license
 ./etc/firmware/rsu-rtl8712
 ./etc/firmware/rtwn-license
@@ -769,7 +777,7 @@
 ./usr/lib/libelf.so.3.0
 ./usr/lib/libevent.so.5.0
 ./usr/lib/libexecinfo.so.5.0
-./usr/lib/libexpat.so.17.1
+./usr/lib/libexpat.so.17.2
 ./usr/lib/libfido2.so.9.0
 ./usr/lib/libform.so.7.0
 ./usr/lib/libformw.so.7.0
@@ -6868,6 +6876,7 @@
 ./var/db/ns
 ./var/db/pkg
 ./var/db/rpki-client
+./var/db/snmpd
 ./var/db/yubikey
 ./var/dbupdate
 ./var/empty

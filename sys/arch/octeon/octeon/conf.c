@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.30 2023/04/13 02:19:05 jsg Exp $ */
+/*	$OpenBSD: conf.c,v 1.32 2026/10/24 21:01:41 miod Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -145,6 +145,10 @@ cdev_decl(pci);
 #include "fuse.h"
 #include "octboot.h"
 #include "openprom.h"
+#include "radio.h"
+
+#include "midi.h"
+cdev_decl(midi);
 
 struct cdevsw	cdevsw[] =
 {
@@ -235,6 +239,8 @@ struct cdevsw	cdevsw[] =
 	cdev_fido_init(NFIDO,fido),	/* 76: FIDO/U2F security key */
 	cdev_pppx_init(NPPPX,pppac),	/* 77: PPP Access Concentrator */
 	cdev_ujoy_init(NUJOY,ujoy),	/* 78: USB joystick/gamecontroller */
+	cdev_radio_init(NRADIO,radio),	/* 79: generic radio I/O */
+	cdev_midi_init(NMIDI,midi),     /* 80: MIDI I/O */
 };
 
 int	nchrdev = nitems(cdevsw);

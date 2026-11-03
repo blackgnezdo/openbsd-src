@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.332 2026/10/22 20:29:26 job Exp $ */
+/*	$OpenBSD: main.c,v 1.339 2026/11/03 14:29:03 claudio Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -143,7 +143,7 @@ getmonotime(void)
 
 	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
 		err(1, "clock_gettime");
-	return (ts.tv_sec);
+	return ts.tv_sec;
 }
 
 /*
@@ -265,10 +265,10 @@ entityq_flush(struct entityq *q, struct repo *rp)
 	}
 }
 
-static struct entity *
-entity_new(char *path, char *file, enum rtype type, enum location loc,
-    struct repo *rp, unsigned char *data, size_t datasz, int talid, int certid,
-    char *mftaki)
+struct entity *
+entity_new(const char *path, const char *file, enum rtype type,
+    enum location loc, unsigned int repoid, unsigned char *data, size_t datasz,
+    int talid, int certid, const char *mftaki)
 {
 	struct entity *ent;
 
@@ -279,11 +279,17 @@ entity_new(char *path, char *file, enum rtype type, enum location loc,
 	ent->location = loc;
 	ent->talid = talid;
 	ent->certid = certid;
-	ent->mftaki = mftaki;
-	ent->path = path;
-	if (rp != NULL)
-		ent->repoid = repo_id(rp);
-	ent->file = file;
+	ent->repoid = repoid;
+	if (mftaki != NULL) {
+		if ((ent->mftaki = strdup(mftaki)) == NULL)
+			err(1, NULL);
+	}
+	if (path != NULL) {
+		if ((ent->path = strdup(path)) == NULL)
+			err(1, NULL);
+	}
+	if ((ent->file = strdup(file)) == NULL)
+		err(1, NULL);
 	ent->data = data;
 	ent->datasz = (data != NULL) ? datasz : 0;
 
@@ -294,14 +300,14 @@ entity_new(char *path, char *file, enum rtype type, enum location loc,
  * Add the heap-allocated file to the queue for processing.
  */
 static void
-entityq_add(char *path, char *file, enum rtype type, enum location loc,
-    struct repo *rp, unsigned char *data, size_t datasz, int talid, int certid,
-    char *mftaki)
+entityq_add(const char *path, const char *file, enum rtype type,
+    enum location loc, struct repo *rp, unsigned char *data, size_t datasz,
+    int talid, int certid, const char *mftaki)
 {
 	struct entity *ent;
 
-	ent = entity_new(path, file, type, loc, rp, data, datasz, talid, certid,
-	    mftaki);
+	ent = entity_new(path, file, type, loc, repo_id(rp), data, datasz,
+	    talid, certid, mftaki);
 
 	entity_queue++;
 
@@ -322,14 +328,14 @@ entityq_add(char *path, char *file, enum rtype type, enum location loc,
  * non-inheriting EE certs.
  */
 static void
-entity_lowprioq_add(char *path, char *file, enum rtype type, enum location loc,
-    struct repo *rp, unsigned char *data, size_t datasz, int talid, int certid,
-    char *mftaki)
+entity_lowprioq_add(const char *path, const char *file, enum rtype type,
+    enum location loc, struct repo *rp, unsigned char *data, size_t datasz,
+    int talid, int certid, const char *mftaki)
 {
 	struct entity *ent;
 
-	ent = entity_new(path, file, type, loc, rp, data, datasz, talid, certid,
-	    mftaki);
+	ent = entity_new(path, file, type, loc, repo_id(rp), data, datasz,
+	    talid, certid, mftaki);
 
 	entity_lowprio_queue++;
 
@@ -468,55 +474,12 @@ rrdp_http_done(unsigned int id, enum http_result res, const char *last_mod)
 }
 
 /*
- * Add a file (CER, ROA, CRL, ...) from a manifest fileList, RFC 9286.
- * These are always relative to the directory in which "mft" sits.
- */
-static void
-queue_add_from_mft(const struct mft *mft)
-{
-	size_t			 i;
-	struct repo		*rp;
-	const struct mftfile	*f;
-	char			*mftaki, *nfile, *npath = NULL;
-
-	rp = repo_byid(mft->repoid);
-	for (i = 0; i < mft->filesz; i++) {
-		unsigned char *data = NULL;
-		size_t datasz = 0;
-
-		f = &mft->files[i];
-
-		if (f->type == RTYPE_INVALID || f->type == RTYPE_CRL)
-			continue;
-
-		if (f->type == RTYPE_CER) {
-			if ((data = calloc(1, sizeof(mft->mfthash))) == NULL)
-				err(1, NULL);
-			memcpy(data, mft->mfthash, sizeof(mft->mfthash));
-			datasz = sizeof(mft->mfthash);
-		}
-
-		if (mft->path != NULL)
-			if ((npath = strdup(mft->path)) == NULL)
-				err(1, NULL);
-		if ((nfile = strdup(f->file)) == NULL)
-			err(1, NULL);
-		if ((mftaki = strdup(mft->aki)) == NULL)
-			err(1, NULL);
-
-		entityq_add(npath, nfile, f->type, f->location, rp,
-		    data, datasz, mft->talid, mft->issuerid, mftaki);
-	}
-}
-
-/*
  * Add a local file to the queue of files to fetch.
  */
 static void
 queue_add_file(const char *file, enum rtype type, int talid)
 {
 	unsigned char	*buf = NULL;
-	char		*nfile;
 	size_t		 len = 0;
 
 	if (!filemode || strncmp(file, RSYNC_PROTO, RSYNC_PROTO_LEN) != 0) {
@@ -525,10 +488,8 @@ queue_add_file(const char *file, enum rtype type, int talid)
 			err(1, "%s", file);
 	}
 
-	if ((nfile = strdup(file)) == NULL)
-		err(1, NULL);
 	/* Not in a repository, so directly add to queue. */
-	entityq_add(NULL, nfile, type, DIR_UNKNOWN, NULL, buf, len, talid, 0,
+	entityq_add(NULL, file, type, DIR_UNKNOWN, NULL, buf, len, talid, 0,
 	    NULL);
 }
 
@@ -550,15 +511,12 @@ queue_add_from_tal(struct tal *tal)
 	/* figure out the TA filename, must be done before repo lookup */
 	nfile = strrchr(tal->uri[0], '/');
 	assert(nfile != NULL);
-	if ((nfile = strdup(nfile + 1)) == NULL)
-		err(1, NULL);
+	nfile += 1; /* skip '/' */
 
 	/* Look up the repository. */
 	repo = ta_lookup(tal->id, tal);
-	if (repo == NULL) {
-		free(nfile);
+	if (repo == NULL)
 		return;
-	}
 
 	/* steal the spki from the tal structure */
 	data = tal->spki;
@@ -575,7 +533,7 @@ queue_add_from_cert(const struct cert *cert, struct ca_tree *ca_tree)
 {
 	struct ca		*ca;
 	struct repo		*repo;
-	char			*nfile, *npath, *host;
+	char			*npath, *host;
 	const char		*uri, *repouri, *file;
 	size_t			 hostsz, repourisz;
 
@@ -596,6 +554,10 @@ queue_add_from_cert(const struct cert *cert, struct ca_tree *ca_tree)
 	}
 
 	ca = ca_tree_insert_cert(ca_tree, cert);
+
+	if (cert->purpose == CERT_PURPOSE_CA && ca->bad)
+		return;
+
 	if (nca_skip_sync(ca))
 		return;
 
@@ -619,21 +581,20 @@ queue_add_from_cert(const struct cert *cert, struct ca_tree *ca_tree)
 	file = strrchr(uri, '/');
 	if (file == NULL) {
 		npath = NULL;
-		if ((nfile = strdup(uri)) == NULL)
-			err(1, NULL);
+		file = uri;
 	} else {
 		if ((npath = strndup(uri, file - uri)) == NULL)
 			err(1, NULL);
-		if ((nfile = strdup(file + 1)) == NULL)
-			err(1, NULL);
+		file += 1; /* skip '/' */
 	}
 
-	if (ca_check_confirmed(ca_tree, cert->certid))
-		entityq_add(npath, nfile, RTYPE_MFT, DIR_UNKNOWN, repo,
+	if (ca_confirmed_in_last_run(ca_tree, cert))
+		entityq_add(npath, file, RTYPE_MFT, DIR_UNKNOWN, repo,
 		    NULL, 0, cert->talid, cert->certid, NULL);
 	else
-		entity_lowprioq_add(npath, nfile, RTYPE_MFT, DIR_UNKNOWN, repo,
+		entity_lowprioq_add(npath, file, RTYPE_MFT, DIR_UNKNOWN, repo,
 		    NULL, 0, cert->talid, cert->certid, NULL);
+	free(npath);
 }
 
 /*
@@ -729,9 +690,9 @@ entity_process(struct ibuf *b, struct validation_data *vd, struct stats *st)
 			break;
 		}
 		mft = mft_read(b);
+		entity_queue += mft->work_items;
 		if (mft->seqnum_gap)
 			repo_stat_inc(rp, talid, type, STYPE_SEQNUM_GAP);
-		queue_add_from_mft(mft);
 		ca_clear_nonfunc(&vd->cas, mft->issuerid);
 		ccr_insert_mft(&vd->ccr.mfts, mft);
 		mft_free(mft);
@@ -796,9 +757,6 @@ entity_process(struct ibuf *b, struct validation_data *vd, struct stats *st)
 
 done:
 	free(file);
-	/* CRLs are sent together with the MFT and not accounted for */
-	if (type == RTYPE_CRL)
-		return;
 	entity_queue--;
 }
 
@@ -841,9 +799,6 @@ rrdp_process(struct ibuf *b)
 		io_read_str(b, &uri);
 		io_read_buf_alloc(b, (void **)&data, &dsz);
 
-		if (uri == NULL || (pt != PUB_DEL && dsz == 0))
-			errx(1, "bad rrdp file request");
-
 		ok = rrdp_handle_file(id, pt, uri, hash, sizeof(hash),
 		    data, dsz);
 		rrdp_file_resp(id, ok);
@@ -872,6 +827,7 @@ sum_stats(const struct repo *rp, const struct repotalstats *in, void *arg)
 	out->certs_nonfunc += in->certs_nonfunc;
 	out->certs_nonfunc_deferred += in->certs_nonfunc_deferred;
 	out->certs_unconfirmed += in->certs_unconfirmed;
+	out->certs_bad += in->certs_bad;
 	out->roas += in->roas;
 	out->roas_fail += in->roas_fail;
 	out->roas_invalid += in->roas_invalid;
@@ -1442,6 +1398,11 @@ main(int argc, char *argv[])
 				TAILQ_REMOVE(&lowprio_queue, ent, entries);
 				entity_lowprio_queue--;
 
+				if (ca_is_bad(&vd.cas, ent->certid)) {
+					entity_free(ent);
+					continue;
+				}
+
 				entity_queue++;
 				rp = repo_byid(ent->repoid);
 				if (!repo_queued(rp, ent)) {
@@ -1707,11 +1668,13 @@ main(int argc, char *argv[])
 	}
 	printf("BGPsec Router Certificates: %u\n", stats.repo_tal_stats.brks);
 	printf("Certificates: %u (%u invalid, %u non-functional, %u sync "
-	    "deferred, %u unconfirmed)\n", stats.repo_tal_stats.certs,
+	    "deferred, %u unconfirmed, %u bad)\n",
+	    stats.repo_tal_stats.certs,
 	    stats.repo_tal_stats.certs_fail,
 	    stats.repo_tal_stats.certs_nonfunc,
 	    stats.repo_tal_stats.certs_nonfunc_deferred,
-	    stats.repo_tal_stats.certs_unconfirmed);
+	    stats.repo_tal_stats.certs_unconfirmed,
+	    stats.repo_tal_stats.certs_bad);
 	printf("Trust Anchor Locators: %u (%u invalid)\n",
 	    stats.tals, talsz - stats.tals);
 	printf("Manifests: %u (%u failed parse, %u seqnum gaps)\n",
@@ -1736,6 +1699,7 @@ main(int argc, char *argv[])
 
 	/* Memory cleanup. */
 	repo_free();
+	carepo_tree_free();
 
 	return rc;
 

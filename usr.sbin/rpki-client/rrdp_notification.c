@@ -1,4 +1,4 @@
-/*	$OpenBSD: rrdp_notification.c,v 1.25 2026/08/06 13:18:22 claudio Exp $ */
+/*	$OpenBSD: rrdp_notification.c,v 1.27 2026/10/29 08:20:11 claudio Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -122,6 +122,8 @@ check_delta(struct notification_xml *nxml)
 			return 0;
 		serial = d->serial;
 	}
+	if (serial != 0 && serial != nxml->serial)
+		return 0;
 	return 1;
 }
 
@@ -556,6 +558,9 @@ notification_done(struct notification_xml *nxml, char *last_mod)
 
 	/* first possible delta is no match */
 	if (nxml->repository->serial + 1 != TAILQ_FIRST(&nxml->delta_q)->serial)
+		goto snapshot;
+	/* last delta must reach the notification serial */
+	if (nxml->serial != TAILQ_LAST(&nxml->delta_q, delta_q)->serial)
 		goto snapshot;
 
 	/* update via delta possible */

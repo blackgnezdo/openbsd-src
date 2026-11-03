@@ -1,4 +1,4 @@
-/*	$OpenBSD: repo.c,v 1.97 2026/10/22 20:29:26 job Exp $ */
+/*	$OpenBSD: repo.c,v 1.101 2026/11/02 15:26:33 claudio Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -351,7 +351,6 @@ repo_done(const void *vp, int ok)
 
 /*
  * Build TA file name based on the repo info.
- * If temp is set add Xs for mkostemp.
  */
 static char *
 ta_filename(const struct tarepo *tr)
@@ -1007,6 +1006,12 @@ rrdp_handle_file(unsigned int id, enum publish_type pt, char *uri,
 	if (pt == PUB_DEL) {
 		filepath_add(&rr->deleted, uri, 0, 0, 1);
 	} else {
+		if (dlen < MIN_FILE_SIZE) {
+			warnx("%s: too small publish element: %s",
+			    rr->notifyuri, uri);
+			return 0;
+		}
+
 		fp = filepath_find(&rr->deleted, uri);
 		if (fp != NULL) {
 			filepath_put(&rr->deleted, fp);
@@ -1365,6 +1370,8 @@ repo_basedir(const struct repo *rp, int wantvalid)
 unsigned int
 repo_id(const struct repo *rp)
 {
+	if (rp == NULL)
+		return 0;
 	return rp->id;
 }
 
@@ -1565,6 +1572,9 @@ repo_stat_count_ca(struct ca *ca)
 
 			if (!ca->confirmed)
 				rp->stats[ca->talid].certs_unconfirmed++;
+
+			if (ca->bad)
+				rp->stats[ca->talid].certs_bad++;
 
 			break;
 		}
