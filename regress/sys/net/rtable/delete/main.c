@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.9 2025/07/10 05:28:13 dlg Exp $ */
+/*	$OpenBSD: main.c,v 1.10 2026/11/04 09:00:55 claudio Exp $ */
 
 /*
  * Copyright (c) 2015 Martin Pieuchot

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtable.c,v 1.95 2025/07/16 13:48:38 jsg Exp $ */
+/*	$OpenBSD: rtable.c,v 1.96 2026/11/04 08:51:52 claudio Exp $ */
 
 /*
  * Copyright (c) 2014-2016 Martin Pieuchot

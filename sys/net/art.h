@@ -1,4 +1,4 @@
-/* $OpenBSD: art.h,v 1.29 2026/04/23 01:28:03 jsg Exp $ */
+/* $OpenBSD: art.h,v 1.30 2026/11/04 08:51:51 claudio Exp $ */
 
 /*
  * Copyright (c) 2015 Martin Pieuchot

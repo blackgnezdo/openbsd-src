@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_mpip.c,v 1.21 2025/11/27 03:06:59 dlg Exp $ */
+/*	$OpenBSD: if_mpip.c,v 1.22 2026/11/04 08:51:51 claudio Exp $ */
 
 /*
  * Copyright (c) 2015 Rafael Zalamena <rzalamena@openbsd.org>

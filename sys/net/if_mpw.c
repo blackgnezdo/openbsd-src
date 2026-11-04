@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_mpw.c,v 1.71 2026/02/05 03:26:00 dlg Exp $ */
+/*	$OpenBSD: if_mpw.c,v 1.72 2026/11/04 08:51:51 claudio Exp $ */
 
 /*
  * Copyright (c) 2015 Rafael Zalamena <rzalamena@openbsd.org>

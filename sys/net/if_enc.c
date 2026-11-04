@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_enc.c,v 1.79 2022/08/29 07:51:45 bluhm Exp $	*/
+/*	$OpenBSD: if_enc.c,v 1.80 2026/11/04 08:51:51 claudio Exp $	*/
 
 /*
  * Copyright (c) 2010 Reyk Floeter <reyk@vantronix.net>

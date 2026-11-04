@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_var.h,v 1.149 2026/06/23 18:50:43 bluhm Exp $	*/
+/*	$OpenBSD: if_var.h,v 1.150 2026/11/04 08:51:51 claudio Exp $	*/
 /*	$NetBSD: if.h,v 1.23 1996/05/07 02:40:27 thorpej Exp $	*/
 
 /*
