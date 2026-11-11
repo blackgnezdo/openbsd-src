@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_ioctl.c,v 1.436 2026/11/04 08:51:52 claudio Exp $ */
+/*	$OpenBSD: pf_ioctl.c,v 1.438 2026/11/08 08:42:55 miod Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -245,8 +245,6 @@ pfattach(int num)
 		pf_pool_limits[PF_LIMIT_TABLE_ENTRIES].limit =
 		    PFR_KENTRY_HIWAT_SMALL;
 
-	RB_INIT(&tree_src_tracking);
-	RB_INIT(&pf_anchors);
 	pf_init_ruleset(&pf_main_ruleset);
 	TAILQ_INIT(&pf_queues[0]);
 	TAILQ_INIT(&pf_queues[1]);
@@ -1933,62 +1931,6 @@ int
 pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 {
 	int			 error = 0;
-
-	/* XXX keep in sync with switch() below */
-	if (securelevel > 1)
-		switch (cmd) {
-		case DIOCGETRULES:
-		case DIOCGETRULE:
-		case DIOCGETSTATE:
-		case DIOCSETSTATUSIF:
-		case DIOCGETSTATUS:
-		case DIOCCLRSTATUS:
-		case DIOCNATLOOK:
-		case DIOCSETDEBUG:
-		case DIOCGETSTATES:
-		case DIOCGETTIMEOUT:
-		case DIOCGETLIMIT:
-		case DIOCGETSTATELIM:
-		case DIOCGETNSTATELIM:
-		case DIOCGETSOURCELIM:
-		case DIOCGETNSOURCELIM:
-		case DIOCGETSOURCE:
-		case DIOCGETNSOURCE:
-		case DIOCGETRULESETS:
-		case DIOCGETRULESET:
-		case DIOCGETQUEUES:
-		case DIOCGETQUEUE:
-		case DIOCGETQSTATS:
-		case DIOCRGETTABLES:
-		case DIOCRGETTSTATS:
-		case DIOCRCLRTSTATS:
-		case DIOCRCLRADDRS:
-		case DIOCRADDADDRS:
-		case DIOCRDELADDRS:
-		case DIOCRSETADDRS:
-		case DIOCRGETADDRS:
-		case DIOCRGETASTATS:
-		case DIOCRCLRASTATS:
-		case DIOCRTSTADDRS:
-		case DIOCOSFPGET:
-		case DIOCGETSRCNODES:
-		case DIOCCLRSRCNODES:
-		case DIOCIGETIFACES:
-		case DIOCSETIFFLAG:
-		case DIOCCLRIFFLAG:
-		case DIOCGETSYNFLWATS:
-			break;
-		case DIOCRCLRTABLES:
-		case DIOCRADDTABLES:
-		case DIOCRDELTABLES:
-		case DIOCRSETTFLAGS:
-			if (((struct pfioc_table *)addr)->pfrio_flags &
-			    PFR_FLAG_DUMMY)
-				break; /* dummy operation ok */
-			return (EPERM);
-		default:
-			return (EPERM);
-		}
 
 	if (!(flags & FWRITE))
 		switch (cmd) {

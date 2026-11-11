@@ -1,4 +1,4 @@
-/* $OpenBSD: ca.c,v 1.65 2026/08/30 23:03:33 jsg Exp $ */
+/* $OpenBSD: ca.c,v 1.68 2026/11/07 16:46:18 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -1308,7 +1308,6 @@ ca_main(int argc, char **argv)
 	}
 	/*****************************************************************/
 	if (cfg.gencrl) {
-		int crl_v2 = 0;
 		if (cfg.crl_ext == NULL) {
 			cfg.crl_ext = NCONF_get_string(conf,
 			    cfg.section, ENV_CRLEXT);
@@ -1383,8 +1382,6 @@ ca_main(int argc, char **argv)
 				j = make_revoked(r, pp[DB_rev_date]);
 				if (!j)
 					goto err;
-				if (j == 2)
-					crl_v2 = 1;
 				if (!BN_hex2bn(&serial, pp[DB_serial]))
 					goto err;
 				tmpserial = BN_to_ASN1_INTEGER(serial, NULL);
@@ -1433,15 +1430,12 @@ ca_main(int argc, char **argv)
 					goto err;
 				}
 				ASN1_INTEGER_free(tmpserial);
-				crl_v2 = 1;
 				if (!BN_add_word(crlnumber, 1))
 					goto err;
 			}
 		}
-		if (cfg.crl_ext != NULL || crl_v2) {
-			if (!X509_CRL_set_version(crl, 1))
-				goto err;	/* version 2 CRL */
-		}
+		if (!X509_CRL_set_version(crl, 1))
+			goto err;
 		if (crlnumberfile != NULL)	/* we have a CRL number that
 						 * need updating */
 			if (!save_serial(crlnumberfile, "new", crlnumber, NULL))
@@ -1724,7 +1718,6 @@ do_body(X509 **xret, EVP_PKEY *pkey, X509 *x509, const EVP_MD *dgst,
 	OPENSSL_STRING row[DB_NUMBER];
 	OPENSSL_STRING *irow = NULL;
 	OPENSSL_STRING *rrow = NULL;
-	const STACK_OF(X509_EXTENSION) *exts;
 
 	*xret = NULL;
 
@@ -2016,12 +2009,8 @@ do_body(X509 **xret, EVP_PKEY *pkey, X509 *x509, const EVP_MD *dgst,
 		goto err;
 	}
 
-	exts = X509_get0_extensions(ret);
-	if (exts != NULL && sk_X509_EXTENSION_num(exts) > 0) {
-		/* Make it an X509 v3 certificate. */
-		if (!X509_set_version(ret, 2))
-			goto err;
-	}
+	if (!X509_set_version(ret, 2))
+		goto err;
 
 	if (verbose)
 		BIO_printf(bio_err,
@@ -2645,7 +2634,6 @@ make_revocation_str(int rev_type, char *rev_arg)
 int
 make_revoked(X509_REVOKED *rev, const char *str)
 {
-	char *tmp = NULL;
 	int reason_code = -1;
 	int i, ret = 0;
 	ASN1_OBJECT *hold = NULL;
@@ -2685,8 +2673,6 @@ make_revoked(X509_REVOKED *rev, const char *str)
 		ret = 1;
 
  err:
-	free(tmp);
-
 	ASN1_OBJECT_free(hold);
 	ASN1_GENERALIZEDTIME_free(comp_time);
 	ASN1_ENUMERATED_free(rtmp);

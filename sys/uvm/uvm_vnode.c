@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_vnode.c,v 1.152 2026/10/16 04:56:21 claudio Exp $	*/
+/*	$OpenBSD: uvm_vnode.c,v 1.154 2026/11/08 08:42:55 miod Exp $	*/
 /*	$NetBSD: uvm_vnode.c,v 1.36 2000/11/24 20:34:01 chs Exp $	*/
 
 /*
@@ -46,6 +46,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/atomic.h>
 #include <sys/systm.h>
 #include <sys/pool.h>
 #include <sys/proc.h>
@@ -69,7 +70,8 @@
  * we keep a simpleq of vnodes that are currently being sync'd.
  */
 struct pool			uvm_vnode_pool;
-LIST_HEAD(, uvm_vnode)		uvn_wlist;	/* [K] writeable uvns */
+LIST_HEAD(, uvm_vnode)		uvn_wlist =	/* [K] writeable uvns */
+    LIST_HEAD_INITIALIZER(uvn_wlist);
 SIMPLEQ_HEAD(, uvm_vnode)	uvn_sync_q;	/* [S] sync'ing uvns */
 struct rwlock uvn_sync_lock;			/* locks sync operation */
 
@@ -116,7 +118,6 @@ uvn_init(void)
 {
 	pool_init(&uvm_vnode_pool, sizeof(struct uvm_vnode), 0, IPL_NONE,
 	    PR_WAITOK, "uvmvnodes", NULL);
-	LIST_INIT(&uvn_wlist);
 	/* note: uvn_sync_q init'd in uvm_vnp_sync() */
 	rw_init_flags(&uvn_sync_lock, "uvnsync", RWL_IS_VNODE);
 }
@@ -207,14 +208,12 @@ uvn_attach(struct vnode *vp, vm_prot_t accessprot)
 	if (uvn->u_flags & UVM_VNODE_VALID) {	/* already active? */
 
 		/* regain vref if we were persisting */
-		if (uvn->u_obj.uo_refs == 0) {
+		if (atomic_inc_int_nv(&uvn->u_obj.uo_refs) == 1)
 			vref(vp);
-		}
-		uvn->u_obj.uo_refs++;		/* bump uvn ref! */
 	} else {
 		/* now set up the uvn. */
 		KASSERT(uvn->u_obj.uo_refs == 0);
-		uvn->u_obj.uo_refs++;
+		atomic_inc_int(&uvn->u_obj.uo_refs);
 		uvn->u_flags = UVM_VNODE_VALID|UVM_VNODE_CANPERSIST;
 		uvn->u_nio = 0;
 		uvn->u_size = used_vnode_size;
@@ -269,7 +268,7 @@ uvn_reference(struct uvm_object *uobj)
 		panic("uvn_reference: invalid state");
 	}
 #endif
-	uobj->uo_refs++;
+	atomic_inc_int(&uobj->uo_refs);
 	rw_exit(uobj->vmobjlock);
 }
 
@@ -291,8 +290,7 @@ uvn_detach(struct uvm_object *uobj)
 
 	KERNEL_LOCK();
 	rw_enter(uobj->vmobjlock, RW_WRITE);
-	uobj->uo_refs--;			/* drop ref! */
-	if (uobj->uo_refs) {			/* still more refs */
+	if (atomic_dec_int_nv(&uobj->uo_refs) != 0) {
 		rw_exit(uobj->vmobjlock);
 		KERNEL_UNLOCK();
 		return;
@@ -1356,7 +1354,7 @@ uvm_vnp_uncache(struct vnode *vp)
 	 * it so that we can call uvn_detach to kill the uvn.
 	 */
 	vref(vp);			/* seems ok, even with VOP_LOCK */
-	uvn->u_obj.uo_refs++;		/* value is now 1 */
+	atomic_inc_int(&uvn->u_obj.uo_refs);	/* value is now 1 */
 	rw_exit(uobj->vmobjlock);
 
 #ifdef VFSLCKDEBUG
@@ -1474,11 +1472,11 @@ uvm_vnp_sync(struct mount *mp)
 
 		/*
 		 * gain reference.   watch out for persisting uvns (need to
-		 * regain vnode REF).
+		 * regain vnode REF).  uvn_reference() can take another
+		 * reference without the kernel lock.
 		 */
-		if (uvn->u_obj.uo_refs == 0)
+		if (atomic_inc_int_nv(&uvn->u_obj.uo_refs) == 1)
 			vref(vp);
-		uvn->u_obj.uo_refs++;
 
 		SIMPLEQ_INSERT_HEAD(&uvn_sync_q, uvn, u_syncq);
 	}

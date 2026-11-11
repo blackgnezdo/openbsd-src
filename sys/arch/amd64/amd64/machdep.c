@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.314 2026/09/28 14:14:03 deraadt Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.316 2026/11/09 10:02:38 hshoexer Exp $	*/
 /*	$NetBSD: machdep.c,v 1.3 2003/05/07 22:58:18 fvdl Exp $	*/
 
 /*-
@@ -152,6 +152,10 @@ extern int db_console;
 #if NPCKBC > 0 && NUKBD > 0
 #include <dev/ic/pckbcvar.h>
 #endif
+
+#define RST_CNT	0xcf9		/* Reset Control Register */
+#define RST_CNT_SYS_RST	0x02	/* System Reset */
+#define RST_CNT_RST_CPU	0x04	/* Reset CPU */
 
 /* #define MACHDEP_DEBUG */
 
@@ -1350,6 +1354,7 @@ void
 cpu_init_early_vctrap(paddr_t addr)
 {
 	struct region_descriptor region;
+	uint64_t request, resp;
 
 	extern void Xvctrap_early(void);
 
@@ -1369,8 +1374,19 @@ cpu_init_early_vctrap(paddr_t addr)
 	    GSEL(GCODE_SEL, SEL_KPL));
 	cpu_init_idt();
 
-	/* Tell the hypervisor about our GHCB. */
-	ghcb_paddr = addr;
+	/* For SEV-SNP we have to register GHCB. */
+	if (ISSET(cpu_sev_guestmode, SEV_STAT_SNP_ACTIVE)) {
+		request = (addr & PG_FRAME) | MSR_PROTO_REGISTER_GHCB_PA_REQ;
+		wrmsr(MSR_SEV_GHCB, request);
+		vmgexit();
+		resp = rdmsr(MSR_SEV_GHCB);
+		if (((resp & ~PG_FRAME) != MSR_PROTO_REGISTER_GHCB_PA_RESP) ||
+		    ((resp & PG_FRAME) != (addr & PG_FRAME)))
+			panic("failed to register GHCB");
+	}
+
+	/* Tell vmm(4) about our GHCB. */
+	ghcb_paddr = addr & PG_FRAME;
 	ghcb_vaddr = addr + KERNBASE;
 	memset((void *)ghcb_vaddr, 0, 2 * PAGE_SIZE);
 	wrmsr(MSR_SEV_GHCB, ghcb_paddr);
@@ -1928,6 +1944,18 @@ cpu_reset(void)
 	delay(100000);
 	outb(IO_KBD + KBCMDP, KBC_PULSE0);
 	delay(100000);
+
+	/*
+	 * Try to force a reset via the Reset Control register.
+	 * Reset is triggered by the 0->1 transition of the RST_CPU bit,
+	 * and a hard reset will be done when the SYS_RST bit is set at
+	 * the moment of the transition.
+	 * First write selects the hard reset and clears RST_CPU, second
+	 * write forces the 0->1 transition on RST_CPU.
+	 */
+	outb(RST_CNT, RST_CNT_SYS_RST);
+	outb(RST_CNT, RST_CNT_SYS_RST | RST_CNT_RST_CPU);
+	delay(500000);
 
 	/*
 	 * Try to cause a triple fault and watchdog reset by making the IDT

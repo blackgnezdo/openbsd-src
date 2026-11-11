@@ -1,4 +1,4 @@
-/*	$OpenBSD: snmpe.c,v 1.98 2026/10/30 16:40:40 martijn Exp $	*/
+/*	$OpenBSD: snmpe.c,v 1.100 2026/11/06 10:30:07 martijn Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -60,8 +60,6 @@ int	 snmpe_encode(struct snmp_message *);
 
 struct imsgev	*iev_parent;
 static const struct timeval	snmpe_tcp_timeout = { 10, 0 }; /* 10s */
-
-struct snmp_messages snmp_messages = RB_INITIALIZER(&snmp_messages);
 
 static struct privsep_proc procs[] = {
 	{ "parent",	PROC_PARENT, snmpe_dispatch_parent },
@@ -305,11 +303,6 @@ snmpe_parse(struct snmp_message *msg)
 
 	msg->sm_errstr = "invalid message";
 
-	do {
-		msg->sm_transactionid = arc4random();
-	} while (msg->sm_transactionid == 0 ||
-	    RB_INSERT(snmp_messages, &snmp_messages, msg) != NULL);
-
 	if (ober_scanf_elements(root, "{ie", &ver, &a) != 0)
 		goto parsefail;
 
@@ -348,6 +341,10 @@ snmpe_parse(struct snmp_message *msg)
 			goto parsefail;
 
 		msg->sm_flags = *flagstr;
+
+		if (MSG_HAS_PRIV(msg) && !MSG_HAS_AUTH(msg))
+			goto parsefail;
+
 		if ((a = usm_decode(msg, a, &msg->sm_errstr)) == NULL)
 			goto parsefail;
 
@@ -868,8 +865,6 @@ snmpe_response(struct snmp_message *msg)
 void
 snmp_msgfree(struct snmp_message *msg)
 {
-	if (msg->sm_transactionid != 0)
-		RB_REMOVE(snmp_messages, &snmp_messages, msg);
 	event_del(&msg->sm_sockev);
 	ober_free(&msg->sm_ber);
 	if (msg->sm_req != NULL)
@@ -933,12 +928,3 @@ snmpe_encode(struct snmp_message *msg)
 #endif
 	return 0;
 }
-
-int
-snmp_messagecmp(struct snmp_message *m1, struct snmp_message *m2)
-{
-	return (m1->sm_transactionid < m2->sm_transactionid ? -1 :
-	    m1->sm_transactionid > m2->sm_transactionid);
-}
-
-RB_GENERATE(snmp_messages, snmp_message, sm_entry, snmp_messagecmp)

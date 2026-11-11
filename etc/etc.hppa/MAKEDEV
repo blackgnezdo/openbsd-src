@@ -4,8 +4,8 @@
 # generated from:
 #
 #	OpenBSD: etc.hppa/MAKEDEV.md,v 1.73 2026/10/24 21:01:41 miod Exp 
-#	OpenBSD: MAKEDEV.common,v 1.124 2025/10/15 17:53:36 deraadt Exp 
-#	OpenBSD: MAKEDEV.mi,v 1.91 2025/11/19 17:49:42 deraadt Exp 
+#	OpenBSD: MAKEDEV.common,v 1.125 2026/11/07 13:01:09 miod Exp 
+#	OpenBSD: MAKEDEV.mi,v 1.92 2026/11/07 13:01:09 miod Exp 
 #	OpenBSD: MAKEDEV.sub,v 1.14 2005/02/07 06:14:18 david Exp 
 #
 #
@@ -232,7 +232,7 @@ ramdisk)
 	;;
 
 std)
-	M console	c 0 0 600
+	M console	c 0 0 660 wscons root
 	M tty		c 1 0
 	M mem		c 2 0 640 kmem
 	M kmem		c 2 1 640 kmem
@@ -264,7 +264,7 @@ vscsi*)
 	;;
 
 video*)
-	M video$U  c 33 $U 600
+	M video$U  c 33 $U 660 wscons root
 	MKlist[${#MKlist[*]}]=";[ -e video ] || ln -s video$U video"
 	;;
 
@@ -360,7 +360,7 @@ ugen*)
 
 ujoy)
 	RMlist[${#RMlist[*]}]=";mkdir -p ujoy;rm -f" n=0
-	while [ $n -lt 4 ];do M ujoy/$n c 63 $n 444;n=$(($n+1));done
+	while [ $n -lt 4 ];do M ujoy/$n c 63 $n 440 wscons root;n=$(($n+1));done
 	MKlist[${#MKlist[*]}]=";chmod 555 ujoy"
 	;;
 
@@ -395,16 +395,16 @@ lpt*|lpa*)
 	;;
 
 wsmouse[0-9]*)
-	M wsmouse$U c 29 $U 600
+	M wsmouse$U c 29 $U 660 wscons root
 	;;
 
 wsmux|wsmouse|wskbd)
-	M wsmouse c 30 0 600
-	M wskbd c 30 1 600
+	M wsmouse c 30 0 660 wscons root
+	M wskbd c 30 1 660 wscons root
 	;;
 
 wskbd[0-9]*)
-	M wskbd$U c 28 $U 600
+	M wskbd$U c 28 $U 660 wscons root
 	;;
 
 wscons)
@@ -428,8 +428,8 @@ tty[C-J]*)
 	ttyJ*) n=J m=1792;;
 	esac
 	case $U in
-	[0-9a-f]) M tty$n$U c 27 $((16#$U+$m)) 600;;
-	cfg) M tty${n}cfg c 27 $((255+$m)) 600;;
+	[0-9a-f]) M tty$n$U c 27 $((16#$U+$m)) 660 wscons root;;
+	cfg) M tty${n}cfg c 27 $((255+$m)) 660 wscons root;;
 	*) echo bad unit $U for $i; exit 1;;
 	esac
 	;;

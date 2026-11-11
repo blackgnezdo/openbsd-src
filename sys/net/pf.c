@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf.c,v 1.1249 2026/11/04 15:55:04 sashan Exp $ */
+/*	$OpenBSD: pf.c,v 1.1252 2026/11/09 10:54:23 sashan Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -579,7 +579,7 @@ pf_source_find(struct pf_sourcelim *srlim, const struct pf_source *key)
 	return (RBT_FIND(pf_source_tree, &srlim->pfsrlim_sources, key));
 }
 
-struct pf_src_tree tree_src_tracking;
+struct pf_src_tree tree_src_tracking = RB_INITIALIZER(tree_src_tracking);
 
 struct pf_state_tree_id tree_id;
 struct pf_state_list pf_state_list = PF_STATE_LIST_INITIALIZER(pf_state_list);
@@ -797,13 +797,12 @@ pf_src_connlimit(struct pf_state **stp)
 		if (pf_status.debug >= LOG_NOTICE) {
 			log(LOG_NOTICE,
 			    "pf: pf_src_connlimit: blocking address ");
-			pf_print_host(&sn->addr, 0,
-			    (*stp)->key[PF_SK_WIRE]->af);
+			pf_print_host(&sn->addr, 0, sn->af);
 		}
 
 		memset(&p, 0, sizeof(p));
-		p.pfra_af = (*stp)->key[PF_SK_WIRE]->af;
-		switch ((*stp)->key[PF_SK_WIRE]->af) {
+		p.pfra_af = sn->af;
+		switch (sn->af) {
 		case AF_INET:
 			p.pfra_net = 32;
 			p.pfra_ip4addr = sn->addr.v4;
@@ -823,22 +822,25 @@ pf_src_connlimit(struct pf_state **stp)
 		if ((*stp)->rule.ptr->flush) {
 			struct pf_state_key *sk;
 			struct pf_state *st;
+			int sidx;
 
 			pf_status.lcounters[LCNT_OVERLOAD_FLUSH]++;
 			PF_STATE_ENTER_READ();
 			RBT_FOREACH(st, pf_state_tree_id, &tree_id) {
-				sk = st->key[PF_SK_WIRE];
+				if (st->direction == PF_IN) {
+					sk = st->key[PF_SK_WIRE];
+					sidx = 0;
+				} else {
+					sk = st->key[PF_SK_STACK];
+					sidx = 1;
+				}
 				/*
 				 * Kill states from this source.  (Only those
 				 * from the same rule if PF_FLUSH_GLOBAL is not
 				 * set)
 				 */
-				if (sk->af ==
-				    (*stp)->key[PF_SK_WIRE]->af &&
-				    (((*stp)->direction == PF_OUT &&
-				    PF_AEQ(&sn->addr, &sk->addr[1], sk->af)) ||
-				    ((*stp)->direction == PF_IN &&
-				    PF_AEQ(&sn->addr, &sk->addr[0], sk->af))) &&
+				if (sk->af == sn->af &&
+				    PF_AEQ(&sn->addr, &sk->addr[sidx], sk->af) &&
 				    ((*stp)->rule.ptr->flush &
 				    PF_FLUSH_GLOBAL ||
 				    (*stp)->rule.ptr == st->rule.ptr)) {
@@ -8281,7 +8283,15 @@ pf_st_counters_inc(struct pf_pdesc *pd, struct pf_state *st, int dirndx)
 			sni->sn->packets[dirndx]++;
 			sni->sn->bytes[dirndx] += pd->tot_len;
 		}
-		dirndx = (pd->dir == st->direction) ? 0 : 1;
+		/*
+		 * af-to states only see inbound packets; the reply
+		 * is told apart by its address family.
+		 */
+		if (pd->af != st->key[PF_SK_WIRE]->af)
+			dirndx = 1;
+		else
+			dirndx = (pd->dir == st->direction) ? 0 : 1;
+
 		st->packets[dirndx]++;
 		st->bytes[dirndx] += pd->tot_len;
 

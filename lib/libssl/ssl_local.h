@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_local.h,v 1.49 2026/09/22 03:45:18 jsing Exp $ */
+/* $OpenBSD: ssl_local.h,v 1.52 2026/11/09 07:03:00 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -1187,9 +1187,7 @@ int ssl_security_sigalg_check(const SSL *ssl, const EVP_PKEY *pkey);
 int ssl_security_tickets(const SSL *ssl);
 int ssl_security_version(const SSL *ssl, int version);
 int ssl_security_cert(const SSL_CTX *ctx, const SSL *ssl, X509 *x509,
-    int is_peer, int *out_error);
-int ssl_security_cert_chain(const SSL *ssl, STACK_OF(X509) *sk,
-    X509 *x509, int *out_error);
+    int *out_error);
 int ssl_security_shared_group(const SSL *ssl, uint16_t group_id);
 int ssl_security_supported_group(const SSL *ssl, uint16_t group_id);
 
@@ -1296,7 +1294,6 @@ int ssl_kex_peer_public_dhe(DH *dh, CBS *cbs, int *decode_error,
 int ssl_kex_derive_dhe(DH *dh, DH *dh_peer,
     uint8_t **shared_key, size_t *shared_key_len);
 
-int ssl_kex_dummy_ecdhe_x25519(EVP_PKEY *pkey);
 int ssl_kex_generate_ecdhe_ecp(EC_KEY *ecdh, int nid);
 int ssl_kex_public_ecdhe_ecp(EC_KEY *ecdh, CBB *cbb);
 int ssl_kex_peer_public_ecdhe_ecp(EC_KEY *ecdh, int nid, CBS *cbs,

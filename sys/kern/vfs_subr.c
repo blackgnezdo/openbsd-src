@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_subr.c,v 1.335 2026/06/30 14:04:03 kirill Exp $	*/
+/*	$OpenBSD: vfs_subr.c,v 1.339 2026/11/09 09:50:29 kirill Exp $	*/
 /*	$NetBSD: vfs_subr.c,v 1.53 1996/04/22 01:39:13 christos Exp $	*/
 
 /*
@@ -100,15 +100,19 @@ int prtactive = 0;	/* 1 => print out reclaim of active vnodes */
 }
 
 TAILQ_HEAD(freelst, vnode);
-struct freelst vnode_hold_list;	/* list of vnodes referencing buffers */
-struct freelst vnode_free_list;	/* vnode free list */
+struct freelst vnode_hold_list =	/* list of vnodes referencing buffers */
+    TAILQ_HEAD_INITIALIZER(vnode_hold_list);
+struct freelst vnode_free_list =	/* vnode free list */
+    TAILQ_HEAD_INITIALIZER(vnode_free_list);
 
-struct mntlist mountlist;	/* mounted filesystem list */
+struct mntlist mountlist =		/* mounted filesystem list */
+    TAILQ_HEAD_INITIALIZER(mountlist);
 
 void	vclean(struct vnode *, int, struct proc *);
 
 void insmntque(struct vnode *, struct mount *);
 int getdevvp(dev_t, struct vnode **, enum vtype);
+static struct vnode *getdevalias(dev_t, enum vtype);
 
 int vfs_hang_addrlist(struct mount *, struct netexport *,
 				  struct export_args *);
@@ -152,9 +156,6 @@ vntblinit(void)
 	maxvnodes = 2 * initialvnodes;
 	pool_init(&vnode_pool, sizeof(struct vnode), 0, IPL_NONE,
 	    PR_WAITOK, "vnodes", NULL);
-	TAILQ_INIT(&vnode_hold_list);
-	TAILQ_INIT(&vnode_free_list);
-	TAILQ_INIT(&mountlist);
 	/*
 	 * Initialize the filesystem syncer.
 	 */
@@ -526,24 +527,23 @@ int
 getdevvp(dev_t dev, struct vnode **vpp, enum vtype type)
 {
 	struct vnode *vp;
-	struct vnode *nvp;
 	int error;
 
 	if (dev == NODEV) {
 		*vpp = NULL;
 		return (0);
 	}
-	error = getnewvnode(VT_NON, NULL, &spec_vops, &nvp);
+
+	if ((*vpp = getdevalias(dev, type)) != NULL)
+		return (0);
+
+	error = getnewvnode(VT_NON, NULL, &spec_vops, &vp);
 	if (error) {
 		*vpp = NULL;
 		return (error);
 	}
-	vp = nvp;
 	vp->v_type = type;
-	if ((nvp = checkalias(vp, dev, NULL)) != NULL) {
-		vput(vp);
-		vp = nvp;
-	}
+	checkalias(vp, dev);
 	if (vp->v_type == VCHR && cdevsw[major(vp->v_rdev)].d_type == D_TTY)
 		vp->v_flag |= VISTTY;
 	*vpp = vp;
@@ -553,13 +553,12 @@ getdevvp(dev_t dev, struct vnode **vpp, enum vtype type)
 /*
  * Check to see if the new vnode represents a special device
  * for which we already have a vnode (either because of
- * bdevvp() or because of a different vnode representing
- * the same block device). If such an alias exists, deallocate
- * the existing contents and return the aliased vnode. The
- * caller is responsible for filling it with its new contents.
+ * bdevvp() or because of a different vnode representing the
+ * same special device). If such an alias exists, link the new
+ * vnode into the alias list.
  */
-struct vnode *
-checkalias(struct vnode *nvp, dev_t nvp_rdev, struct mount *mp)
+void
+checkalias(struct vnode *nvp, dev_t nvp_rdev)
 {
 	struct proc *p = curproc;
 	struct vnode *vp;
@@ -567,7 +566,7 @@ checkalias(struct vnode *nvp, dev_t nvp_rdev, struct mount *mp)
 	u_int vpid;
 
 	if (nvp->v_type != VBLK && nvp->v_type != VCHR)
-		return (NULL);
+		return;
 
 	vchain = &speclisth[SPECHASH(nvp_rdev)];
 loop:
@@ -593,53 +592,60 @@ loop:
 		break;
 	}
 
+	nvp->v_specinfo = malloc(sizeof(struct specinfo), M_VNODE,
+		M_WAITOK);
+	nvp->v_rdev = nvp_rdev;
+	nvp->v_hashchain = vchain;
+	nvp->v_specmountpoint = NULL;
+	nvp->v_speclockf = NULL;
+	nvp->v_specbitmap = NULL;
+	if (nvp->v_type == VCHR &&
+	    (cdevsw[major(nvp_rdev)].d_flags & D_CLONE) &&
+	    (minor(nvp_rdev) >> CLONE_SHIFT == 0)) {
+		if (vp != NULL)
+			nvp->v_specbitmap = vp->v_specbitmap;
+		else
+			nvp->v_specbitmap = malloc(CLONE_MAPSZ,
+			    M_VNODE, M_WAITOK | M_ZERO);
+	}
+	SLIST_INSERT_HEAD(vchain, nvp, v_specnext);
+	if (vp != NULL) {
+		nvp->v_flag |= VALIASED;
+		vp->v_flag |= VALIASED;
+		vput(vp);
+	}
+}
+
+static struct vnode *
+getdevalias(dev_t dev, enum vtype type)
+{
+	struct proc *p = curproc;
+	struct vnode *vp;
+	struct vnodechain *vchain;
+
 	/*
-	 * Common case is actually in the if statement
+	 * Reuse active block device vnodes created by bdevvp().
 	 */
-	if (vp == NULL || !(vp->v_tag == VT_NON && vp->v_type == VBLK)) {
-		nvp->v_specinfo = malloc(sizeof(struct specinfo), M_VNODE,
-			M_WAITOK);
-		nvp->v_rdev = nvp_rdev;
-		nvp->v_hashchain = vchain;
-		nvp->v_specmountpoint = NULL;
-		nvp->v_speclockf = NULL;
-		nvp->v_specbitmap = NULL;
-		if (nvp->v_type == VCHR &&
-		    (cdevsw[major(nvp_rdev)].d_flags & D_CLONE) &&
-		    (minor(nvp_rdev) >> CLONE_SHIFT == 0)) {
-			if (vp != NULL)
-				nvp->v_specbitmap = vp->v_specbitmap;
-			else
-				nvp->v_specbitmap = malloc(CLONE_MAPSZ,
-				    M_VNODE, M_WAITOK | M_ZERO);
-		}
-		SLIST_INSERT_HEAD(vchain, nvp, v_specnext);
-		if (vp != NULL) {
-			nvp->v_flag |= VALIASED;
-			vp->v_flag |= VALIASED;
-			vput(vp);
-		}
+	if (type != VBLK)
 		return (NULL);
+
+	vchain = &speclisth[SPECHASH(dev)];
+loop:
+	SLIST_FOREACH(vp, vchain, v_specnext) {
+		if (dev != vp->v_rdev || type != vp->v_type ||
+		    vp->v_tag != VT_NON)
+			continue;
+		if (vp->v_usecount == 0) {
+			vgonel(vp, p);
+			goto loop;
+		}
+		if (vget(vp, LK_EXCLUSIVE))
+			goto loop;
+		VOP_UNLOCK(vp);
+		return (vp);
 	}
 
-	/*
-	 * This code is the uncommon case. It is called in case
-	 * we found an alias that was VT_NON && vtype of VBLK
-	 * This means we found a block device that was created
-	 * using bdevvp.
-	 * An example of such a vnode is the root partition device vnode
-	 * created in ffs_mountroot.
-	 *
-	 * The vnodes created by bdevvp should not be aliased (why?).
-	 */
-
-	VOP_UNLOCK(vp);
-	vclean(vp, 0, p);
-	vp->v_op = nvp->v_op;
-	vp->v_tag = nvp->v_tag;
-	nvp->v_type = VNON;
-	insmntque(vp, mp);
-	return (vp);
+	return (NULL);
 }
 
 /*

@@ -1,4 +1,4 @@
-/* $OpenBSD: s3_lib.c,v 1.266 2026/09/22 03:45:18 jsing Exp $ */
+/* $OpenBSD: s3_lib.c,v 1.268 2026/11/10 12:03:24 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -1429,9 +1429,7 @@ _SSL_get_peer_tmp_key(SSL *s, EVP_PKEY **key)
 	if (s->s3->hs.key_share == NULL)
 		goto err;
 
-	if ((pkey = EVP_PKEY_new()) == NULL)
-		goto err;
-	if (!tls_key_share_peer_pkey(s->s3->hs.key_share, pkey))
+	if ((pkey = tls_key_share_peer_pkey(s->s3->hs.key_share)) == NULL)
 		goto err;
 
 	*key = pkey;
@@ -2511,7 +2509,8 @@ ssl3_renegotiate_check(SSL *s)
 {
 	if (!s->s3->renegotiate)
 		return 0;
-	if (SSL_in_init(s) || s->s3->rbuf.left != 0 || s->s3->wbuf.left != 0)
+	if (SSL_in_init(s) || s->s3->rbuf.left != 0 || s->s3->wbuf.left != 0 ||
+	    s->s3->tls_wrec != NULL)
 		return 0;
 
 	s->s3->hs.state = SSL_ST_RENEGOTIATE;

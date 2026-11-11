@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtp_session.c,v 1.451 2026/09/13 19:14:41 op Exp $	*/
+/*	$OpenBSD: smtp_session.c,v 1.453 2026/11/08 14:55:53 op Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -122,8 +122,8 @@ struct smtp_session {
 	struct listener		*listener;
 	void			*ssl_ctx;
 	struct sockaddr_storage	 ss;
-	char			 rdns[HOST_NAME_MAX+1];
-	char			 smtpname[HOST_NAME_MAX+1];
+	char			 rdns[_POSIX_HOST_NAME_MAX+1];
+	char			 smtpname[_POSIX_HOST_NAME_MAX+1];
 	int			 fcrdns;
 
 	int			 flags;
@@ -2155,33 +2155,40 @@ smtp_reply(struct smtp_session *s, char *fmt, ...)
 
 		if (s->flags & SF_BADINPUT) {
 			log_info("%016"PRIx64" smtp "
-			    "bad-input result=\"%.*s\"",
-			    s->id, n, buf);
+			    "bad-input "
+			    "addr=%s "
+			    "result=\"%.*s\"",
+			    s->id, ss_to_text(&s->ss), n, buf);
 		}
 		else if (s->state == STATE_AUTH_INIT) {
 			log_info("%016"PRIx64" smtp "
 			    "failed-command "
+			    "addr=%s "
 			    "command=\"AUTH PLAIN (...)\" result=\"%.*s\"",
-			    s->id, n, buf);
+			    s->id, ss_to_text(&s->ss), n, buf);
 		}
 		else if (s->state == STATE_AUTH_USERNAME) {
 			log_info("%016"PRIx64" smtp "
 			    "failed-command "
+			    "addr=%s "
 			    "command=\"AUTH LOGIN (username)\" result=\"%.*s\"",
-			    s->id, n, buf);
+			    s->id, ss_to_text(&s->ss), n, buf);
 		}
 		else if (s->state == STATE_AUTH_PASSWORD) {
 			log_info("%016"PRIx64" smtp "
 			    "failed-command "
+			    "addr=%s "
 			    "command=\"AUTH LOGIN (password)\" result=\"%.*s\"",
-			    s->id, n, buf);
+			    s->id, ss_to_text(&s->ss), n, buf);
 		}
 		else {
 			strnvis(tmp, s->cmd, sizeof tmp, VIS_SAFE | VIS_CSTYLE);
 			log_info("%016"PRIx64" smtp "
-			    "failed-command command=\"%s\" "
+			    "failed-command "
+			    "addr=%s "
+			    "command=\"%s\" "
 			    "result=\"%.*s\"",
-			    s->id, tmp, n, buf);
+			    s->id, ss_to_text(&s->ss), tmp, n, buf);
 		}
 		break;
 	}
