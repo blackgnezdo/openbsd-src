@@ -122,7 +122,8 @@ mfs_mount(struct mount *mp, const char *path, void *data,
 	if (error)
 		return (error);
 	devvp->v_type = VBLK;
-	checkalias(devvp, makedev(255, mfs_minor));
+	if (checkalias(devvp, makedev(255, mfs_minor), NULL))
+		panic("mfs_mount: dup dev");
 	mfs_minor++;
 	mfsp = malloc(sizeof *mfsp, M_MFSNODE, M_WAITOK | M_ZERO);
 	devvp->v_data = mfsp;
