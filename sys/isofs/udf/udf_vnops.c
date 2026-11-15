@@ -628,9 +628,10 @@ udf_getfid(struct udf_dirstream *ds)
 	 * Clean up from a previous fragmented FID.
 	 * Is this the right place for this?
 	 */
-	if (ds->fid_fragment && ds->buf != NULL) {
+	if (ds->buf != NULL) {
 		ds->fid_fragment = 0;
 		free(ds->buf, M_UDFFID, 0);
+		ds->buf = NULL;
 	}
 
 	fid = (struct fileid_desc*)&ds->data[ds->off];
@@ -645,7 +646,7 @@ udf_getfid(struct udf_dirstream *ds)
 
 		/* Copy what we have of the fid into a buffer */
 		frag_size = ds->size - ds->off;
-		if (frag_size >= ds->ump->um_bsize) {
+		if (frag_size < 0 || frag_size >= ds->ump->um_bsize) {
 			printf("udf: invalid FID fragment\n");
 			ds->error = EINVAL;
 			return (NULL);
@@ -684,9 +685,15 @@ udf_getfid(struct udf_dirstream *ds)
 		 * If the fragment was so small that we didn't get
 		 * the l_iu and l_fi fields, copy those in.
 		 */
-		if (frag_size < UDF_FID_SIZE)
+		if (frag_size < UDF_FID_SIZE) {
+			if (ds->size < UDF_FID_SIZE - frag_size) {
+				printf("udf: invalid FID fragment\n");
+				ds->error = EINVAL;
+				return (NULL);
+			}
 			bcopy(ds->data, &ds->buf[frag_size],
 			    UDF_FID_SIZE - frag_size);
+		}
 
 		/*
 		 * Now that we have enough of the fid to work with,
@@ -694,7 +701,8 @@ udf_getfid(struct udf_dirstream *ds)
 		 * allocation.
 		 */
 		total_fid_size = UDF_FID_SIZE + letoh16(fid->l_iu) + fid->l_fi;
-		if (total_fid_size > ds->ump->um_bsize) {
+		if (total_fid_size > ds->ump->um_bsize ||
+		    total_fid_size - frag_size > ds->size) {
 			printf("udf: invalid FID\n");
 			ds->error = EIO;
 			return (NULL);
@@ -730,7 +738,7 @@ udf_closedir(struct udf_dirstream *ds)
 		ds->bp = NULL;
 	}
 
-	if (ds->fid_fragment && ds->buf != NULL)
+	if (ds->buf != NULL)
 		free(ds->buf, M_UDFFID, 0);
 
 	pool_put(&udf_ds_pool, ds);
