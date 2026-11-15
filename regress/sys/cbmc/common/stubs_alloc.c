@@ -18,6 +18,15 @@ void *kmalloc(size_t size, int type, int flags)
 		return NULL;
 	return (flags & M_ZERO) ? calloc(1, size) : malloc(size);
 }
+void *mallocarray(size_t nmemb, size_t size, int type, int flags)
+{
+	if (size != 0 && nmemb > (size_t)-1 / size) {
+		if (flags & M_CANFAIL)
+			return NULL;
+		panic("mallocarray: overflow");
+	}
+	return kmalloc(nmemb * size, type, flags);
+}
 void kfree(void *p, int type, size_t size)
 {
 	free(p);

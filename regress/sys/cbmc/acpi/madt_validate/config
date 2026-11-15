@@ -1,0 +1,3 @@
+ioapic.h NIOAPIC 1
+acpipwrres.h NACPIPWRRES 1
+vmm.h NVMM 1

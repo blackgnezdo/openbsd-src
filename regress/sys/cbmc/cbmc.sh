@@ -15,6 +15,8 @@
 #   nobody      functions whose bodies are removed: they return an
 #               unconstrained value and have no side effects
 #   opts        extra cbmc options (loop bounds), one per line
+#   config      optional; "HEADER MACRO VALUE" lines, stand-ins for headers
+#               config(8) generates (e.g. "ioapic.h NIOAPIC 1")
 #   replace     optional; FUNCTION:MODEL lines, calls to FUNCTION are
 #               redirected to MODEL, which the harness defines
 #   fptargets   optional; CALLSITE/FUNCTION bindings for function pointer
@@ -37,6 +39,10 @@ mkdir -p "$W/inc"
 ln -sfn "$SYS/arch/amd64/include" "$W/inc/machine"
 ln -sfn "$SYS/arch/amd64/include" "$W/inc/amd64"
 echo '#define NBPFILTER 1' > "$W/inc/bpfilter.h"
+# <target>/config: "HEADER MACRO VALUE" lines for further config(8) headers.
+[ -f "$T/config" ] && while read -r h m v; do
+	echo "#define $m $v" > "$W/inc/$h"
+done < "$T/config"
 
 CPPFLAGS="-nostdinc -D_KERNEL -D__OpenBSD__ -DDIAGNOSTIC -Dmalloc=kmalloc \
     -Dfree=kfree -I$W/inc -I$SYS -I$SYS/arch -I$SYS/dev/usb"
@@ -76,7 +82,7 @@ goto-cc $objs "$W/stubs_alloc.gb" "$W/stubs_pool.gb" -o "$W/all.gb"
 harness_fns=$(goto-instrument --show-goto-functions "$W/harness.gb" \
     2>/dev/null | sed -n 's|^\([A-Za-z_][A-Za-z0-9_]*\) /\* .* \*/$|\1|p')
 keep=" $(cat "$T/keep" | tr '\n' ' ') $(echo $harness_fns) \
-    kmalloc kfree malloc calloc free pool_get pool_put __builtin_bcopy __builtin_memcpy __builtin_memmove memcpy memmove panic "
+    kmalloc kfree mallocarray malloc calloc free pool_get pool_put __builtin_bcopy __builtin_memcpy __builtin_memmove memcpy memmove panic "
 args=""
 for f in $(goto-instrument --show-goto-functions "$W/all.gb" 2>/dev/null |
     sed -n 's|^\([A-Za-z_][A-Za-z0-9_]*\) /\* .* \*/$|\1|p' | sort -u); do
@@ -111,8 +117,14 @@ TMO=${CBMC_TIMEOUT:-300}
 
 # 1. Reachability: a pass means nothing if the error path was cut off.
 crc=0
+if [ -n "${CBMC_NO_COVER:-}" ]; then
+	# For diagnosing slow targets only; the result is then unqualified.
+	echo "reachability not checked (CBMC_NO_COVER)"
+	: > "$W/cover.out"
+else
 timeout "$TMO" cbmc "$W/model.gb" $OPTS --cover location \
     > "$W/cover.out" 2>&1 || crc=$?
+fi
 [ $crc -ne 124 ] || { echo "RESULT: TIMEOUT (coverage run)"; exit 2; }
 [ $crc -eq 0 ] || [ $crc -eq 10 ] ||
     { echo "RESULT: ERROR (coverage run, cbmc exit $crc)"; exit 2; }
@@ -140,6 +152,7 @@ while IFS= read -r anchor; do
 		echo "UNREACHED: $anchor"; vacuous=1
 	fi
 done < "$T/must_reach"
+[ -z "${CBMC_NO_COVER:-}" ] || vacuous=0
 
 # 2. Memory safety.
 rc=0
@@ -152,7 +165,10 @@ echo "output in $W"
 
 [ $vacuous -eq 0 ] || { echo "RESULT: VACUOUS"; exit 2; }
 case $rc in
-0)	echo "RESULT: VERIFIED"; exit 0;;
+0)	[ -z "${CBMC_NO_COVER:-}" ] ||
+	    { echo "RESULT: UNQUALIFIED (no failures, reachability unknown)"
+	      exit 2; }
+	echo "RESULT: VERIFIED"; exit 0;;
 10)	echo "RESULT: VIOLATED"; exit 1;;
 124)	echo "RESULT: TIMEOUT"; exit 2;;
 *)	echo "RESULT: ERROR (cbmc exit $rc)"; exit 2;;

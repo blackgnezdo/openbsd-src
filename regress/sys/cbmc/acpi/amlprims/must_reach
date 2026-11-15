@@ -1,0 +1,3 @@
+dsdt.c:len = aml_parselength(scope);
+dsdt.c:scope->pos += 8;
+dsdt.c:twocode = (scope->pos[0] << 8) + scope->pos[1];

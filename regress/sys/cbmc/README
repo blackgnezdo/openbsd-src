@@ -36,6 +36,19 @@ What is modelled
 	  call through a freed object's method table is reported as a bad
 	  dereference but not followed
 
+Known limits of the checker
+	- CBMC treats ptr->field through a pointer to a union as an access
+	  to the whole union.  Code that overlays a union on variable-length
+	  records is reported whenever a record is shorter than the union,
+	  even if the field is in bounds.  acpi/madt_validate allocates
+	  slack after the table to avoid this, and says what that hides.
+	- A walk over records at offsets that depend on the data is
+	  expensive.  acpimadt_attach as a whole (three walks plus a
+	  16-iteration interrupt loop) did not finish in ten minutes;
+	  check the validator and the consumers separately.
+	- CBMC_NO_COVER=1 skips the reachability run to diagnose a slow
+	  target.  The result is then UNQUALIFIED, never VERIFIED.
+
 What is not modelled
 	- interrupts, other threads, locks
 	- anything a target's harness comment lists as an assumed contract
@@ -94,3 +107,15 @@ Targets
 		fs_frag * fs_fsize, and an fs_ncg that overflows the size
 		computation.  The two loops over fs_cssize and fs_ncg have no
 		small bound, so this target cannot reach VERIFIED as is.
+	acpi/madt_validate
+		acpimadt_validate on an MADT of arbitrary content and length.
+		The table copy is exactly hdr.length bytes (acpi_maptable).
+		Shows that the walk terminates and stays inside the table
+		(up to the slack described above).  VIOLATED before the
+		check that two bytes remain for the entry header.
+	acpi/amlprims
+		aml_parseopcode, aml_parseend and aml_parsesimple started at
+		an arbitrary position of a short AML scope.  VIOLATED on the
+		current tree: aml_parselength and the word, dword and qword
+		cases of aml_parsesimple read past scope->end.
+		aml_parseopcode is clean.

@@ -1,0 +1,2 @@
+acpimadt.c:addr += length;
+acpimadt.c:return (1);
