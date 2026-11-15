@@ -366,7 +366,8 @@ bt_recvmsg(struct ipmi_cmd *c)
 {
 	struct ipmi_softc *sc = c->c_sc;
 	struct ipmi_iowait a;
-	u_int8_t len, v, i, j;
+	u_int8_t len, v;
+	int i, j;
 
 	a.offset = _BT_CTRL_REG;
 	a.mask = BT_BMC2HOST_ATN;
@@ -923,7 +924,8 @@ ipmi_recvcmd(struct ipmi_cmd *c)
 	/* Receive message from interface, copy out result data */
 	c->c_maxrxlen += sc->sc_if->datarcv;
 	if (sc->sc_if->recvmsg(c) ||
-	    c->c_rxlen < sc->sc_if->datarcv) {
+	    c->c_rxlen < sc->sc_if->datarcv ||
+	    c->c_rxlen > c->c_maxrxlen) {
 		return (-1);
 	}
 
