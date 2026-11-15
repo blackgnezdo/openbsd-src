@@ -1,0 +1,4 @@
+usbd_setup_pipe.function_pointer_call.1/hc_open_pipe
+usbd_alloc_xfer.function_pointer_call.1/hc_allocx
+usbd_free_xfer.function_pointer_call.1/hc_freex
+usbd_close_pipe.function_pointer_call.1/hc_pipe_close

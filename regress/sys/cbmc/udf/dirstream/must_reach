@@ -1,0 +1,3 @@
+udf_vnops.c:ds->fid_fragment = 1;
+udf_vnops.c:pool_put(&udf_ds_pool, ds);
+udf_vnops.c:ds->off += (total_fid_size + 3) & ~0x03;

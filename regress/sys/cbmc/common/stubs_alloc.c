@@ -14,3 +14,17 @@ void kfree(void *p, int type, size_t size)
 {
 	free(p);
 }
+
+/*
+ * CBMC has no model for bcopy.  A byte loop is used because CBMC's memmove
+ * with a symbolic length is very expensive; targets that call bcopy must
+ * bound the loop with --unwindset __builtin_bcopy.0:N.
+ */
+void __builtin_bcopy(const void *src, void *dst, size_t n)
+{
+	const unsigned char *s = src;
+	unsigned char *d = dst;
+
+	for (size_t i = 0; i < n; i++)
+		d[i] = s[i];
+}

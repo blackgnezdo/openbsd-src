@@ -1,0 +1,3 @@
+udf_opendir
+udf_getfid
+udf_closedir

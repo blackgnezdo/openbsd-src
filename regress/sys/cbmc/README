@@ -1,60 +1,80 @@
-Bounded model checking of USB driver error paths with CBMC.
+Bounded model checking of kernel code paths with CBMC.
 
 Needs cbmc (tested with 5.95.1) and gcc on the build host.  The kernel
 sources are preprocessed with a minimal stand-in for a compile directory,
 so no config(8) run is needed.
 
-	sh cbmc.sh usps
+	sh cbmc.sh usb/usps
 
 prints one of:
 
-	RESULT: VERIFIED	no memory-safety violation within the bounds
+	RESULT: VERIFIED	no violation within the bounds
 	RESULT: VIOLATED	a violation was found; see check.out
 	RESULT: VACUOUS		an anchor in must_reach was not reachable
+	RESULT: TIMEOUT		a cbmc run exceeded CBMC_TIMEOUT seconds
 	RESULT: ERROR		build or tool failure
+
+CBMC_OVERRIDE_DIR=<dir> replaces kernel files by same-named files in <dir>,
+to run a target against an older version of a file.
 
 What is modelled
 	- real bodies of the functions listed in <target>/keep
 	- functions in <target>/nobody return any value, no side effects
 	- every other function loses its body
 	- malloc(9)/free(9) map to CBMC's heap (common/stubs_alloc.c);
-	  M_NOWAIT allocations may fail
-	- the harness supplies the host controller methods and the device
-	- bus and pipe method calls are bound to those methods
-	  (common/fptargets), so a call through a freed pipe's method
-	  table is reported as a bad dereference but not followed
+	  M_NOWAIT allocations may fail.  pool(9) sits on top of that
+	  (common/stubs_pool.c); the harness sets pr_size.
+	- bcopy is a byte loop; targets that reach it bound it with
+	  --unwindset __builtin_bcopy.0:N
+	- <target>/replace redirects calls to a kernel function to a model
+	  in the harness
+	- <target>/fptargets binds calls through function pointers, so a
+	  call through a freed object's method table is reported as a bad
+	  dereference but not followed
 
 What is not modelled
 	- interrupts, other threads, locks
-	- transfers actually queued on a pipe
+	- anything a target's harness comment lists as an assumed contract
 
 Adding a target
-	1. Copy usps/ to <driver>/.
-	2. harness.c: build the softc and attach arguments the driver's
-	   entry point expects, call the entry point, then call the
-	   function that runs on unplug or close.
-	3. sources, keep: the driver file and the functions on the path.
-	4. must_reach: one anchor inside the error path under test and one
-	   in the teardown function.
+	1. Copy the closest existing target directory.
+	2. harness.c: build the objects the entry point expects, call it,
+	   then call the function that tears the objects down.  To reach
+	   static functions, #include the kernel file and list it in
+	   "included" instead of "sources".
+	3. sources, keep: the files and the functions on the path.
+	4. must_reach: anchors on the path under test and in the teardown.
 	5. opts: every loop on the path needs a bound at least as large as
 	   its trip count; --unwinding-assertions reports one that is not.
 
 Rules for a harness
-	- no __CPROVER_assume
-	- do not add driver or usbdi functions to nobody to make a
-	  failure go away; nobody is for hardware and request I/O
+	- no __CPROVER_assume; bound unconstrained values with arithmetic
+	- do not drop functions on the path from keep, or add them to
+	  nobody, to make a failure go away
 	- a VERIFIED result counts only together with must_reach anchors
-	  on the error path
+	  on the path under test
+	- sizes are small constants; say in the harness what they stand for
 
 Targets
-	usps	usps_attach followed by usps_detach.  With usbd_open_pipe_intr
+	usb/usps
+		usps_attach followed by usps_detach.  With usbd_open_pipe_intr
 		storing *pipe before checking usbd_transfer's result this
 		target is VIOLATED (the freed pipe is closed again by
 		usps_attach and by usps_detach).
-	umcs	umcs_attach followed by umcs_detach.
-	uow	uow_attach followed by uow_detach.  uow_cmd is not in keep:
+	usb/umcs
+		umcs_attach followed by umcs_detach.
+	usb/uow
+		uow_attach followed by uow_detach.  uow_cmd is not in keep:
 		its retry loop waits for a status byte that only the
 		interrupt handler updates, so it has no bound in this model.
-	ubcmtp	ubcmtp_setup_pipes followed by ubcmtp_disable on a softc
+	usb/ubcmtp
+		ubcmtp_setup_pipes followed by ubcmtp_disable on a softc
 		built by hand; the softc definition is copied from ubcmtp.c
 		and has to be kept in sync with it.
+	udf/dirstream
+		udf_opendir, up to three udf_getfid calls, udf_closedir, on a
+		directory whose extents have arbitrary sizes (0..64 bytes,
+		block size 48) and arbitrary content.  udf_readatoffset is
+		replaced by a model; assumed contract: on success *data is
+		valid for *size bytes.  Checks bounds, buffer release and
+		leaks.  VIOLATED before the udf_getfid length checks.
