@@ -236,9 +236,9 @@ usbd_open_pipe_intr(struct usbd_interface *iface, u_int8_t address,
 	ipipe->intrxfer = xfer;
 	ipipe->repeat = 1;
 	err = usbd_transfer(xfer);
-	*pipe = ipipe;
 	if (err != USBD_IN_PROGRESS)
 		goto bad2;
+	*pipe = ipipe;
 	return (USBD_NORMAL_COMPLETION);
 
  bad2:
