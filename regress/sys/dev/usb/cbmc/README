@@ -48,3 +48,7 @@ Targets
 		storing *pipe before checking usbd_transfer's result this
 		target is VIOLATED (the freed pipe is closed again by
 		usps_attach and by usps_detach).
+	umcs	umcs_attach followed by umcs_detach.
+	uow	uow_attach followed by uow_detach.  uow_cmd is not in keep:
+		its retry loop waits for a status byte that only the
+		interrupt handler updates, so it has no bound in this model.

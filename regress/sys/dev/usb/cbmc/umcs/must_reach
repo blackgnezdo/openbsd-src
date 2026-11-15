@@ -1,0 +1,3 @@
+umcs.c:cannot open interrupt pipe
+usbdi.c:usbd_close_pipe(ipipe);
+umcs.c:task_del(systq, &sc->sc_status_task);

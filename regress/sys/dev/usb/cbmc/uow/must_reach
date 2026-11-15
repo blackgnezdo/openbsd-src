@@ -1,0 +1,3 @@
+usbdi.c:usbd_close_pipe(ipipe);
+uow.c:failed to open intr pipe
+uow.c:s = splusb();

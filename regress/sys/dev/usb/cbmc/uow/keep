@@ -1,0 +1,13 @@
+uow_attach
+uow_detach
+uow_reset
+usbd_device2interface_handle
+usbd_get_interface_descriptor
+usbd_interface2endpoint_descriptor
+usbd_open_pipe
+usbd_open_pipe_ival
+usbd_open_pipe_intr
+usbd_close_pipe
+usbd_alloc_xfer
+usbd_free_xfer
+usbd_setup_pipe

@@ -1,0 +1,3 @@
+usbd_transfer
+usbd_do_request
+usbd_do_request_flags
