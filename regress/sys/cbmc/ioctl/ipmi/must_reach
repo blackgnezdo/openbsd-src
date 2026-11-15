@@ -1,0 +1,3 @@
+ipmi.c:rc = copyin(req->msg.data, c->c_data, len);
+ipmi.c:rc = copyout(c->c_data, recv->msg.data + 1, c->c_rxlen);
+ipmi.c:c->c_rssa = iv;

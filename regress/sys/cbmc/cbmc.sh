@@ -17,6 +17,7 @@
 #   opts        extra cbmc options (loop bounds), one per line
 #   config      optional; "HEADER MACRO VALUE" lines, stand-ins for headers
 #               config(8) generates (e.g. "ioapic.h NIOAPIC 1")
+#   stubflags   optional; -D options for common/stubs_alloc.c
 #   replace     optional; FUNCTION:MODEL lines, calls to FUNCTION are
 #               redirected to MODEL, which the harness defines
 #   fptargets   optional; CALLSITE/FUNCTION bindings for function pointer
@@ -73,16 +74,21 @@ for f in $(while read -r s; do resolve "$s"; done < "$T/sources") \
 	    { cat "$W/$b.err" >&2; exit 2; }
 	objs="$objs $W/$b.gb"
 done
-goto-cc -c "$HERE/common/stubs_alloc.c" -o "$W/stubs_alloc.gb"
+# <target>/stubflags: -D options for the common models (e.g. -DMEMCPY_HAVOC).
+goto-cc -c $(cat "$T/stubflags" 2>/dev/null) "$HERE/common/stubs_alloc.c" \
+    -o "$W/stubs_alloc.gb"
+goto-cc -c "$HERE/common/stubs_user.c" -o "$W/stubs_user.gb"
 gcc -E $CPPFLAGS "$HERE/common/stubs_pool.c" -o "$W/stubs_pool.i"
 goto-cc -c "$W/stubs_pool.i" -o "$W/stubs_pool.gb"
-goto-cc $objs "$W/stubs_alloc.gb" "$W/stubs_pool.gb" -o "$W/all.gb"
+goto-cc $objs "$W/stubs_alloc.gb" "$W/stubs_pool.gb" "$W/stubs_user.gb" \
+    -o "$W/all.gb"
 
 # Remove every body that is neither whitelisted nor part of the model.
 harness_fns=$(goto-instrument --show-goto-functions "$W/harness.gb" \
     2>/dev/null | sed -n 's|^\([A-Za-z_][A-Za-z0-9_]*\) /\* .* \*/$|\1|p')
 keep=" $(cat "$T/keep" | tr '\n' ' ') $(echo $harness_fns) \
-    kmalloc kfree mallocarray malloc calloc free pool_get pool_put __builtin_bcopy __builtin_memcpy __builtin_memmove memcpy memmove panic "
+    kmalloc kfree mallocarray malloc calloc free pool_get pool_put __builtin_bcopy __builtin_memcpy __builtin_memmove memcpy memmove panic \
+    copyin copyout copyinstr "
 args=""
 for f in $(goto-instrument --show-goto-functions "$W/all.gb" 2>/dev/null |
     sed -n 's|^\([A-Za-z_][A-Za-z0-9_]*\) /\* .* \*/$|\1|p' | sort -u); do
@@ -98,19 +104,24 @@ goto-instrument $args "$W/all.gb" "$W/sliced.gb" > /dev/null 2>&1
 # Bind the bus and pipe method calls to the harness's host controller model.
 # Without this CBMC tries every address-taken function of a compatible type,
 # which includes driver entry points and makes some targets intractable.
-# Redirect calls to a kernel function to a model defined by the harness.
-if [ -s "$T/replace" ]; then
-	args=""
-	for r in $(cat "$T/replace"); do args="$args --replace-calls $r"; done
-	goto-instrument $args "$W/sliced.gb" "$W/replaced.gb" \
-	    > "$W/replace.out" 2>&1 || { cat "$W/replace.out" >&2; exit 2; }
-	mv "$W/replaced.gb" "$W/sliced.gb"
-fi
-
+# Bind calls through function pointers to the functions the harness names.
+# Without this CBMC tries every address-taken function of a compatible type,
+# which includes driver entry points and makes some targets intractable.
+# This has to precede --replace-calls, which resolves function pointers.
 args=""
-[ -f "$T/fptargets" ] && for r in $(cat "$T/fptargets"); do args="$args --restrict-function-pointer $r"; done
-goto-instrument $args "$W/sliced.gb" "$W/model.gb" > "$W/fp.out" 2>&1 ||
+[ -f "$T/fptargets" ] && for r in $(cat "$T/fptargets"); do
+	args="$args --restrict-function-pointer $r"
+done
+goto-instrument $args "$W/sliced.gb" "$W/bound.gb" > "$W/fp.out" 2>&1 ||
     { cat "$W/fp.out" >&2; exit 2; }
+
+# Redirect calls to a kernel function to a model defined by the harness.
+args=""
+[ -s "$T/replace" ] && for r in $(cat "$T/replace"); do
+	args="$args --replace-calls $r"
+done
+goto-instrument $args "$W/bound.gb" "$W/model.gb" > "$W/replace.out" 2>&1 ||
+    { cat "$W/replace.out" >&2; exit 2; }
 
 OPTS="$(cat "$T/opts" | tr '\n' ' ') --object-bits 12"
 TMO=${CBMC_TIMEOUT:-300}

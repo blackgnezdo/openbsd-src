@@ -1,0 +1,2 @@
+ipmi.c:c->c_rxlen = len - 1;
+ipmi.c:memcpy(c->c_data, buf + sc->sc_if->datarcv, c->c_rxlen);

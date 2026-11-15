@@ -64,7 +64,24 @@ void panic(const char *fmt, ...)
 #include <string.h>
 void *__builtin_memcpy(void *dst, const void *src, size_t n)
 {
+#ifdef MEMCPY_HAVOC
+	/*
+	 * Cheaper model for targets where CBMC's memcpy with a symbolic
+	 * length is too expensive: both regions are checked, but the
+	 * destination receives arbitrary bytes instead of the source's.
+	 * Only sound where nothing later depends on the copied values
+	 * being equal to the source.
+	 */
+	__CPROVER_precondition(__CPROVER_r_ok(src, n),
+	    "memcpy source region readable");
+	__CPROVER_precondition(__CPROVER_w_ok(dst, n),
+	    "memcpy destination region writeable");
+	if (n > 0)
+		__CPROVER_havoc_slice(dst, n);
+	return dst;
+#else
 	return memcpy(dst, src, n);
+#endif
 }
 void *__builtin_memmove(void *dst, const void *src, size_t n)
 {

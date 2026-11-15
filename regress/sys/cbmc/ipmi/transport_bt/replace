@@ -1,0 +1,3 @@
+bmc_read:model_bmc_read
+bmc_write:model_bmc_write
+bmc_io_wait:model_bmc_io_wait

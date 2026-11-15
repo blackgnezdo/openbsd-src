@@ -27,6 +27,16 @@ What is modelled
 	- bcopy is a byte loop; targets that reach it bound it with
 	  --unwindset __builtin_bcopy.0:N
 	- memcpy and memmove are CBMC's models, which check both regions
+	- copyin, copyout and copyinstr (common/stubs_user.c): user memory
+	  is not an object of the model.  A user address is never
+	  dereferenced, each copyin yields fresh arbitrary bytes, any copy
+	  may fail, and the kernel side must be valid for the full length.
+	  This covers bad lengths, direct dereference of a user pointer
+	  and double fetches; it does not cover copying uninitialised
+	  kernel memory out.
+	- <target>/stubflags may select -DMEMCPY_HAVOC: memcpy checks both
+	  regions but stores arbitrary bytes.  Use only where nothing
+	  depends on the copied values.
 	- panic(9) ends the path and is reported as "panic reached";
 	  malloc(9) panics on requests above its size limit unless
 	  M_CANFAIL is given
@@ -63,6 +73,17 @@ Adding a target
 	4. must_reach: anchors on the path under test and in the teardown.
 	5. opts: every loop on the path needs a bound at least as large as
 	   its trip count; --unwinding-assertions reports one that is not.
+
+Techniques used by the targets
+	- validator, then consumer (acpi/madt_validate, ffs/mountfs)
+	- assume/guarantee split: one target asserts a contract at an
+	  internal interface, another replaces the callee by a model that
+	  assumes it (ipmi/transport_bt and ioctl/ipmi)
+	- postconditions as __CPROVER_assert in the harness
+	- termination through unwinding assertions
+	- ioctl dispatch: arbitrary cmd, buffer of IOCPARM_LEN(cmd) bytes
+	- mutation check: run a target against a copy of the source with a
+	  validation removed (CBMC_OVERRIDE_DIR) and expect VIOLATED
 
 Rules for a harness
 	- no __CPROVER_assume; bound unconstrained values with arithmetic
@@ -119,3 +140,12 @@ Targets
 		current tree: aml_parselength and the word, dword and qword
 		cases of aml_parsesimple read past scope->end.
 		aml_parseopcode is clean.
+	ipmi/transport_bt
+		One ipmi_cmd over the BT interface with a BMC that answers
+		anything.  Asserts that the reply fits the caller's buffer.
+		VIOLATED before ipmi_recvcmd checked the reply length and
+		bt_recvmsg used a counter wider than the length byte.
+	ioctl/ipmi
+		Two arbitrary ioctl calls on /dev/ipmi with ipmi_cmd replaced
+		by a model that assumes the contract above.  VIOLATED when
+		the data_len check in IPMICTL_SEND_COMMAND is removed.
