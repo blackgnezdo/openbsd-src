@@ -17,6 +17,7 @@
 #   opts        extra cbmc options (loop bounds), one per line
 #   config      optional; "HEADER MACRO VALUE" lines, stand-ins for headers
 #               config(8) generates (e.g. "ioapic.h NIOAPIC 1")
+#   models      optional; further common models to link, e.g. "mbuf"
 #   stubflags   optional; -D options for common/stubs_alloc.c
 #   replace     optional; FUNCTION:MODEL lines, calls to FUNCTION are
 #               redirected to MODEL, which the harness defines
@@ -80,15 +81,22 @@ goto-cc -c $(cat "$T/stubflags" 2>/dev/null) "$HERE/common/stubs_alloc.c" \
 goto-cc -c "$HERE/common/stubs_user.c" -o "$W/stubs_user.gb"
 gcc -E $CPPFLAGS "$HERE/common/stubs_pool.c" -o "$W/stubs_pool.i"
 goto-cc -c "$W/stubs_pool.i" -o "$W/stubs_pool.gb"
+# <target>/models: further common models, one name per line (e.g. "mbuf").
+extra=""
+[ -f "$T/models" ] && for m in $(cat "$T/models"); do
+	gcc -E $CPPFLAGS "$HERE/common/stubs_$m.c" -o "$W/stubs_$m.i"
+	goto-cc -c "$W/stubs_$m.i" -o "$W/stubs_$m.gb"
+	extra="$extra $W/stubs_$m.gb"
+done
 goto-cc $objs "$W/stubs_alloc.gb" "$W/stubs_pool.gb" "$W/stubs_user.gb" \
-    -o "$W/all.gb"
+    $extra -o "$W/all.gb"
 
 # Remove every body that is neither whitelisted nor part of the model.
 harness_fns=$(goto-instrument --show-goto-functions "$W/harness.gb" \
     2>/dev/null | sed -n 's|^\([A-Za-z_][A-Za-z0-9_]*\) /\* .* \*/$|\1|p')
 keep=" $(cat "$T/keep" | tr '\n' ' ') $(echo $harness_fns) \
     kmalloc kfree mallocarray malloc calloc free pool_get pool_put __builtin_bcopy __builtin_memcpy __builtin_memmove memcpy memmove panic \
-    copyin copyout copyinstr "
+    copyin copyout copyinstr m_get m_clget m_free m_freem "
 args=""
 for f in $(goto-instrument --show-goto-functions "$W/all.gb" 2>/dev/null |
     sed -n 's|^\([A-Za-z_][A-Za-z0-9_]*\) /\* .* \*/$|\1|p' | sort -u); do
