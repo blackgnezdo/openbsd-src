@@ -1,0 +1,219 @@
+Native execution of the cbmc targets (clang, sanitizers, libFuzzer).
+
+	sh native.sh sysv/msg_copy 30
+	CBMC_OVERRIDE_DIR=/path/to/old/files sh native.sh udf/dirstream 60
+	NATIVE_SAN=msan sh native.sh ioctl/ipmi 30
+
+prints one of
+
+	RESULT: CLEAN (N execs, M s)	no finding, every must_reach anchor executed
+	RESULT: VACUOUS (N execs, M s)	no finding, an anchor was never executed
+	RESULT: FINDING			report above, reproduced in a fresh process
+	RESULT: ERROR			build or tool failure
+
+The same target directories serve both engines; nothing in them is
+specific to this one, except optional seed inputs in native/seeds/<target>/.
+
+Purpose
+	- cross-check cbmc.sh and the common models: a linked binary cannot
+	  silently lack a function body, and real sizes are used instead of
+	  the harness's scaled-down ones where the code is not bounded by them
+	- uninitialised kernel memory reaching copyout (MSan build)
+	- deeper loops than CBMC's unwind bounds; fast regression runs
+
+Files
+	native.sh	driver, same interface as cbmc.sh
+	native/shim.h	CBMC primitives, force-included into every unit
+	native/runtime.c	libFuzzer entry point, nondet values, reset, leak check
+	native/rewrite.py	LLVM IR rewriting: keep/nobody/replace, stubs, reset
+	native/reached.py	coverage of the .i files mapped back to source lines
+	native/seeds/	hand-made inputs (ioctl/ipmi, ffs/mountfs)
+
+Build
+	1. Preprocess exactly as cbmc.sh does (gcc -E, same flags, config
+	   stand-ins, CBMC_OVERRIDE_DIR, staged "included" files) plus
+	   -include native/shim.h, and -Dmain=harness_main for harness.c.
+	   gcc, not clang, preprocesses the kernel units: sys/systm.h maps
+	   bcopy to __builtin_bcopy only when !defined(__clang__).  The two
+	   models built against the C library (stubs_alloc.c, stubs_user.c)
+	   are preprocessed by clang, because glibc headers preprocessed by
+	   gcc contain gcc-only attributes.
+	2. clang emits LLVM IR with the sanitizer, coverage (fuzzer-no-link)
+	   and source-coverage flags, but with -disable-llvm-passes, so no
+	   instrumentation has run yet.
+	3. rewrite.py edits the IR (below).
+	4. clang compiles the rewritten IR, which runs the sanitizer and
+	   coverage passes.  ld -r joins kernel, harness, models and stubs
+	   into one object; objcopy makes every symbol but harness_main and
+	   __native_for_each_global local, so a kernel printf, log or random
+	   never binds to libc or to libFuzzer.  Every symbol still undefined
+	   must be a C library string/heap function, a sanitizer or fuzzer
+	   runtime symbol or a native/runtime.c symbol, otherwise the build
+	   stops with "no body and no stub for NAME".
+	5. Link with runtime.c and libFuzzer.
+
+Body semantics (rewrite.py), mirroring cbmc.sh
+	- A function keeps its body if it is in keep, is defined in the
+	  harness translation unit (with "included" targets that is the whole
+	  included kernel file: cbmc.sh takes every function of harness.gb),
+	  is defined in a header (.h per its debug info), or is one of the
+	  fixed model names cbmc.sh keeps.  nobody wins over all of these.
+	- Any other defined function gets a body that returns bytes from the
+	  input (zero once the input is used up) and does nothing else.  A
+	  noreturn function without a body ends the execution like a false
+	  __CPROVER_assume.  An sret result is filled the same way.
+	- A function declared but defined nowhere gets the same body in
+	  stubs.ll; the list is in $W/stubbed.txt.  Exceptions (bound to the
+	  C library, checked by the sanitizer, as CBMC uses its own library
+	  models for them): mem*, str*, bzero, bcmp, malloc/calloc/realloc/
+	  free, abort.
+	- A data symbol declared but defined nowhere (extern without a
+	  definition) is defined by rewrite.py.  CBMC gives such objects
+	  arbitrary content; here they are refilled before every execution
+	  with pseudo-random bytes derived from a hash of the input
+	  (NATIVE_EXTERN_ZERO=1: zeros).  If the type is incomplete in the
+	  declaring unit, 4096 bytes are allocated.
+	- replace FUNCTION:MODEL: FUNCTION's body (or generated stub)
+	  forwards to MODEL.  As in cbmc.sh, where --replace-calls first
+	  turns pointer calls into direct calls, indirect calls reach the
+	  model too.
+	- fptargets FUNC.function_pointer_call.N/TARGET: before the N-th
+	  call through a pointer in FUNC (IR order, which matched CBMC's
+	  numbering on every target here) the pointer is compared with the
+	  targets; a mismatch is a finding ("fptargets binding"), as CBMC
+	  reports it.  The call then goes to whatever the pointer holds.
+	- Every writable global and static local of the kernel and harness
+	  units is saved at start-up and restored before each execution.
+
+Configuration checks
+	As cbmc.sh: the target files must exist, and a function named in
+	both keep and nobody is an error.
+
+Process model
+	One process runs many inputs (libFuzzer in-process mode); kernel and
+	harness globals are restored before each input and every heap object
+	the execution allocated is freed after it.  A finding is then rerun
+	in a fresh process ("reproduced in a fresh process") so that it
+	cannot depend on state left by earlier inputs.  That check caught a
+	bug here: the allocation tracking had picked up memory of
+	libFuzzer's timer thread and freed it (now only the harness thread
+	is tracked).  Measured on
+	sysv/msg_copy: about 20000 inputs/s in-process against about 34/s
+	when each input starts a fresh process (30 ms per process, mostly
+	ASan start-up), so fresh processes per input were not used.
+
+Input layout
+	Scalar values (nondet_*(), results of functions without a body) come
+	from the front of the input; bulk data (__CPROVER_havoc_slice:
+	copyin data, MEMCPY_HAVOC; contents of objects harness.c allocates)
+	from the back, in order.  Once the two meet, everything is zero.
+	A long copyin therefore does not move later scalars.
+
+CBMC primitives (shim.h, runtime.c)
+	__CPROVER_assert, __CPROVER_precondition
+		message, file, line, stack trace, abort (a FINDING).  For a
+		failed r_ok/w_ok the region is described (ASan).
+	__CPROVER_assume(c)
+		if false, the execution ends (longjmp), objects it allocated
+		are freed, nothing is reported.
+	__CPROVER_r_ok/w_ok(p, n)
+		false for NULL, wrap-around and n > 2^36; ASan build:
+		__asan_region_is_poisoned; then the first and last byte are
+		touched, so an unmapped address faults inside the check.
+		n == 0 is always true (CBMC: false for an invalid pointer).
+	__CPROVER_havoc_slice(p, n)	bulk bytes from the input
+	__CPROVER_allocate(n, zero)	calloc/malloc
+	__CPROVER_OBJECT_SIZE(p)	__sanitizer_get_allocated_size for a heap
+		chunk, 0 for anything else (CBMC: size of any object)
+	__builtin_bcopy, __builtin_memcpy, __builtin_memmove are renamed
+	(macros in shim.h) to __cbmc_model_*, so the kernel's bcopy/memcpy/
+	memmove go through the models in common/stubs_alloc.c as under CBMC.
+	clang rejects definitions of __builtin_* names and would expand the
+	calls itself otherwise.
+
+Common models
+	All of common/stubs_*.c are compiled as they are; there is no native
+	replacement of any model.  calloc is routed (shim.h macro) through
+	__native_calloc only to learn which objects are zeroed.
+
+Heap contents
+	CBMC's malloc returns arbitrary bytes.  Natively, objects allocated
+	by harness.c itself (device data, ioctl buffers, results of models)
+	take their content from the input (rewrite.py inserts a call after
+	each kmalloc/mallocarray/pool_get/__CPROVER_allocate in functions of
+	harness.c); zeroed allocations stay zero.  Memory the kernel code
+	allocates keeps ASan's fill byte (0xbe) or, in the MSan build, is
+	uninitialised.  Filling every allocation from the input was tried
+	first: on short inputs kernel buffers ate the bytes meant for later
+	nondet values, and usb/ubcmtp never reached its second pipe failure.
+
+Leak check
+	When the target's opts contain --memory-leak-check, an execution
+	that returns from the harness with heap objects it allocated and did
+	not free is a finding ("MEMORY LEAK"), with the allocation stack.
+	This is CBMC's notion (allocated and not freed), not LeakSanitizer's
+	reachability.  The allocations are tracked with the sanitizer
+	malloc/free hooks.
+
+Sanitizers
+	asan (default): AddressSanitizer + UndefinedBehaviorSanitizer,
+		minus alignment (packed device structures), function (the
+		generated stubs carry no type signature) and pointer-overflow
+		(the harnesses use arbitrary integers as user addresses, and
+		kernel code does arithmetic on them before copyin).  Every
+		UBSan report aborts.  UBSan findings are not properties CBMC
+		checks; report them separately.
+	msan: MemorySanitizer with origin tracking.  The copyout model's
+		r_ok check also calls __msan_check_mem_is_initialized on the
+		kernel buffer (the shim passes __func__; only copyout asks).
+		Limitation: a function without a body does not write its
+		out-parameters, which CBMC treats as arbitrary but MSan as
+		uninitialised; a report through such a path is an artefact.
+
+Reachability
+	The build has source-based coverage.  After a clean run the profile
+	is mapped from the .i files back to source lines (reached.py, using
+	gcc's line markers) and checked against must_reach as cbmc.sh does;
+	an anchor not executed makes the run VACUOUS.  Stubbed functions
+	keep their entry counter with step 0, so their lines never count.
+
+Kernel code under clang on Linux
+	- implicit declarations, int conversions and incompatible pointer
+	  types are errors in clang 18: -Wno-error=... for each.
+	- -ffreestanding, otherwise LLVM turns the stubbed kernel printf
+	  into putchar/puts, which have no definition.
+	- kernel inline assembly: no target here executes any (curcpu() and
+	  friends are not on the paths); a target that does would fault.
+	- nothing else was needed for the 13 targets.
+
+Limits and deviations from CBMC
+	- Undefined data symbols get pseudo-random, not fuzzer-controlled,
+	  content.
+	- Kernel heap memory is not arbitrary (see Heap contents).
+	- Paths that need several exact values in sequence can be out of the
+	  fuzzer's reach in a short run: ioctl/ipmi needs a SEND_COMMAND
+	  followed by a RECEIVE_MSG, ffs/mountfs a superblock at a fixed
+	  offset of an 8 KB block.  Seeds for both are in native/seeds; the
+	  layout of a seed depends on the order in which the harness draws
+	  values, so a harness change can invalidate it (the result then
+	  becomes VACUOUS, not wrong).
+	- Bounds are real: a loop CBMC unwinds N times runs as often as the
+	  input says; a non-terminating loop is a libFuzzer timeout (10 s),
+	  reported as a FINDING.
+
+Self-test
+	The selftest/ targets of cbmc.sh run through native.sh unchanged
+	(5 s each, VERIFIED=CLEAN, VIOLATED=FINDING, VACUOUS=VACUOUS).  First
+	run: 70 of 72 results agreed; the two others were
+	nobody_keep_conflict (no configuration check yet; agrees since) and
+	unwind_too_small, which is VIOLATED under CBMC only: an unwinding
+	assertion has no native counterpart, the loop simply runs.
+	fp_binding_with_replace gave FINDING, but for its result check, which
+	the test says must not fail; with the fptargets check it now fails on
+	the binding, as under CBMC.  Failure texts differ in general: CBMC's
+	"dereference failure" is an ASan report here.
+
+Environment
+	NATIVE_SAN, NATIVE_SEED, NATIVE_WORKDIR, NATIVE_TRACE=1 (log stubs and
+	path ends), NATIVE_FUZZ_OPTS (extra libFuzzer flags),
+	NATIVE_EXTERN_ZERO=1, CBMC_OVERRIDE_DIR.

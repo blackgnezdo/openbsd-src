@@ -1,5 +1,14 @@
 Bounded model checking of kernel code paths with CBMC.
 
+A second engine runs the same target directories natively: native.sh
+builds harness, kernel code and models with clang, sanitizers and
+libFuzzer, and draws every nondet value from the fuzzer's input.  It
+cross-checks the models, runs real sizes and loop counts, and with
+NATIVE_SAN=msan checks that copyout never sees uninitialised kernel
+memory.  See native/README.native.
+
+	sh native.sh usb/usps 30	# RESULT: CLEAN | FINDING | VACUOUS | ERROR
+
 Needs cbmc (tested with 5.95.1) and gcc on the build host.  The kernel
 sources are preprocessed with a minimal stand-in for a compile directory,
 so no config(8) run is needed.
