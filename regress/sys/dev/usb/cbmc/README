@@ -20,6 +20,9 @@ What is modelled
 	- malloc(9)/free(9) map to CBMC's heap (common/stubs_alloc.c);
 	  M_NOWAIT allocations may fail
 	- the harness supplies the host controller methods and the device
+	- bus and pipe method calls are bound to those methods
+	  (common/fptargets), so a call through a freed pipe's method
+	  table is reported as a bad dereference but not followed
 
 What is not modelled
 	- interrupts, other threads, locks
@@ -52,3 +55,6 @@ Targets
 	uow	uow_attach followed by uow_detach.  uow_cmd is not in keep:
 		its retry loop waits for a status byte that only the
 		interrupt handler updates, so it has no bound in this model.
+	ubcmtp	ubcmtp_setup_pipes followed by ubcmtp_disable on a softc
+		built by hand; the softc definition is copied from ubcmtp.c
+		and has to be kept in sync with it.

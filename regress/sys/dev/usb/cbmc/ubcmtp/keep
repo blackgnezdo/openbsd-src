@@ -1,0 +1,11 @@
+ubcmtp_setup_pipes
+ubcmtp_raw_mode
+ubcmtp_disable
+usbd_open_pipe_intr
+usbd_open_pipe_ival
+usbd_setup_pipe
+usbd_close_pipe
+usbd_alloc_xfer
+usbd_free_xfer
+usbd_setup_xfer
+usbd_interface2endpoint_descriptor

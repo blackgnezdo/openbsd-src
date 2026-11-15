@@ -12,6 +12,8 @@
 #   nobody      functions whose bodies are removed: they return an
 #               unconstrained value and have no side effects
 #   opts        extra cbmc options (loop bounds), one per line
+#   fptargets   optional; CALLSITE/FUNCTION bindings for function pointer
+#               calls (default: common/fptargets)
 #   must_reach  FILE:TEXT anchors; at least one source line containing TEXT
 #               must be reachable, otherwise a pass is treated as vacuous
 #
@@ -71,7 +73,16 @@ for f in $(cat "$T/nobody"); do
 	case "$keep" in *" $f "*)
 		echo "$f is in both keep and nobody" >&2; exit 2;; esac
 done
-goto-instrument $args "$W/all.gb" "$W/model.gb" > /dev/null 2>&1
+goto-instrument $args "$W/all.gb" "$W/sliced.gb" > /dev/null 2>&1
+
+# Bind the bus and pipe method calls to the harness's host controller model.
+# Without this CBMC tries every address-taken function of a compatible type,
+# which includes driver entry points and makes some targets intractable.
+fp="$T/fptargets"; [ -f "$fp" ] || fp="$HERE/common/fptargets"
+args=""
+for r in $(cat "$fp"); do args="$args --restrict-function-pointer $r"; done
+goto-instrument $args "$W/sliced.gb" "$W/model.gb" > "$W/fp.out" 2>&1 ||
+    { cat "$W/fp.out" >&2; exit 2; }
 
 OPTS="$(cat "$T/opts" | tr '\n' ' ') --object-bits 12"
 

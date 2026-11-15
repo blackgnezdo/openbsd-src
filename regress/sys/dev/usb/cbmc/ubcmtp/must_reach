@@ -1,0 +1,3 @@
+ubcmtp.c:error opening trackpad data pipe
+usbdi.c:usbd_close_pipe(ipipe);
+ubcmtp.c:sc->sc_status &= ~UBCMTP_ENABLED;
