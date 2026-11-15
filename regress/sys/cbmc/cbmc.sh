@@ -94,7 +94,12 @@ goto-cc $objs "$W/stubs_alloc.gb" "$W/stubs_pool.gb" "$W/stubs_user.gb" \
 # Remove every body that is neither whitelisted nor part of the model.
 harness_fns=$(goto-instrument --show-goto-functions "$W/harness.gb" \
     2>/dev/null | sed -n 's|^\([A-Za-z_][A-Za-z0-9_]*\) /\* .* \*/$|\1|p')
-keep=" $(cat "$T/keep" | tr '\n' ' ') $(echo $harness_fns) \
+# Inline functions defined in headers (min, max, ...) keep their bodies.
+header_fns=$(goto-instrument --show-goto-functions "$W/all.gb" 2>/dev/null |
+    awk '/^[A-Za-z_][A-Za-z0-9_]* \/\* /{ fn = $1; seen = 0 }
+	/ file [^ ]+ line /{ if (!seen) { for (i = 1; i <= NF; i++)
+	    if ($i == "file" && $(i+1) ~ /\.h$/) print fn; seen = 1 } }')
+keep=" $(cat "$T/keep" | tr '\n' ' ') $(echo $harness_fns) $(echo $header_fns) \
     kmalloc kfree mallocarray malloc calloc free pool_get pool_put __builtin_bcopy __builtin_memcpy __builtin_memmove memcpy memmove panic \
     copyin copyout copyinstr m_get m_clget m_free m_freem "
 args=""
