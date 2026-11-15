@@ -1,0 +1,2 @@
+../regress/sys/cbmc/selftest/included_static/incl_static.c
+../regress/sys/cbmc/selftest/anchor.inc

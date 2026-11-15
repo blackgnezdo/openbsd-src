@@ -1,0 +1,2 @@
+anchor.inc:st_anchor
+lib.c:return x + 1

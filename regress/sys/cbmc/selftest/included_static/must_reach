@@ -1,0 +1,2 @@
+anchor.inc:st_anchor
+incl_static.c:return 2 * x

@@ -1,0 +1,3 @@
+VIOLATED
+dereferenced function pointer must be op_a
+!bound op_a and replaced other
