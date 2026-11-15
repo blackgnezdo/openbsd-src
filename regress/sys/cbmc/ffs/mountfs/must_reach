@@ -1,0 +1,2 @@
+ffs_vfsops.c:fs->fs_csp = (struct csum *)space;
+ffs_vfsops.c:ump->um_savedmaxfilesize = fs->fs_maxfilesize;

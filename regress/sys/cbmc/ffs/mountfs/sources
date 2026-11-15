@@ -1,0 +1,2 @@
+ufs/ffs/ffs_vfsops.c
+ufs/ffs/ffs_tables.c

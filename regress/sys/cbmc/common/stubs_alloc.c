@@ -4,8 +4,16 @@
 #define M_NOWAIT 0x0002
 #define M_ZERO   0x0008
 _Bool nondet_bool(void);
+#define M_CANFAIL 0x0004
+#define MALLOC_MAX (65535UL * 4096)	/* kern_malloc.c: 65535 * PAGE_SIZE */
+void panic(const char *, ...);
 void *kmalloc(size_t size, int type, int flags)
 {
+	if (size > MALLOC_MAX) {
+		if (flags & M_CANFAIL)
+			return NULL;
+		panic("malloc: allocation too large");
+	}
 	if ((flags & M_NOWAIT) && nondet_bool())
 		return NULL;
 	return (flags & M_ZERO) ? calloc(1, size) : malloc(size);
@@ -27,4 +35,29 @@ void __builtin_bcopy(const void *src, void *dst, size_t n)
 
 	for (size_t i = 0; i < n; i++)
 		d[i] = s[i];
+}
+
+/*
+ * panic(9) does not return.  Reaching it is reported: a panic that on-disk
+ * or device-supplied data can trigger is a finding.
+ */
+void panic(const char *fmt, ...)
+{
+	__CPROVER_assert(0, "panic reached");
+	__CPROVER_assume(0);
+}
+
+/*
+ * The kernel maps memcpy and memmove to the compiler builtins, for which
+ * CBMC supplies no body after goto-cc.  Route them to CBMC's own models,
+ * which check that both regions are valid.
+ */
+#include <string.h>
+void *__builtin_memcpy(void *dst, const void *src, size_t n)
+{
+	return memcpy(dst, src, n);
+}
+void *__builtin_memmove(void *dst, const void *src, size_t n)
+{
+	return memmove(dst, src, n);
 }

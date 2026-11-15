@@ -26,6 +26,10 @@ What is modelled
 	  (common/stubs_pool.c); the harness sets pr_size.
 	- bcopy is a byte loop; targets that reach it bound it with
 	  --unwindset __builtin_bcopy.0:N
+	- memcpy and memmove are CBMC's models, which check both regions
+	- panic(9) ends the path and is reported as "panic reached";
+	  malloc(9) panics on requests above its size limit unless
+	  M_CANFAIL is given
 	- <target>/replace redirects calls to a kernel function to a model
 	  in the harness
 	- <target>/fptargets binds calls through function pointers, so a
@@ -51,6 +55,9 @@ Rules for a harness
 	- no __CPROVER_assume; bound unconstrained values with arithmetic
 	- do not drop functions on the path from keep, or add them to
 	  nobody, to make a failure go away
+	- when the model lives in a different file than its callers, the
+	  harness includes the same headers as the kernel file, otherwise
+	  struct types do not match at link time
 	- a VERIFIED result counts only together with must_reach anchors
 	  on the path under test
 	- sizes are small constants; say in the harness what they stand for
@@ -78,3 +85,12 @@ Targets
 		replaced by a model; assumed contract: on success *data is
 		valid for *size bytes.  Checks bounds, buffer release and
 		leaks.  VIOLATED before the udf_getfid length checks.
+	ffs/mountfs
+		ffs_mountfs on a device with arbitrary block contents; bread
+		is replaced by a model.  VIOLATED on the current tree: a
+		superblock accepted by ffs_validate can still have
+		fs_sbsize smaller than struct fs, fs_fsize of zero, an
+		fs_cssize that malloc(9) refuses, fs_bsize larger than
+		fs_frag * fs_fsize, and an fs_ncg that overflows the size
+		computation.  The two loops over fs_cssize and fs_ncg have no
+		small bound, so this target cannot reach VERIFIED as is.

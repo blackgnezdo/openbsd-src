@@ -76,7 +76,7 @@ goto-cc $objs "$W/stubs_alloc.gb" "$W/stubs_pool.gb" -o "$W/all.gb"
 harness_fns=$(goto-instrument --show-goto-functions "$W/harness.gb" \
     2>/dev/null | sed -n 's|^\([A-Za-z_][A-Za-z0-9_]*\) /\* .* \*/$|\1|p')
 keep=" $(cat "$T/keep" | tr '\n' ' ') $(echo $harness_fns) \
-    kmalloc kfree malloc calloc free pool_get pool_put __builtin_bcopy "
+    kmalloc kfree malloc calloc free pool_get pool_put __builtin_bcopy __builtin_memcpy __builtin_memmove memcpy memmove panic "
 args=""
 for f in $(goto-instrument --show-goto-functions "$W/all.gb" 2>/dev/null |
     sed -n 's|^\([A-Za-z_][A-Za-z0-9_]*\) /\* .* \*/$|\1|p' | sort -u); do
