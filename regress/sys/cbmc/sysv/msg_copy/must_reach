@@ -1,0 +1,3 @@
+sysv_msg.c:MCLGET(m, M_WAIT);
+sysv_msg.c:return (E2BIG);
+sysv_msg.c:*len = total;
