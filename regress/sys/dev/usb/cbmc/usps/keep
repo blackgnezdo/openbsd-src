@@ -1,0 +1,16 @@
+usps_attach
+usps_detach
+usps_get_device_info
+usps_cmd
+usbd_open_pipe_intr
+usbd_open_pipe_ival
+usbd_close_pipe
+usbd_abort_pipe
+usbd_setup_xfer
+usbd_alloc_xfer
+usbd_free_xfer
+usbd_setup_pipe
+usbd_device2interface_handle
+usbd_get_interface_descriptor
+usbd_interface2endpoint_descriptor
+usbd_deactivate

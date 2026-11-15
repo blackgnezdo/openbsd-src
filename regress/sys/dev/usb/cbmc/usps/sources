@@ -1,0 +1,3 @@
+dev/usb/usps.c
+dev/usb/usbdi.c
+dev/usb/usb_subr.c

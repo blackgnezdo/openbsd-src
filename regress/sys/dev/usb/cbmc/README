@@ -1,0 +1,50 @@
+Bounded model checking of USB driver error paths with CBMC.
+
+Needs cbmc (tested with 5.95.1) and gcc on the build host.  The kernel
+sources are preprocessed with a minimal stand-in for a compile directory,
+so no config(8) run is needed.
+
+	sh cbmc.sh usps
+
+prints one of:
+
+	RESULT: VERIFIED	no memory-safety violation within the bounds
+	RESULT: VIOLATED	a violation was found; see check.out
+	RESULT: VACUOUS		an anchor in must_reach was not reachable
+	RESULT: ERROR		build or tool failure
+
+What is modelled
+	- real bodies of the functions listed in <target>/keep
+	- functions in <target>/nobody return any value, no side effects
+	- every other function loses its body
+	- malloc(9)/free(9) map to CBMC's heap (common/stubs_alloc.c);
+	  M_NOWAIT allocations may fail
+	- the harness supplies the host controller methods and the device
+
+What is not modelled
+	- interrupts, other threads, locks
+	- transfers actually queued on a pipe
+
+Adding a target
+	1. Copy usps/ to <driver>/.
+	2. harness.c: build the softc and attach arguments the driver's
+	   entry point expects, call the entry point, then call the
+	   function that runs on unplug or close.
+	3. sources, keep: the driver file and the functions on the path.
+	4. must_reach: one anchor inside the error path under test and one
+	   in the teardown function.
+	5. opts: every loop on the path needs a bound at least as large as
+	   its trip count; --unwinding-assertions reports one that is not.
+
+Rules for a harness
+	- no __CPROVER_assume
+	- do not add driver or usbdi functions to nobody to make a
+	  failure go away; nobody is for hardware and request I/O
+	- a VERIFIED result counts only together with must_reach anchors
+	  on the error path
+
+Targets
+	usps	usps_attach followed by usps_detach.  With usbd_open_pipe_intr
+		storing *pipe before checking usbd_transfer's result this
+		target is VIOLATED (the freed pipe is closed again by
+		usps_attach and by usps_detach).

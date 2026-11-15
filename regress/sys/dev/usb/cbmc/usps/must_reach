@@ -1,0 +1,3 @@
+usbdi.c:usbd_close_pipe(ipipe);
+usps.c:could not open intr pipe
+usps.c:usbd_deactivate(sc->sc_udev);
