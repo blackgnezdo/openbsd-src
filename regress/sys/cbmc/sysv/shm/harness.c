@@ -12,15 +12,12 @@
  * (uvm_map.c) when vm_shm != NULL.
  */
 #include "sysv_shm.c"
+#include "cbmc_harness.h"
 
 #define NCALLS	3
 #define SHMMNI	2	/* shminfo.shmmni; the default is 128 */
 #define SHMSEG	2	/* shminfo.shmseg; the default is 128 */
 
-unsigned nondet_uint(void);
-unsigned long nondet_ulong(void);
-int nondet_int(void);
-_Bool nondet_bool(void);
 
 /* conf/param.c defines this; shmmax and shmall are as large as an int */
 struct shminfo shminfo = {
@@ -85,7 +82,7 @@ model_uvm_unmap(struct vm_map *map, vaddr_t start, vaddr_t end)
  * behind the segment.  The common pool model allocates an untyped byte
  * array, and CBMC then encodes every field access through a symbolic
  * segment pointer byte by byte, which made this target intractable.
- * Allocate the item with its real layout instead.
+ * Allocate the item with its real layout instead (CBMC_NEW).
  */
 struct shm_item {
 	struct shmid_ds_kern	ds;
@@ -95,10 +92,7 @@ struct shm_item {
 void *
 model_pool_get(struct pool *pp, int flags)
 {
-	struct shm_item *it;
-
-	it = __CPROVER_allocate(sizeof(struct shm_item), 1);
-	return (it);
+	return (CBMC_NEW(struct shm_item));
 }
 
 int

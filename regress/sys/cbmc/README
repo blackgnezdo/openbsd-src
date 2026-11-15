@@ -6,23 +6,125 @@ so no config(8) run is needed.
 
 	sh cbmc.sh usb/usps
 
-prints one of:
-
-	RESULT: VERIFIED	no violation within the bounds
-	RESULT: VIOLATED	a violation was found; see check.out
-	RESULT: VACUOUS		an anchor in must_reach was not reachable
-	RESULT: TIMEOUT		a cbmc run exceeded CBMC_TIMEOUT seconds
-	RESULT: ERROR		build or tool failure
+and ends with a RESULT line; see "Reading the output".
 
 CBMC_OVERRIDE_DIR=<dir> replaces kernel files by same-named files in <dir>,
 to run a target against an older version of a file.
 
+Environment
+	CBMC_TIMEOUT=<s>	limit of each cbmc run, default 300
+	CBMC_MEMLIMIT_MB=<n>	address space limit of each cbmc run, default
+				6000; see "Reading the output", OUT OF MEMORY
+	CBMC_BUDGET_FILE, CBMC_BUDGET
+				run budget, see "Run budget"
+	CBMC_NO_COVER=1		skip the reachability run (diagnosis only)
+	CBMC_OVERRIDE_DIR=<dir>	see above
+	CBMC_WORKDIR=<dir>	keep intermediate files and cbmc output there
+	CBMC_KEEP=1		keep the temporary work directory also when the
+				result is VERIFIED; without CBMC_WORKDIR the
+				directory is removed on exit after a VERIFIED
+				run and kept otherwise, "output in" says which
+
+Reading the output
+	A run prints, in this order: "run N of BUDGET" (only with a budget
+	file), the PHASE line of the cover run (with its HINT lines), UNREACHED
+	lines for must_reach anchors that were not reached, the failed
+	properties of the check run, the PHASE line of the check run (with
+	its HINT lines), "output in <dir>" and the RESULT line, which is
+	always the last line.  A run that stops early prints fewer of these.
+
+	PHASE cover  time=21s symex=0.8s vars=93412 clauses=441764 status=ok
+	PHASE check  time=14s symex=1.1s vars=307014 clauses=1736131 status=ok failed=0
+		time is wall clock seconds of the cbmc run; symex is CBMC's
+		"Runtime Symex" (symbolic execution, "-" if it did not
+		finish); vars and clauses are the largest SAT problem of any
+		solver iteration ("N variables, M clauses"; 0 if none was
+		built); status is ok, timeout, oom (see below) or error;
+		failed is the number of failed properties of the check run.
+		The cover run reports no failed count.
+
+	HINT lines appear when a run timed out or ran out of memory, or has
+	more than 1,000,000 variables, and only those that apply:
+		- symex is most of the time (or did not finish): the loop
+		  bounds are too large.  The loops CBMC unwound most often are
+		  listed with their counts; bound them with --unwindset
+		  <loop id>:N in opts, or make the model's sizes smaller.
+		- many variables, small symex time: the solver is the cost,
+		  usually untyped allocations; see "Adding a target", step 3.
+		- neither: split the target at an internal interface
+		  (assume/guarantee split).
+
+	RESULT line and exit status:
+		RESULT: VERIFIED			0
+		RESULT: VIOLATED			1
+		RESULT: VACUOUS				2  a must_reach anchor
+							   was not reached
+		RESULT: UNQUALIFIED (...)		2  CBMC_NO_COVER and no
+							   failure
+		RESULT: TIMEOUT (coverage run)		2  cbmc ran longer than
+		RESULT: TIMEOUT				2  CBMC_TIMEOUT seconds
+		RESULT: OUT OF MEMORY (cover)		2  cbmc hit the memory
+		RESULT: OUT OF MEMORY (check)		2  limit or was killed
+		RESULT: ERROR (coverage run, cbmc exit N) 2  tool failure
+		RESULT: ERROR (cbmc exit N)		2
+		RESULT: ERROR (reason)			2  configuration error:
+							   usage, missing target
+							   directory or file,
+							   name in keep and
+							   nobody, must_reach
+							   anchor for an unknown
+							   file (checked before
+							   any work is done)
+		RESULT: BUDGET EXHAUSTED (n runs used)	3  nothing was run
+	A build failure (goto-cc, goto-instrument) prints its messages and
+	exits 2 without a RESULT line.
+
+	Each cbmc run is limited with ulimit -v to CBMC_MEMLIMIT_MB, so that
+	a runaway solver fails by itself with "Out of memory" and not by the
+	kernel's OOM killer taking other processes down.  Raise the limit
+	only after the HINT lines have been tried.
+
+	If cbmc.sh is interrupted or killed with SIGTERM, SIGINT or SIGHUP
+	it stops its cbmc process first.  SIGKILL cannot be caught: after a
+	kill -9 of the script the cbmc may still be running.
+
+Run budget
+	With CBMC_BUDGET_FILE=<path> every invocation appends one line to the
+	file: start time (epoch seconds), target, final RESULT and wall
+	clock seconds, tab separated.  Before doing anything the script
+	counts the lines in the file; if the count is CBMC_BUDGET (default
+	20) or more it prints "RESULT: BUDGET EXHAUSTED (n runs used)" and
+	exits 3.  Otherwise it prints "run N of BUDGET".  Interrupted and
+	failed runs are logged too ("ERROR (no result, exit N)").
+	An orchestrator that gives a run budget to a harness author picks a
+	path for the file, passes CBMC_BUDGET_FILE and CBMC_BUDGET in the
+	task description (the author exports them for every cbmc.sh call)
+	and reads the file afterwards to see what was run and how long it
+	took.  The check is only as good as the rule that all runs go
+	through cbmc.sh: it does not stop anyone from calling cbmc,
+	goto-cc or a private copy of the script directly.  See "Rules for a
+	harness".
+
 What is modelled
-	- real bodies of the functions listed in <target>/keep
-	- functions in <target>/nobody return any value, no side effects
+	- real bodies of the functions listed in <target>/keep, for files in
+	  <target>/sources
+	- all functions of files the harness #includes (<target>/included):
+	  they keep their bodies, "keep" does not apply to them; so do
+	  inline functions defined in headers
+	- functions in <target>/nobody lose their body wherever they are
+	  defined, also in an included file or a header, and return any
+	  value with no side effects.  A name in both keep and nobody is an
+	  error.
 	- every other function loses its body
 	- malloc(9)/free(9) map to CBMC's heap (common/stubs_alloc.c);
-	  M_NOWAIT allocations may fail.  pool(9) sits on top of that
+	  M_NOWAIT allocations may fail.  free(9) checks its size argument
+	  as kern_malloc.c does under DIAGNOSTIC: a size that is non-zero and
+	  larger than the allocation's bucket (the allocation size rounded
+	  up to a power of two, at least 16, or to whole pages above two
+	  pages) is "free: size too large"; a size of half the bucket or
+	  less, for a bucket above 16 bytes, is "free: size too small"; size
+	  0 is accepted.  The allocation size is that of the object, also
+	  for objects made with CBMC_NEW.  pool(9) sits on top of that
 	  (common/stubs_pool.c); the harness sets pr_size.
 	- bcopy is a byte loop; targets that reach it bound it with
 	  --unwindset __builtin_bcopy.0:N
@@ -56,14 +158,8 @@ Known limits of the checker
 	  expensive.  acpimadt_attach as a whole (three walks plus a
 	  16-iteration interrupt loop) did not finish in ten minutes;
 	  check the validator and the consumers separately.
-	- The common malloc and pool models allocate untyped byte arrays.
-	  Field accesses through a pointer that may refer to several such
-	  objects are then encoded byte by byte.  sysv/shm went from 2.4
-	  million SAT variables (timeout) to 93 thousand (3 s) when its
-	  pool items were allocated with their real struct layout, using
-	  __CPROVER_allocate(sizeof(struct ...), 1) in a pool_get model
-	  of its own.  Do this when a target is slow and its objects are
-	  reached through table lookups.
+	- The common malloc and pool models allocate untyped byte arrays;
+	  see "Adding a target", step 3, for what that costs and what to do.
 	- CBMC_NO_COVER=1 skips the reachability run to diagnose a slow
 	  target.  The result is then UNQUALIFIED, never VERIFIED.
 
@@ -77,9 +173,25 @@ Adding a target
 	   then call the function that tears the objects down.  To reach
 	   static functions, #include the kernel file and list it in
 	   "included" instead of "sources".
-	3. sources, keep: the files and the functions on the path.
-	4. must_reach: anchors on the path under test and in the teardown.
-	5. opts: every loop on the path needs a bound at least as large as
+	3. Allocate objects the code reaches through tables, lists or any
+	   pointer that may refer to one of several objects with
+	   CBMC_NEW(type) and CBMC_NEW_ARRAY(type, n) from
+	   common/cbmc_harness.h (#include "cbmc_harness.h"; it also
+	   declares the nondet_* functions).  They give zeroed objects with
+	   their real type.  The common malloc and pool models allocate
+	   untyped byte arrays, and a field access through a pointer that
+	   may refer to several of those is encoded byte by byte: sysv/shm
+	   had 2.4 million SAT variables and timed out with pool items from
+	   the common pool model, and solves in seconds with items from
+	   CBMC_NEW in a pool_get model of its own (replace file:
+	   pool_get:model_pool_get).  Objects behind a single pointer, such
+	   as a softc, need no such care.  Worked examples: sysv/shm
+	   (pool items, handle placed behind the segment) and sysv/semop
+	   (tables, sets, undo structures).  Do this from the start; if a
+	   target is slow, check it first (HINT lines).
+	4. sources, keep: the files and the functions on the path.
+	5. must_reach: anchors on the path under test and in the teardown.
+	6. opts: every loop on the path needs a bound at least as large as
 	   its trip count; --unwinding-assertions reports one that is not.
 
 Techniques used by the targets
@@ -106,6 +218,13 @@ Rules for a harness
 	- a VERIFIED result counts only together with must_reach anchors
 	  on the path under test
 	- sizes are small constants; say in the harness what they stand for
+	- run the solver through cbmc.sh only: no direct calls of cbmc,
+	  goto-cc or goto-instrument for checking, no private copy of the
+	  script.  The time, memory and run limits and the budget log exist
+	  only there.  Stay within the run budget given in the task.
+	- no process may be left running when you stop: no background cbmc
+	  runs, no runs started with & or nohup.  Check with ps before you
+	  report, and stop what is yours.
 
 Targets
 	usb/usps

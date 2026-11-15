@@ -29,13 +29,10 @@
  */
 #define SEMUME	1
 #include "sysv_sem.c"
+#include "cbmc_harness.h"
 
 #define NSEMS	2
 
-unsigned int nondet_uint(void);
-unsigned long nondet_ulong(void);
-int nondet_int(void);
-_Bool nondet_bool(void);
 
 /* sysv_sem.c uses seminfo; conf/param.c defines it and is not part of this target */
 struct seminfo seminfo;
@@ -127,7 +124,7 @@ model_pool_get(struct pool *pp, int flags)
 {
 	if ((flags & PR_NOWAIT) && nondet_bool())
 		return (NULL);
-	return (__CPROVER_allocate(sizeof(struct semu_item), 1));
+	return (CBMC_NEW(struct semu_item));
 }
 
 int
@@ -152,17 +149,17 @@ main(void)
 	sema_pool.pr_size = sizeof(struct semid_ds_kern);
 	semu_pool.pr_size = SEMUSZ;
 	/*
-	 * Objects are allocated with their real types (see the README on
-	 * untyped allocations); with the common byte-array models this
-	 * target did not solve.
+	 * Objects are allocated with their real types (CBMC_NEW, see the
+	 * README); with the common byte-array models this target did not
+	 * solve.
 	 */
-	sema = __CPROVER_allocate(sizeof(struct semid_ds_kern *[2]), 1);
+	sema = CBMC_NEW_ARRAY(struct semid_ds_kern *, 2);
 
 	/* what sys_semget() does for a new set, with its arguments arbitrary */
 	p.p_ucred = &cred;
 	p.p_p = &pr;
-	set0 = __CPROVER_allocate(sizeof(struct semid_ds_kern), 1);
-	set0->sem_base = __CPROVER_allocate(sizeof(struct sem[NSEMS]), 1);
+	set0 = CBMC_NEW(struct semid_ds_kern);
+	set0->sem_base = CBMC_NEW_ARRAY(struct sem, NSEMS);
 	refcnt_init(&set0->sem_refcnt);
 	set0->sem_perm.seq = nondet_uint() & 0x7fff;
 	set0->sem_nsems = NSEMS;

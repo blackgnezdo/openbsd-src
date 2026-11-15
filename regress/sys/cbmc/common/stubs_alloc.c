@@ -27,8 +27,35 @@ void *mallocarray(size_t nmemb, size_t size, int type, int flags)
 	}
 	return kmalloc(nmemb * size, type, flags);
 }
+/*
+ * free(9) under DIAGNOSTIC (kern_malloc.c) panics when the size passed is
+ * non-zero and larger than the allocation's bucket, or when the bucket is
+ * larger than MINALLOCSIZE and the size is at most half of it.  The bucket
+ * is the allocation size rounded up to a power of two (at least 16), or to
+ * whole pages above MAXALLOCSAVE (two pages).  Size 0 means "unknown".
+ * The allocation size is that of the object p points to: CBMC's heap
+ * object, or one made by __CPROVER_allocate (typed allocations, pool items).
+ */
+#define PAGE_SIZE_ 4096UL
+#define MINALLOCSIZE_ 16UL
+#define MAXALLOCSAVE_ (2 * PAGE_SIZE_)
 void kfree(void *p, int type, size_t size)
 {
+	size_t alloc, b;
+
+	if (p == NULL)
+		return;
+	alloc = __CPROVER_OBJECT_SIZE(p);
+	b = MINALLOCSIZE_;
+	/* 16 doubled up to 8192; no loop, targets set their own unwind bounds */
+#define STEP_ if (b < alloc) b <<= 1;
+	STEP_ STEP_ STEP_ STEP_ STEP_ STEP_ STEP_ STEP_ STEP_
+#undef STEP_
+	if (alloc > MAXALLOCSAVE_)
+		b = (alloc + PAGE_SIZE_ - 1) & ~(PAGE_SIZE_ - 1);
+	__CPROVER_assert(size == 0 || size <= b, "free: size too large");
+	__CPROVER_assert(size == 0 || b <= MINALLOCSIZE_ || size > b / 2,
+	    "free: size too small");
 	free(p);
 }
 
