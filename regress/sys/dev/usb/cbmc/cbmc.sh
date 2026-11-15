@@ -34,7 +34,19 @@ CPPFLAGS="-nostdinc -D_KERNEL -D__OpenBSD__ -DDIAGNOSTIC -Dmalloc=kmalloc \
     -Dfree=kfree -I$W/inc -I$SYS -I$SYS/arch -I$SYS/dev/usb"
 
 objs=""
-for f in $(sed "s|^|$SYS/|" "$T/sources") "$T/harness.c"; do
+# CBMC_OVERRIDE_DIR may hold replacement copies of kernel files (matched by
+# basename), e.g. a pre-fix usbdi.c to confirm that a harness detects a bug.
+resolve() {
+	if [ -n "${CBMC_OVERRIDE_DIR:-}" ] &&
+	    [ -f "$CBMC_OVERRIDE_DIR/$(basename "$1")" ]; then
+		echo "$CBMC_OVERRIDE_DIR/$(basename "$1")"
+	else
+		echo "$SYS/$1"
+	fi
+}
+
+for f in $(while read -r s; do resolve "$s"; done < "$T/sources") \
+    "$T/harness.c"; do
 	b=$(basename "$f" .c)
 	gcc -E $CPPFLAGS "$f" -o "$W/$b.i"
 	goto-cc -c "$W/$b.i" -o "$W/$b.gb" 2> "$W/$b.err" ||
@@ -75,7 +87,7 @@ vacuous=0
 while IFS= read -r anchor; do
 	[ -n "$anchor" ] || continue
 	file=${anchor%%:*}; text=${anchor#*:}
-	src=$(grep "/$file\$" "$T/sources" | sed "s|^|$SYS/|")
+	src=$(resolve "$(grep "/$file\$" "$T/sources")")
 	lines=$(grep -nF -- "$text" "$src" | cut -d: -f1)
 	hit=0
 	for l in $lines; do
