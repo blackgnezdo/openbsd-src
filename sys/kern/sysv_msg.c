@@ -668,7 +668,7 @@ msg_copyout(struct msg *msg, char *ubuf, size_t *len, int msgflg)
 		panic("SysV message longer than MSGMAX");
 #endif
 
-	if ((total = min(*len, msg->msg_len)) < msg->msg_len) {
+	if ((total = ulmin(*len, msg->msg_len)) < msg->msg_len) {
 		if ((msgflg & MSG_NOERROR) == 0)
 			return (E2BIG);
 	}
