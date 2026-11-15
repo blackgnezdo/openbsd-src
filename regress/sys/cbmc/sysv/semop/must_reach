@@ -1,0 +1,4 @@
+sysv_sem.c:copyin(SCARG(uap, sops), sops, nsops * sizeof(struct sembuf));
+sysv_sem.c:error = EIDRM;
+sysv_sem.c:semptr->sempid = p->p_p->ps_pid;
+sysv_sem.c:sunptr->un_adjval = adjval;

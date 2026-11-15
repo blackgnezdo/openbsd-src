@@ -90,6 +90,9 @@ Techniques used by the targets
 	- postconditions as __CPROVER_assert in the harness
 	- termination through unwinding assertions
 	- ioctl dispatch: arbitrary cmd, buffer of IOCPARM_LEN(cmd) bytes
+	- sleep points as interleaving points: tsleep is replaced by a model
+	  of what other processes may do meanwhile, using the kernel's own
+	  statements for it (sysv/semop removes the semaphore set)
 	- mutation check: run a target against a copy of the source with a
 	  validation removed (CBMC_OVERRIDE_DIR) and expect VIOLATED
 
@@ -167,3 +170,11 @@ Targets
 		reference-counted model.  VIOLATED when the table bound in
 		shm_find_segment_by_shmid is removed, and when
 		shm_delete_mapping leaves a freed segment in the table.
+	sysv/semop
+		One sys_semop with arbitrary arguments on a set of two
+		semaphores, at most two operations, one undo entry.  While
+		the caller sleeps the set may change or be removed; at most
+		two wakeups.  The path that allocates the operation array
+		(more than 8 operations) is not covered.  VIOLATED when the
+		sem_num check is removed, and when the check that the set
+		still exists after the sleep is removed.

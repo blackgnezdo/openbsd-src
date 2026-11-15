@@ -1,0 +1,5 @@
+tsleep_nsec:model_tsleep
+refcnt_init:model_refcnt_init
+refcnt_take:model_refcnt_take
+refcnt_rele:model_refcnt_rele
+pool_get:model_pool_get

@@ -146,7 +146,7 @@ if [ -n "${CBMC_NO_COVER:-}" ]; then
 	echo "reachability not checked (CBMC_NO_COVER)"
 	: > "$W/cover.out"
 else
-timeout "$TMO" cbmc "$W/model.gb" $OPTS --cover location \
+timeout "$TMO" cbmc "$W/model.gb" $OPTS --cover location --slice-formula \
     > "$W/cover.out" 2>&1 || crc=$?
 fi
 [ $crc -ne 124 ] || { echo "RESULT: TIMEOUT (coverage run)"; exit 2; }
