@@ -1,0 +1,4 @@
+sysv_shm.c:*retval = attach_va;
+sysv_shm.c:pool_put(&shm_pool, shmseg);
+sysv_shm.c:shmseg->shm_perm.mode |= SHMSEG_REMOVED;
+sysv_shm.c:shmsegs[segnum] = shmseg;

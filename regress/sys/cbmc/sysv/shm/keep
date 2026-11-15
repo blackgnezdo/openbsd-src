@@ -1,0 +1,11 @@
+sys_shmget
+sys_shmat
+sys_shmdt
+sys_shmctl
+shm_find_segment_by_key
+shm_find_segment_by_shmid
+shm_deallocate_segment
+shm_delete_mapping
+shmget_existing
+shmget_allocate_segment
+shmexit

@@ -1,0 +1,6 @@
+uao_create:model_uao_create
+uao_detach:model_uao_detach
+uao_reference:model_uao_reference
+uvm_map:model_uvm_map
+uvm_unmap:model_uvm_unmap
+pool_get:model_pool_get

@@ -56,6 +56,14 @@ Known limits of the checker
 	  expensive.  acpimadt_attach as a whole (three walks plus a
 	  16-iteration interrupt loop) did not finish in ten minutes;
 	  check the validator and the consumers separately.
+	- The common malloc and pool models allocate untyped byte arrays.
+	  Field accesses through a pointer that may refer to several such
+	  objects are then encoded byte by byte.  sysv/shm went from 2.4
+	  million SAT variables (timeout) to 93 thousand (3 s) when its
+	  pool items were allocated with their real struct layout, using
+	  __CPROVER_allocate(sizeof(struct ...), 1) in a pool_get model
+	  of its own.  Do this when a target is slow and its objects are
+	  reached through table lookups.
 	- CBMC_NO_COVER=1 skips the reachability run to diagnose a slow
 	  target.  The result is then UNQUALIFIED, never VERIFIED.
 
@@ -149,3 +157,13 @@ Targets
 		Two arbitrary ioctl calls on /dev/ipmi with ipmi_cmd replaced
 		by a model that assumes the contract above.  VIOLATED when
 		the data_len check in IPMICTL_SEND_COMMAND is removed.
+	sysv/msg_copy
+		msg_copyin and msg_copyout for an arbitrary length.  Asserts
+		the chain lengths and the returned length.  VIOLATED before
+		msg_copyout compared lengths as size_t.
+	sysv/shm
+		Three arbitrary calls out of shmget, shmat, shmdt and shmctl
+		on a table of two segments, then shmexit.  UVM objects are a
+		reference-counted model.  VIOLATED when the table bound in
+		shm_find_segment_by_shmid is removed, and when
+		shm_delete_mapping leaves a freed segment in the table.
