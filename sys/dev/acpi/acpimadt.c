@@ -81,15 +81,24 @@ int
 acpimadt_validate(struct acpi_madt *madt)
 {
 	caddr_t addr = (caddr_t)(madt + 1);
+	caddr_t end = (caddr_t)madt + madt->hdr.length;
 
-	while (addr < (caddr_t)madt + madt->hdr.length) {
+	if (madt->hdr.length < sizeof(*madt))
+		return (0);
+
+	while (addr < end) {
 		union acpi_madt_entry *entry = (union acpi_madt_entry *)addr;
-		uint8_t length = entry->madt_lapic.length;
+		uint8_t length;
 
+		/* The type and length bytes must be inside the table. */
+		if (end - addr < 2)
+			return (0);
+
+		length = entry->madt_lapic.length;
 		if (length < 2)
 			return (0);
 
-		if (addr + length > (caddr_t)madt + madt->hdr.length)
+		if (length > end - addr)
 			return (0);
 
 		switch (entry->madt_lapic.apic_type) {
