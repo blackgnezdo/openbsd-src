@@ -190,7 +190,9 @@ header_fns=$(goto-instrument --show-goto-functions "$W/all.gb" 2>/dev/null |
 	    if ($i == "file" && $(i+1) ~ /\.h$/) print fn; seen = 1 } }')
 keep=" $(cat "$T/keep" | tr '\n' ' ') $(echo $harness_fns) $(echo $header_fns) \
     kmalloc kfree mallocarray malloc calloc free pool_get pool_put __builtin_bcopy __builtin_memcpy __builtin_memmove memcpy memmove panic \
-    copyin copyout copyinstr m_get m_clget m_free m_freem "
+    copyin copyout copyinstr m_get m_clget m_free m_freem \
+    __builtin_bzero explicit_bzero __builtin_bcmp __builtin_memcmp \
+    timingsafe_bcmp memchr strnlen strlcpy strlcat ffs fls flsl "
 # "nobody" wins over everything else: harness, header and included functions
 # in it lose their bodies too.
 nobody=" $(cat "$T/nobody" | tr '\n' ' ') "
@@ -349,6 +351,14 @@ rc=$crc
 grep -E 'FAILURE$' "$W/check.out" | sed 's/^\[[^]]*\] //' | sort | uniq -c || true
 grep -E '^\*\* [0-9]+ of|^VERIFICATION' "$W/check.out" || true
 phase check "$W/check.out" $rc $t0
+# Functions the check run called without a body: they returned arbitrary
+# values and had no side effects.  One line, at most about 1000 bytes.
+nobody_seen=$(sed -n 's/^\*\*\*\* WARNING: no body for function \(.*\)$/\1/p' \
+    "$W/check.out" | sort -u | tr '\n' ' ' | sed 's/ $//')
+echo "NOBODY ${nobody_seen:--}" | awk '{ if (length($0) > 1000) {
+	n = 0; s = $1; for (i = 2; i <= NF; i++) { if (length(s) + length($i) > 960)
+	    break; s = s " " $i } printf "%s ... (%d more)\n", s, NF - i + 1 }
+	else print }'
 if [ -z "$TMPW" ]; then
 	echo "output in $W"
 elif [ -n "${CBMC_KEEP:-}" ]; then

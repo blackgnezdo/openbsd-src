@@ -1,0 +1,8 @@
+VIOLATED
+reach: one segment
+reach: two segments, split in the first 4 bytes
+reach: a cluster
+reach: a read-only cluster
+reach: an empty first mbuf
+reach: leading space
+!mbufkit_check

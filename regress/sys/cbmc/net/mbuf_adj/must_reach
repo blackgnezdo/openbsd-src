@@ -1,0 +1,5 @@
+uipc_mbuf.c:m->m_data += m->m_len;
+uipc_mbuf.c:m->m_data += len;
+uipc_mbuf.c:mp->m_pkthdr.len -= len;
+uipc_mbuf.c:m->m_len = count;
+uipc_mbuf.c:while ((m = m->m_next) != NULL)

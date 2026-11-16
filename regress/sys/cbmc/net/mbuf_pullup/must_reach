@@ -1,0 +1,8 @@
+uipc_mbuf.c:mbstat_inc(mbs_pullup_copy);
+uipc_mbuf.c:memmove(head, mtod(m0, caddr_t), m0->m_len);
+uipc_mbuf.c:mbstat_inc(mbs_pullup_alloc);
+uipc_mbuf.c:MCLGETL(m0, M_DONTWAIT, space);
+uipc_mbuf.c:while (m->m_len == 0) {
+uipc_mbuf.c:m0->m_next = m; /* link the chain back up */
+uipc_mbuf.c:m_free(m0);
+uipc_mbuf.c:m_freem(m);

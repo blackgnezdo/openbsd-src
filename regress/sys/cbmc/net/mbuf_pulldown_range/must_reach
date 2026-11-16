@@ -1,0 +1,5 @@
+uipc_mbuf2.c:o = m_dup1(n, off, n->m_len - off, M_DONTWAIT);
+uipc_mbuf2.c:m_copydata(n->m_next, 0, tlen, mtod(n, caddr_t) + n->m_len);
+uipc_mbuf2.c:n->m_next->m_data -= hlen;
+uipc_mbuf2.c:MCLGETL(o, M_DONTWAIT, len);
+uipc_mbuf2.c:*offp = off;

@@ -1,2 +1,4 @@
 --unwind 6
 --unwindset usbd_abort_pipe.0:2
+--unwindset strlcpy.0:17
+--unwindset strlcpy.1:17

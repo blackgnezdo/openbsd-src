@@ -1,0 +1,2 @@
+uipc_mbuf2.c:o = m_dup1(n, off, n->m_len - off, M_DONTWAIT);
+uipc_mbuf2.c:*offp = off;

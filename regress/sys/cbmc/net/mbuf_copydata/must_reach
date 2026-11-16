@@ -1,0 +1,2 @@
+uipc_mbuf.c:count = min(m->m_len - off, len);
+uipc_mbuf.c:*off = m->m_len;

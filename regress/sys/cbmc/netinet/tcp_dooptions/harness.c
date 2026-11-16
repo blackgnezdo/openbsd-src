@@ -59,9 +59,9 @@
  * Out of the model, no body: tcpstat_inc (per-CPU counters, listed in
  * nobody), tcp_signature (reads the packet), gettdbbysrcdst (returns an
  * arbitrary pointer that tcp_dooptions never dereferences), tdb_unref,
- * rtable_l2, timingsafe_bcmp (so its two 16-byte reads, sigp and cp + 2,
- * are not checked; both lie inside the option because optlen is
- * TCPOLEN_SIGNATURE).
+ * rtable_l2.  timingsafe_bcmp is replaced by a model that reads the first
+ * and last byte of both areas and returns an arbitrary result; the
+ * libkern model's 16-round loop is too costly here.
  */
 #define TCP_SIGNATURE 1
 #define INET6 1
@@ -88,6 +88,18 @@ model_tcp_sack_option(struct tcpcb *tp, struct tcphdr *th, u_char *cp,
 	__CPROVER_assert(cp[0] == TCPOPT_SACK, "tcp_sack_option: not a SACK option");
 	__CPROVER_assert(cp[1] == optlen, "tcp_sack_option: optlen != cp[1]");
 	sink = cp[optlen - 1];	/* the last byte; the area is contiguous */
+}
+
+int
+model_timingsafe_bcmp(const void *b1, const void *b2, size_t n)
+{
+	const u_char *p1 = b1, *p2 = b2;
+	volatile u_char sink;
+
+	__CPROVER_assert(n == 16, "timingsafe_bcmp: length is not 16");
+	sink = p1[0]; sink = p1[n - 1];
+	sink = p2[0]; sink = p2[n - 1];
+	return nondet_int();
 }
 
 int

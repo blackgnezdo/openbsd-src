@@ -39,8 +39,9 @@ Reading the output
 	file), the PHASE line of the cover run (with its HINT lines), UNREACHED
 	lines for must_reach anchors that were not reached, the failed
 	properties of the check run, the PHASE line of the check run (with
-	its HINT lines), "output in <dir>" and the RESULT line, which is
-	always the last line.  A run that stops early prints fewer of these.
+	its HINT lines), the NOBODY line, "output in <dir>" and the RESULT
+	line, which is always the last line.  A run that stops early prints
+	fewer of these.
 
 	PHASE cover  time=21s symex=0.8s vars=93412 clauses=441764 status=ok
 	PHASE check  time=14s symex=1.1s vars=307014 clauses=1736131 status=ok failed=0
@@ -62,6 +63,18 @@ Reading the output
 		  usually untyped allocations; see "Adding a target", step 3.
 		- neither: split the target at an internal interface
 		  (assume/guarantee split).
+
+	NOBODY f g h ...
+		every function the check run called that has no body
+		(CBMC's "no body for function" warnings), sorted, or
+		"NOBODY -".  Each of them returned an arbitrary value and
+		had no side effects: no memory was read, written or checked.
+		That is intended for hardware access and for subsystems a
+		target leaves out (splraise, pool_wakeup, printf, ...) and
+		a model gap for anything else: a string function, a
+		copy, a lock that protects state the target checks.  Read
+		it on every new target.  Longer than about 1000 bytes it is
+		cut with "... (N more)".
 
 	RESULT line and exit status:
 		RESULT: VERIFIED			0
@@ -148,6 +161,33 @@ What is modelled
 	- <target>/stubflags may select -DMEMCPY_HAVOC: memcpy checks both
 	  regions but stores arbitrary bytes.  Use only where nothing
 	  depends on the copied values.
+	- -DMEMCPY_TRACK (stubflags): memcpy and memmove check both regions,
+	  store nothing, and follow one byte the harness names (common/
+	  mbufkit.h, mbufkit_track): the model keeps the locations that hold
+	  a copy of it, and a content check is a pointer comparison.  For
+	  data inside structures (mbufs): every byte written at a symbolic
+	  offset into a struct costs thousands of SAT variables and turns
+	  later field reads into byte operations; CBMC's memmove into one
+	  mbuf alone was 3.1 million variables.  Values code reads after a
+	  copy are then not the source's; see "Writing a packet parser
+	  target".  Natively the copy is real.
+	- -DMEMCPY_BYTELOOP (stubflags): memcpy and memmove are byte loops
+	  (--unwindset __builtin_memcpy.0:N, __builtin_memmove.0:N and .1:N);
+	  about 7000 variables per byte into an mbuf.
+	- libkern (common/stubs_libkern.c, linked through stubs_alloc.c):
+	  bzero, explicit_bzero, bcmp, memcmp, timingsafe_bcmp, memchr,
+	  strnlen, strlcpy, strlcat, ffs, fls, flsl had no body (sys/systm.h
+	  maps bzero, bcmp and memcmp to compiler builtins; CBMC's library
+	  has none of the others): they returned arbitrary values and
+	  touched no memory.  The models do what sys/lib/libkern does,
+	  byte by byte, so an over-read or overflow is reported; loops are
+	  bounded with --unwindset NAME.0:N (list in the file).  memset,
+	  strlen, strcmp, strncmp, strchr, strrchr, strncpy and strncasecmp
+	  are CBMC's.  strnstr, scanc and skpc have no model.  Natively the
+	  builtins are the C library's.
+	- CBMC_NEW and CBMC_NEW_ARRAY objects are visible to
+	  --memory-leak-check (they were not before: __CPROVER_allocate
+	  bypasses CBMC's leak bookkeeping; selftest mbufkit_new_leak).
 	- panic(9) ends the path and is reported as "panic reached";
 	  malloc(9) panics on requests above its size limit unless
 	  M_CANFAIL is given
@@ -235,6 +275,133 @@ Rules for a harness
 	  runs, no runs started with & or nohup.  Check with ps before you
 	  report, and stop what is yours.
 
+The mbuf kit (common/mbufkit.h)
+	Targets for network code run the kernel's own mbuf library
+	(kern/uipc_mbuf.c, kern/uipc_mbuf2.c: m_get, m_gethdr, m_clget,
+	m_free, m_freem, m_extfree, m_extref, m_pullup, m_pulldown,
+	m_copydata, m_adj, m_split, ...) on chains the kit builds.  Below
+	the mbuf code: pool_get is mbufkit_pool_get (replace file), which
+	returns typed objects (an mbuf is a struct mbuf, a cluster a byte
+	array of the pool's item size, m_ext_refs a typed mirror), and
+	pool_put is mbufkit_pool_put (CBMC's free; the free(9) size check
+	of the common pool model only cost time).  pool_init records item
+	sizes, so the real mbinit() sets everything up; refcnt_* are
+	single-threaded models; NPF is 0, no tags, no M_ZEROIZE.
+	PR_NOWAIT/M_DONTWAIT allocations may fail (mbufkit_nofail = 1 turns
+	that off; mbufkit_nfail counts failures, MBUFKIT_FAILED()).
+
+	Real allocation code or models: the kit also has models of m_get,
+	m_gethdr, m_clget and m_free (replace m_get:mbufkit_m_get, ...).
+	Measured on net/mbuf_pullup (2 segments, len up to MHLEN + 8; an
+	earlier revision of the kit, before the pool_put model):
+	real functions 557,812 variables, check 107 s; models 410,569
+	variables, check 75 s, but symex 16.7 s against 2.7 s.  The real
+	code is used by every target: it is affordable, and the paths the
+	parsers exercise are the kernel's.  The models remain for targets
+	where the real m_free's call through mextfree_fns is too costly.
+
+	What made targets tractable (each measured, see the targets):
+	  - MEMCPY_TRACK (above): with CBMC's memcpy one copy into an mbuf
+	    was 3.1 million variables; with a byte loop 7000 per byte;
+	    with tracking a few pointer comparisons.  The length bound
+	    then hardly matters (m_pullup with len up to 40 or 152: same
+	    formula).
+	  - two segments: m_pullup with three did not finish in 150 s, with
+	    two it takes about 75 s.
+	  - no symbolic modulo: mbufkit_upto(n) clamps instead of
+	    nondet % (n + 1), a divider in the formula.
+	  - mbufs zeroed by mbufkit_pool_get (real items have arbitrary
+	    content: pointer fields read on paths symex cannot rule out
+	    then point anywhere, and m_split ran out of memory).  Reads of
+	    fields the code never set see 0; natively ASan's fill byte or
+	    MSan covers those.
+	  - --unwindset m_tag_delete_chain.1:0 and m_tag_copy_chain.2:0
+	    (no tags; the unwinding assertion proves the loops are not
+	    entered), fptargets binding m_extfree's call.
+	  - shared clusters (m_extref) remain expensive: m_split of a
+	    cluster exploded even with one segment and is covered only
+	    natively.
+
+	API (all in the header, part of harness.c; see the comments there)
+	  MBUFKIT_MAXSEG (2)	most mbufs the builder chains
+	  MBUFKIT_MAXLEN	largest len passed to the builder; set it to
+				the harness bound (> MHLEN forces a cluster for
+				a segment that does not fit)
+	  MBUFKIT_MAXCHAIN	longest chain the checks walk (MAXSEG + 2);
+				--unwind must exceed it
+	  MBUFKIT_MEMTRACK 1	with stubflags -DMEMCPY_TRACK
+	  MBUFKIT_REFS 1	only with the m_free model and shared clusters
+	  mbufkit_init()	first: runs mbinit()
+	  mbufkit_build(len, flags)
+				len arbitrary bytes, 1..MAXSEG mbufs, arbitrary
+				m_len (zero allowed), arbitrary leading space,
+				M_PKTHDR and m_pkthdr.len on the first;
+				MBUFKIT_CLUSTER: a segment may be a cluster,
+				MBUFKIT_RDONLY: a cluster may be read-only,
+				MBUFKIT_ANY both, MBUFKIT_PLAIN neither
+	  mbufkit_upto(n)	arbitrary int in [0, n]
+	  mbufkit_check(m)	well-formedness, asserted (storage bounds,
+				M_PKTHDR only first, m_pkthdr.len = sum of
+				m_len, M_EXT fields, no cycle within MAXCHAIN);
+				mbufkit_check_chain(m, flags) with
+				MBUFKIT_CHK_NOHDR, MBUFKIT_CHK_HDR2
+	  mbufkit_track(&b, m), mbufkit_track_off(&b, m, off),
+	  mbufkit_track_buf(&b, buf, len)
+				follow one byte; mbufkit_same(&b, p) says
+				whether p holds it; mbufkit_ptr(m, off) is the
+				address of packet byte off
+	  mbufkit_len, mbufkit_count, mbufkit_byte
+	  mbufkit_free(m)	m_freem, so that --memory-leak-check holds
+	Selftests mbufkit_*: the builder reaches one segment, a split
+	inside the first 4 bytes, clusters, read-only clusters, an empty
+	first mbuf and leading space; the checker rejects a wrong
+	m_pkthdr.len and data past the storage; a dropped chain is a
+	leak.
+
+Writing a packet parser target
+	For "f(struct mbuf *m, int off, ...) parses a packet": copy
+	net/mbuf_example_parser.
+	  harness.c	#define MAXLEN, MBUFKIT_MAXLEN; #include "mbufkit.h";
+			then the kernel file (#include "foo.c", listed in
+			"included") or nothing (f in "sources")
+			main: mbufkit_init(); m = mbufkit_build(
+			mbufkit_upto(MAXLEN), MBUFKIT_ANY); off =
+			mbufkit_upto(...); call f the way its caller does;
+			if f may free or replace m, take the new pointer;
+			if m survives: mbufkit_check(m); mbufkit_free(m)
+	  sources	kern/uipc_mbuf.c, kern/uipc_mbuf2.c (+ f's file)
+	  keep		the list in net/mbuf_example_parser/keep, plus the
+			mbuf functions f calls (m_pullup, m_pulldown,
+			m_copydata, m_getptr, m_adj, m_dup1, ...) and f
+	  replace	pool_get:mbufkit_pool_get
+			pool_put:mbufkit_pool_put
+	  config	pf.h NPF 0
+	  fptargets	m_extfree.function_pointer_call.1/m_extfree_pool
+	  stubflags	-DMEMCPY_TRACK
+	  opts		--unwind 5, the --unwindset lines of the example,
+			--memory-leak-check, bounds for f's own loops
+	MEMCPY_TRACK means bytes f gets through m_copydata or reads after
+	m_pullup are arbitrary values, not the packet's: fine for a parser
+	that reads each byte once.  If f validates a byte and later reads it
+	again through another copy, that can give a false VIOLATED; use
+	-DMEMCPY_BYTELOOP with a small MAXLEN then (about 7000 variables
+	per byte copied into an mbuf).  Check the NOBODY line.
+	Cost measured (check phase, 4-core host shared with other runs; the
+	cover phase is shorter): the kit alone (mbufkit_ok: build, track,
+	check, free) about 100,000 variables; net/mbuf_copydata 141,000 /
+	25 s; mbuf_adj 283,000 / 22 s; mbuf_split (internal mbufs only)
+	257,000 / 24 s; mbuf_pullup 426,000 / 111 s; mbuf_pulldown
+	1,000,000 / 83 s; the example 431,000 / 54 s.  Symbolic execution
+	is about 15 s of each.  A third segment took m_pullup past 150 s;
+	the length bound costs little with MEMCPY_TRACK; clusters that end
+	up shared (m_extref) are the most expensive thing measured.
+	Start with MBUFKIT_MAXSEG 2 and MAXLEN just above the largest
+	header f pulls up (above MHLEN only if a branch needs it); split a
+	target by argument range or by property when it is slow
+	(net/mbuf_pulldown and its _prefix, _range, _tail).
+	Mutation check: put a copy of f's file with a check removed in a
+	directory and run with CBMC_OVERRIDE_DIR (the example's mutant/).
+
 Targets
 	usb/usps
 		usps_attach followed by usps_detach.  With usbd_open_pipe_intr
@@ -306,3 +473,60 @@ Targets
 		(more than 8 operations) is not covered.  VIOLATED when the
 		sem_num check is removed, and when the check that the set
 		still exists after the sleep is removed.
+	net/mbuf_pullup
+		m_pullup(m, len) on a chain of up to 2 mbufs (internal,
+		cluster or read-only cluster, arbitrary m_len and leading
+		space), packets and len up to MHLEN + 8.  NULL only for a
+		short packet or a failed allocation, chain freed then;
+		otherwise len bytes contiguous, chain well formed, length
+		and content unchanged.  VIOLATED when the alignment slack is
+		left out of the new mbuf's size and when the source m_data is
+		not advanced.
+	net/mbuf_pulldown, _prefix, _range, _tail
+		m_pulldown(m, off, len, &off) with off and len up to
+		MLEN + 8 (24 for _tail), arguments beyond the packet
+		included.  mbuf_pulldown: NULL contract, result on the chain,
+		range contiguous at *offp, chain well formed (the M_PKTHDR
+		duplicate below tolerated); _prefix, _range, _tail: bytes
+		before, in and after the range in place, the range at
+		mtod(n) + *offp.  Split four ways for solver time.  VIOLATED
+		when the "chain too short" check is off by one and when the
+		trailing m_adj is dropped.
+	net/mbuf_pulldown_dup1
+		VIOLATED on the current tree: m_pulldown(m, 0, len, &off)
+		with the range inside a read-only first mbuf inserts a copy
+		with M_PKTHDR and a duplicated packet header as the second
+		mbuf (m_dup1 copies the header for off == 0).  Caller with
+		off 0: net/bfd.c bfd_input.  No memory-safety effect found.
+		Proposed fix (VERIFIED with it): m_dup1 always uses MGET:
+		-	if (off == 0 && (m->m_flags & M_PKTHDR) != 0) {
+		-		MGETHDR(n, wait, m->m_type);
+		-		...m_dup_pkthdr...
+		-		l = MHLEN;
+		-	} else {
+		-		MGET(n, wait, m->m_type);
+		-		l = MLEN;
+		-	}
+		+	MGET(n, wait, m->m_type);
+		+	l = MLEN;
+	net/mbuf_copydata
+		m_copydata(m, off, len, buf) for every range inside a packet
+		of up to 40 bytes into a heap buffer of exactly len bytes.
+		VIOLATED when the offset is not reset for the next mbuf.
+	net/mbuf_adj
+		m_adj(m, req_len), req_len in [-(26), 26] on packets up to 24
+		bytes.  Length max(plen - |req_len|, 0), remaining bytes in
+		place.  VIOLATED when the head trim subtracts req_len instead
+		of what was trimmed, and when the tail trim's count is not
+		clamped at 0.
+	net/mbuf_split
+		m_split(m0, len0, wait): head and tail well formed, lengths
+		len0 and plen - len0, concatenation is the packet; NULL leaves
+		the chain intact.  CBMC: internal mbufs, packets up to 24
+		bytes; natively also clusters (m_extref, reference counts) and
+		the recursive case.  VIOLATED when the head keeps its m_len.
+	net/mbuf_example_parser
+		Worked example for parser targets (see "Writing a packet
+		parser target"): a TLV parser using m_copydata and
+		m_pullup.  VIOLATED with mutant/tlv.c (length check
+		dropped: m_copydata panics).

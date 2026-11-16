@@ -26,9 +26,33 @@
 /* no <stddef.h>: harness.c is built with -nostdinc */
 #define CBMC_SIZE_T_ __typeof__(sizeof(0))
 
-#define CBMC_NEW(type)	((type *)__CPROVER_allocate(sizeof(type), 1))
-#define CBMC_NEW_ARRAY(type, n) \
-	((type *)__CPROVER_allocate(sizeof(type) * (CBMC_SIZE_T_)(n), 1))
+/*
+ * __CPROVER_allocate does not take part in --memory-leak-check (CBMC's
+ * malloc records each object in __CPROVER_memory_leak; free clears it):
+ * CBMC_LEAK_RECORD_ does the same for objects made here.  Statement
+ * expressions keep sizeof(type) at the __CPROVER_allocate call, which is
+ * where CBMC takes the object's type from.  Natively the sanitizer
+ * hooks see every allocation already.
+ */
+#ifdef NATIVE_SHIM_H
+#define CBMC_LEAK_RECORD_(p)	((void)0)
+#else
+extern void *__CPROVER_memory_leak;
+_Bool nondet_bool(void);
+#define CBMC_LEAK_RECORD_(p)	(__CPROVER_memory_leak = nondet_bool() ? \
+	(void *)(p) : __CPROVER_memory_leak)
+#endif
+#define CBMC_NEW(type) ({						\
+	type *cbmc_p_ = (type *)__CPROVER_allocate(sizeof(type), 1);	\
+	CBMC_LEAK_RECORD_(cbmc_p_);					\
+	cbmc_p_;							\
+})
+#define CBMC_NEW_ARRAY(type, n) ({					\
+	type *cbmc_p_ = (type *)__CPROVER_allocate(sizeof(type) *	\
+	    (CBMC_SIZE_T_)(n), 1);					\
+	CBMC_LEAK_RECORD_(cbmc_p_);					\
+	cbmc_p_;							\
+})
 
 _Bool nondet_bool(void);
 char nondet_char(void);

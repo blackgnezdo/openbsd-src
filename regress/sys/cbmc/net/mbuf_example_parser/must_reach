@@ -1,0 +1,4 @@
+tlv.c:tlv_sink = mtod(m, u_int8_t *)[off + 2 + len - 1];
+tlv.c:m_copydata(m, off + 2, len, val);
+tlv.c:return (ENOBUFS);
+uipc_mbuf.c:mbstat_inc(mbs_pullup_alloc);
