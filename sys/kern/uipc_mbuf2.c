@@ -227,19 +227,9 @@ m_dup1(struct mbuf *m, int off, int len, int wait)
 
 	if (len > MAXMCLBYTES)
 		return (NULL);
-	if (off == 0 && (m->m_flags & M_PKTHDR) != 0) {
-		MGETHDR(n, wait, m->m_type);
-		if (n == NULL)
-			return (NULL);
-		if (m_dup_pkthdr(n, m, wait)) {
-			m_free(n);
-			return (NULL);
-		}
-		l = MHLEN;
-	} else {
-		MGET(n, wait, m->m_type);
-		l = MLEN;
-	}
+	/* the copy goes behind m in the chain: never a packet header */
+	MGET(n, wait, m->m_type);
+	l = MLEN;
 	if (n && len > l) {
 		MCLGETL(n, wait, len);
 		if ((n->m_flags & M_EXT) == 0) {
