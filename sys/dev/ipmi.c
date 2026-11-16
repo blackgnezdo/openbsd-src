@@ -555,7 +555,7 @@ smic_recvmsg(struct ipmi_cmd *c)
 
 	sts = smic_write_cmd_data(sc, SMS_CC_START_RECEIVE, NULL);
 	ErrStat(sts != SMS_SC_READ_START, "rstart");
-	for (idx = 0;; ) {
+	for (idx = 0; idx < c->c_maxrxlen; ) {
 		sts = smic_read_data(sc, &sc->sc_buf[idx++]);
 		if (sts != SMS_SC_READ_START && sts != SMS_SC_READ_NEXT)
 			break;
