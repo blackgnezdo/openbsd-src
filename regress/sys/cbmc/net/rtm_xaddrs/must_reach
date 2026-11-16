@@ -1,0 +1,9 @@
+rtsock.c:rtinfo->rti_info[i] = sa;
+rtsock.c:size = sizeof(struct sockaddr_in);
+rtsock.c:size = sizeof(struct sockaddr_in6);
+rtsock.c:size = sizeof(struct sockaddr_dl);
+rtsock.c:size = 4;
+rtsock.c:case RTAX_DNS:
+rtsock.c:maxlen = RTLABEL_LEN;
+rtsock.c:len = strnlen(sa->sa_data, maxlen);
+rtsock.c:return (0);
