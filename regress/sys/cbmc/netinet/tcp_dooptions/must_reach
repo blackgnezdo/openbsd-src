@@ -1,0 +1,9 @@
+tcp_input.c:oi->maxseg = mss;
+tcp_input.c:tp->requested_s_scale = min(cp[2], TCP_MAX_WINSHIFT);
+tcp_input.c:oi->ts_ecr = ntohl(oi->ts_ecr);
+tcp_input.c:tp->t_flags |= TF_RCVD_TSTMP;
+tcp_input.c:tp->t_flags |= TF_SACK_PERMIT;
+tcp_input.c:tcp_sack_option(tp, th, cp, optlen);
+tcp_input.c:optlen = 1;
+tcp_input.c:sigp = cp + 2;
+tcp_input.c:tcpstat_inc(tcps_rcvgoodsig);

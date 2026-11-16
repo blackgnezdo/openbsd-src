@@ -1,0 +1,7 @@
+tcp_input.c:tcpstat_inc(tcps_sack_rcv_opts);
+tcp_input.c:tp->snd_numholes = 1;
+tcp_input.c:temp->next = cur->next;
+tcp_input.c:p->next = temp;
+tcp_input.c:pool_put(&sackhl_pool, cur);
+tcp_input.c:pool_put(&sackhl_pool, p);
+tcp_input.c:cur->start = sack.end;
