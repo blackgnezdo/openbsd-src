@@ -1429,13 +1429,17 @@ rtm_xaddrs(caddr_t cp, caddr_t cplim, struct rt_addrinfo *rtinfo)
 
 		if ((rtinfo->rti_addrs & (1U << i)) == 0)
 			continue;
-		if (i >= RTAX_MAX || cp + sizeof(socklen_t) > cplim)
+		if (i >= RTAX_MAX || cplim - cp < (long)sizeof(socklen_t))
 			return (EINVAL);
 		sa = (struct sockaddr *)cp;
-		if (cp + sa->sa_len > cplim)
+		if (sa->sa_len > cplim - cp)
 			return (EINVAL);
 		rtinfo->rti_info[i] = sa;
-		ADVANCE(cp, sa);
+		/* ROUNDUP may pass cplim: stop at cplim, never beyond */
+		if ((long)ROUNDUP(sa->sa_len) >= cplim - cp)
+			cp = cplim;
+		else
+			ADVANCE(cp, sa);
 	}
 	/*
 	 * Check that the address family is suitable for the route address
