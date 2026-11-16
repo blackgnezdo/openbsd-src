@@ -1,0 +1,5 @@
+bpf_filter.c:A = ops->ldw(pkt, pc->k, &err);
+bpf_filter.c:k = (A == pc->k) ? pc->jt : pc->jf;
+bpf_filter.c:mem[pc->k] = A;
+bpf_filter.c:A /= X;
+bpf_filter.c:return BPF_CLASS(f[len - 1].code) == BPF_RET;
