@@ -1,0 +1,10 @@
+ipmi_cmd
+ipmi_cmd_poll
+ipmi_sendcmd
+ipmi_recvcmd
+cmn_buildmsg
+smic_sendmsg
+smic_recvmsg
+smic_wait
+smic_write_cmd_data
+smic_read_data

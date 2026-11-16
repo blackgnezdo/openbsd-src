@@ -1,0 +1,3 @@
+ipmi.c:memcpy(c->c_data, buf + sc->sc_if->datarcv, c->c_rxlen);
+ipmi.c:sts = smic_write_cmd_data(sc, SMS_CC_END_RECEIVE, NULL);
+ipmi.c:ErrStat(sts != SMS_SC_READ_END, "rend");
