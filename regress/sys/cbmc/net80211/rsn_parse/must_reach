@@ -1,0 +1,5 @@
+ieee80211_input.c:rsn->rsn_ciphers |= ieee80211_parse_rsn_cipher(frm);
+ieee80211_input.c:rsn->rsn_akms |= ieee80211_parse_rsn_akm(frm);
+ieee80211_input.c:rsn->rsn_pmkids = frm;
+ieee80211_input.c:if (rsn->rsn_groupmgmtcipher != IEEE80211_CIPHER_BIP)
+ieee80211_input.c:return ieee80211_parse_rsn_body(ic, frm + 6, frm[1] - 4, rsn);

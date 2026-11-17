@@ -719,6 +719,17 @@ netinet6/nd6_options
 	check removed) is VIOLATED on the decreases clause.  Native:
 	CLEAN.
 
+net80211/rsn_parse
+	ieee80211_parse_rsn() and ieee80211_parse_wpa() of
+	sys/net80211/ieee80211_input.c on an arbitrary element of 0..64
+	body bytes (flat buffer, the real limit is 255: 80 bytes took
+	172 s, 96 timed out), bounded unwinding.  VERIFIED, with the
+	postcondition that the PMKID list lies inside the element.
+	mutant_prefix/ is the source whose length tests formed frm + k
+	before comparing with the end (frm + 4 * 0xffff for a large
+	count): VIOLATED.  mutant/ (pairwise list length check removed)
+	is VIOLATED.  Native: CLEAN.
+
 net/pppoe_disc
 	pppoe_dispatch_disc_pkt() of sys/net/if_pppoe.c on discovery
 	packets of up to 26 bytes, contract models, bounded unwinding.

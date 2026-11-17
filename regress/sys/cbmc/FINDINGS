@@ -44,6 +44,14 @@ sys/netinet6/ip6_input.c, ip6_process_hopopts (read)
 	Returns -1 after icmp6_error() without clearing *mp, contrary to
 	its comment; the one caller does not read *mp after -1.
 
+sys/net80211/ieee80211_input.c, ieee80211_parse_rsn_body (read, from
+net80211/rsn_parse)
+	rsn_npmkids is a u_int8_t (ieee80211_priv.h) and receives the
+	16-bit PMKID count: a count of 256 or more is truncated, and the
+	group management cipher is then read from inside the PMKID list.
+	Bounds hold (the target's postcondition); a parsing mismatch
+	only.
+
 Gaps in the targets themselves
 
 netinet/tcp_dooptions
