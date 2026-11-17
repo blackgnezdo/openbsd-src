@@ -1,0 +1,2 @@
+__builtin_bcopy:model_bcopy
+sppp_cp_send:model_sppp_cp_send

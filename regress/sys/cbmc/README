@@ -534,6 +534,16 @@ When a run exhausts time or memory
 	   that satisfies the invariant and the negated loop condition.
 	   native.sh ignores the file and runs the real loop.
 
+	   A loop contract does not fit, and the fallback is a bounded
+	   --unwindset on a small packet, when
+	   - the loop body allocates: assigns cannot name objects that do
+	     not exist before the loop (the m_pulldown model in the tag
+	     loop of net/pppoe_disc; 26-byte packets, check 250 s);
+	   - the invariant would have to describe data not yet visited
+	     (a second pass over an option chain that a first pass
+	     validated: net/sppp_lcp_rcr; 24-byte packets, check 15 s).
+	   An empty loops file means no contracts.
+
 	4. The solver dominates (symex small, time in the solver): an
 	   external solver is a constant factor only.  net/rtm_xaddrs:
 	   default 380 s, --sat-solver cadical 290 s,
@@ -708,3 +718,11 @@ netinet6/nd6_options
 	past the area, then compared): VIOLATED.  mutant/ (zero-length
 	check removed) is VIOLATED on the decreases clause.  Native:
 	CLEAN.
+
+net/pppoe_disc
+	pppoe_dispatch_disc_pkt() of sys/net/if_pppoe.c on discovery
+	packets of up to 26 bytes, contract models, bounded unwinding.
+
+net/sppp_lcp_rcr
+	sppp_lcp_RCR() of sys/net/if_spppsubr.c on configure requests of
+	up to 20 option bytes (flat buffer), bounded unwinding.

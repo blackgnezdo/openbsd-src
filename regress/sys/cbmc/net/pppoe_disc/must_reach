@@ -1,0 +1,7 @@
+if_pppoe.c:sc = pppoe_find_softc_by_hunique(
+if_pppoe.c:ac_cookie_len = len;
+if_pppoe.c:relay_sid_len = len;
+if_pppoe.c:memcpy(&max_payload, mtod(n, caddr_t) + noff,
+if_pppoe.c:err_msg = "SERVICE NAME ERROR";
+if_pppoe.c:goto breakbreak;
+if_pppoe.c:is too long

@@ -1,0 +1,5 @@
+if_spppsubr.c:sppp_cp_send (sp, PPP_LCP, CONF_ACK,
+if_spppsubr.c:sp->pp_flags |= PP_NEEDAUTH;
+if_spppsubr.c:nmagic = ~sp->lcp.magic;
+if_spppsubr.c:sp->lcp.their_mru = p[2] * 256 + p[3];
+if_spppsubr.c:p[2] = sp->myauth.proto >> 8;
