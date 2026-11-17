@@ -467,8 +467,13 @@ When a run exhausts time or memory
 		} ] } ] }
 
 	   Recipe:
-	   - loop_id is the N of the loop's name FUNCTION.N in the HINT
-	     and "Unwinding loop" lines.
+	   - loop_id is the N of the loop's name FUNCTION.N.  List the
+	     names with their file and line, without a cbmc run:
+		CBMC_WORKDIR=<dir> CBMC_TIMEOUT=2 sh cbmc.sh <target>
+		goto-instrument --show-loops <dir>/model.gb
+	     (<dir>/unwound.gb once the target has a loops file).  The
+	     "Unwinding loop" lines of cbmc count loops of inlined
+	     callees under the caller and do not give the id.
 	   - invariants: what ties the loop's cursor to the end of the
 	     data (pointer + remaining == end).  State the end as a ghost
 	     global that the harness sets (g_end); the loop may write the
