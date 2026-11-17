@@ -495,6 +495,18 @@ When a run exhausts time or memory
 	     is missing; add it and run again until none is left.  Leave
 	     the clause out and uninitialised pointer locals make the
 	     checks fail.
+	   - In a clause use builtin C type names only (unsigned char,
+	     not u_char: a typedef name crashes goto-instrument without a
+	     message), and no __CPROVER_pointer_object or
+	     __CPROVER_pointer_offset (they become bodiless calls, show
+	     up under NOBODY and constrain nothing).
+	   - A pointer the loop writes (an output field) cannot be bounded
+	     with < or > in the invariant: the havocked pointer may be in
+	     another object.  State it as equalities with the ghost end
+	     pointer (p == 0 || p == g_end - 8 || ...);
+	     netinet6/nd6_options generates such a clause.
+	   - "loop invariant is preserved" gives no trace.  Find the
+	     failing conjunct by removing conjuncts one at a time.
 	   - The clauses are parsed as plain C expressions: no macros.
 	     Write m->m_hdr.mh_len for m_len, 0 for NULL, numbers for
 	     flags.
@@ -686,3 +698,13 @@ netinet6/ip6_hopopts_input
 	target above assumes: the option bytes are readable and
 	contiguous within one mbuf's m_len.  VERIFIED, about 100 s;
 	mutant/ (second header fetch too short) is VIOLATED.
+
+netinet6/nd6_options
+	nd6_options() of sys/netinet6/nd6.c on an arbitrary flat option
+	area of 0..64 bytes, loop contract.  VERIFIED, with the
+	postcondition that every pointer left in *ndopts is an option
+	inside the area.  mutant_prefix/ is the source that formed
+	nd_opt + olen before the bounds test (a pointer up to 2040 bytes
+	past the area, then compared): VIOLATED.  mutant/ (zero-length
+	check removed) is VIOLATED on the decreases clause.  Native:
+	CLEAN.
