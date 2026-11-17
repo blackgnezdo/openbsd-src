@@ -1,0 +1,67 @@
+Open findings and observations from the proof targets.
+
+One entry per item: where, what, how it was established, what is
+undecided.  Remove an entry when the fix is committed and its target
+has a mutant_prefix/.  "read" = established by reading the source
+only; "cbmc" / "native" = reproduced by that engine.
+
+Unfixed, with a failing target
+
+ffs/mountfs (cbmc)
+	ffs_mountfs() trusts superblock geometry: fs_sbsize smaller than
+	struct fs; fs_fsize 0; fs_cssize reaching a panic; fs_bsize
+	against fs_frag * fs_fsize overflow; fs_ncg overflow.
+	Undecided: whether to draft validation (an ffs_validate), and
+	whether a reachable panic() on a corrupt image is a finding.
+
+acpi/amlprims (cbmc)
+	The AML primitive readers read past the end of the scope; the
+	interface carries no bound.  A fix changes the interface.
+
+Unfixed, no target
+
+sys/dev/acpi/acpimadt.c, acpimadt_attach (read)
+	ioapic_find_bybase() result dereferenced without a NULL test.
+
+sys/net/rtsock.c, rtm_xaddrs (read)
+	A break ends the validation loop early, leaving later sockaddrs
+	unchecked.  Undecided: removing it may reject messages routing
+	daemons send today.
+
+sys/dev/ipmi.c (read)
+	kcs_wait() loops with no bound while the device holds IBF.
+	smic_recvmsg() counts a byte in c_rxlen when the read failed.
+	SMIC start/end status checks only print in debug builds.
+	kcs_recvmsg() and smic_recvmsg() accept an over-long reply as a
+	truncated success if the device then reports ready.
+
+sys/netinet/tcp_input.c, SACK handling (read, from netinet/tcp_sack_option)
+	A zero-length hole can be created; snd_numholes can go stale;
+	rcv_lastsack relies on an invariant stated nowhere.  None
+	verified beyond the reading.
+
+sys/netinet6/ip6_input.c, ip6_process_hopopts (read)
+	Returns -1 after icmp6_error() without clearing *mp, contrary to
+	its comment; the one caller does not read *mp after -1.
+
+Gaps in the targets themselves
+
+netinet/tcp_dooptions
+	The native engine never reaches tcpstat_inc(tcps_rcvgoodsig);
+	CBMC does.  Cause not diagnosed.
+netinet/ip_dooptions
+	Native run VACUOUS in the default time: the source-route forward
+	anchor is not reached.
+net/mbuf_split
+	The cluster/reference path and its recursion are covered
+	natively only.
+net/pppoe_disc, net/sppp_lcp_rcr
+	Bounded to 26 and 24 bytes; no loop contract fits (README "When
+	a run exhausts time or memory").
+netinet6/ip6_hopopts_input
+	Packets of up to 56 bytes; 72 timed out.
+common/mbufcontract.h
+	The contract models are hand-written; nothing ties them
+	mechanically to the net/mbuf_* proofs of the real functions.
+no expect.native for most targets
+	The native suite pass (suite.sh -n) has not been recorded.
