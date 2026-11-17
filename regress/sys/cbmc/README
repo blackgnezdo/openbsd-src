@@ -110,6 +110,32 @@ Reading the output
 	it stops its cbmc process first.  SIGKILL cannot be caught: after a
 	kill -9 of the script the cbmc may still be running.
 
+Running the suite
+	sh suite.sh [-n] [target-dir ...]
+
+	Runs every target (every directory with a harness.c, except
+	selftest/, which has its own runner) one after the other, or only
+	the named ones, and compares each RESULT word with the target's own
+	files:
+		expect		first line: the expected RESULT word of cbmc.sh
+				(VERIFIED, VIOLATED, ...).  A target without it
+				is not run and counts as a failure.
+		timeout		optional: seconds, exported as CBMC_TIMEOUT for
+				that target (default 300).  Record it here when
+				the check phase needs more than the default.
+		expect.native	optional: the expected RESULT word of native.sh
+				(CLEAN, FINDING, VACUOUS).
+	-n runs native.sh (default duration) instead of cbmc.sh, and compares
+	with expect.native, which is then required; the engines are not run
+	together.  Output is one line per target,
+		PASS|FAIL target result expected [check=Ns vars=N]
+	(check time and variables from the PHASE check line), the tail of the
+	output of a failed run, and "suite: N passed, M failed, S s".  Exit
+	status is non-zero if anything failed.  SUITE_LOGDIR=<dir> keeps the
+	complete output of every target.  Change a target's expect file only
+	together with the change that explains the new result: a shared model
+	that turns VERIFIED into VACUOUS shows up here.
+
 Run budget
 	With CBMC_BUDGET_FILE=<path> every invocation appends one line to the
 	file: start time (epoch seconds), target, final RESULT and wall
@@ -402,6 +428,82 @@ Writing a packet parser target
 	Mutation check: put a copy of f's file with a check removed in a
 	directory and run with CBMC_OVERRIDE_DIR (the example's mutant/).
 
+When a run exhausts time or memory
+
+	Read the PHASE line first; the remedy depends on where the cost is.
+	Measured on netinet/ip_dooptions (40 option bytes), which ran out
+	of memory on the real mbuf code:
+
+	1. Out of memory with vars=0 after a few seconds of symex: look for
+	   an object of symbolic size (__CPROVER_allocate(n, ...) with an
+	   arbitrary n) that is read through a struct pointer.  Allocate a
+	   constant size and place the data at the END of the object, so
+	   that an overrun is still out of bounds (mc_seg in
+	   common/mbufcontract.h).  4 option bytes: out of memory -> 7 s.
+
+	2. Symex dominated by library code below the function under test:
+	   prove the function against contract models of the library
+	   instead (assume/guarantee).  For mbufs: include
+	   common/mbufcontract.h instead of mbufkit.h and leave
+	   kern/uipc_mbuf*.c out of sources.  The models state what
+	   m_pullup, m_pulldown, m_copydata, m_adj and m_freem promise;
+	   the net/mbuf_* targets are the proofs of the real functions.
+	   Pointers kept across m_pullup are freed by the model, data past
+	   m_len is out of bounds.
+
+	3. Cost grows with the iterations of a loop in the function under
+	   test (the HINT names it; time and vars multiply with the
+	   bound): give the loop a contract in <target>/loops and it is
+	   checked as ONE arbitrary iteration.  40 iterations: out of
+	   memory -> 39 s.  The file is the JSON of goto-instrument
+	   --loop-contracts-file:
+
+		{ "functions": [ { "ip_dooptions": [ {
+		    "loop_id": "0",
+		    "invariants": "cnt >= 0 && cnt <= 40 && cp + cnt == g_end",
+		    "decreases": "cnt",
+		    "assigns": "cnt, cp, ..., __CPROVER_object_whole(g_end)",
+		    "symbol_map": "cnt,ip_dooptions::1::cnt;cp,ip_dooptions::1::cp;..."
+		} ] } ] }
+
+	   Recipe:
+	   - loop_id is the N of the loop's name FUNCTION.N in the HINT
+	     and "Unwinding loop" lines.
+	   - invariants: what ties the loop's cursor to the end of the
+	     data (pointer + remaining == end).  State the end as a ghost
+	     global that the harness sets (g_end); the loop may write the
+	     packet, so do not read the end from the packet.
+	   - decreases: an int expression that gets smaller every
+	     iteration; this replaces the unwinding assertion.
+	   - symbol_map: every local of the function used in the three
+	     clauses, as name,FUNCTION::1::name (list them with
+	     goto-instrument --show-symbol-table on model.gb of a
+	     CBMC_KEEP=1 run if the scope number is not 1).
+	   - assigns: start with the locals the loop writes and
+	     __CPROVER_object_whole(<pointer into the packet>).  Run; every
+	     "Check that X is assignable: FAILURE" names a location that
+	     is missing; add it and run again until none is left.  Leave
+	     the clause out and uninitialised pointer locals make the
+	     checks fail.
+	   - Remove the loop's --unwindset from opts.
+	   - "Check that loop invariant is preserved: FAILURE" on the
+	     unmodified source means the invariant is too weak or wrong,
+	     not that the kernel is: strengthen it.  With all contract
+	     checks passing, other failures are findings as usual.
+	   - The mutation check is mandatory for a target with loops: a
+	     removed length check must give VIOLATED (ip_dooptions/mutant).
+	   Everything after the loop is checked from an arbitrary state
+	   that satisfies the invariant and the negated loop condition.
+	   native.sh ignores the file and runs the real loop.
+
+	4. The solver dominates (symex small, time in the solver): an
+	   external solver is a constant factor only.  net/rtm_xaddrs:
+	   default 380 s, --sat-solver cadical 290 s,
+	   --external-sat-solver cadical 234 s.  Prefer 2 and 3.
+
+	Splitting into cases by packet length did not help ip_dooptions:
+	the single case of 40 option bytes ran out of memory by itself.
+
 Targets
 	usb/usps
 		usps_attach followed by usps_detach.  With usbd_open_pipe_intr
@@ -451,6 +553,17 @@ Targets
 		anything.  Asserts that the reply fits the caller's buffer.
 		VIOLATED before ipmi_recvcmd checked the reply length and
 		bt_recvmsg used a counter wider than the length byte.
+	ipmi/transport_smic
+		One ipmi_cmd over the SMIC interface with a BMC that
+		answers anything.  Asserts that the reply fits the caller's
+		buffer and that nothing is stored in sc_buf beyond the part
+		ipmi_recvcmd lends (c_maxrxlen + datarcv); the loops of
+		smic_sendmsg and smic_recvmsg terminate (unwinding
+		assertions).  VIOLATED before smic_recvmsg bounded its read
+		loop by c_maxrxlen (mutant/ipmi.c is that file).  A reply
+		longer than the buffer ends the loop and fails on the end
+		status like kcs_recvmsg; the model's status reads are
+		biased towards 0xc0-0xc7 for the native engine only.
 	ioctl/ipmi
 		Two arbitrary ioctl calls on /dev/ipmi with ipmi_cmd replaced
 		by a model that assumes the contract above.  VIOLATED when
@@ -493,22 +606,15 @@ Targets
 		when the "chain too short" check is off by one and when the
 		trailing m_adj is dropped.
 	net/mbuf_pulldown_dup1
-		VIOLATED on the current tree: m_pulldown(m, 0, len, &off)
-		with the range inside a read-only first mbuf inserts a copy
-		with M_PKTHDR and a duplicated packet header as the second
-		mbuf (m_dup1 copies the header for off == 0).  Caller with
-		off 0: net/bfd.c bfd_input.  No memory-safety effect found.
-		Proposed fix (VERIFIED with it): m_dup1 always uses MGET:
-		-	if (off == 0 && (m->m_flags & M_PKTHDR) != 0) {
-		-		MGETHDR(n, wait, m->m_type);
-		-		...m_dup_pkthdr...
-		-		l = MHLEN;
-		-	} else {
-		-		MGET(n, wait, m->m_type);
-		-		l = MLEN;
-		-	}
-		+	MGET(n, wait, m->m_type);
-		+	l = MLEN;
+		m_pulldown(m, 0, len, &off) with the range inside a
+		read-only first mbuf: m_dup1 copied the packet header for
+		off == 0 and the copy became the second mbuf, with M_PKTHDR
+		and a duplicated header.  Caller with off 0: net/bfd.c
+		bfd_input.  No memory-safety effect found.  Fixed: m_dup1
+		always uses MGET and MLEN (a cluster above that).  VERIFIED;
+		mutant/uipc_mbuf2.c is the pre-fix file and keeps the
+		finding (CBMC_OVERRIDE_DIR=net/mbuf_pulldown_dup1/mutant:
+		VIOLATED).
 	net/mbuf_copydata
 		m_copydata(m, off, len, buf) for every range inside a packet
 		of up to 40 bytes into a heap buffer of exactly len bytes.
@@ -530,3 +636,11 @@ Targets
 		parser target"): a TLV parser using m_copydata and
 		m_pullup.  VIOLATED with mutant/tlv.c (length check
 		dropped: m_copydata panics).
+
+netinet/ip_dooptions
+	ip_dooptions() of sys/netinet/ip_input.c on an arbitrary IP header
+	of 6..15 words, on the contract models (common/mbufcontract.h),
+	with the option loop under a loop contract (loops).  VERIFIED:
+	no out-of-bounds access, the walk ends (decreases clause), the
+	chain is intact on return 0.  mutant/ (optlen > cnt removed) is
+	VIOLATED.  About 75 s.

@@ -1,0 +1,6 @@
+ip_input.c:save_rte(m, cp, ip->ip_src);
+ip_input.c:forward = !IN_MULTICAST(ip->ip_dst.s_addr);
+ip_input.c:code = ICMP_UNREACH_HOST;
+ip_input.c:if (ifa_ifwithaddr(sintosa(&ipaddr),
+ip_input.c:ntime = iptime();
+ip_input.c:icmp_error(m, type, code, 0, 0);

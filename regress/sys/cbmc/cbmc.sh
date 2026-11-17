@@ -228,6 +228,17 @@ done
 goto-instrument $args "$W/bound.gb" "$W/model.gb" > "$W/replace.out" 2>&1 ||
     { cat "$W/replace.out" >&2; exit 2; }
 
+# <target>/loops: loop contracts (invariant, decreases, assigns) in the
+# JSON format of goto-instrument --loop-contracts-file.  A loop with a
+# contract is checked as one arbitrary iteration instead of being unwound.
+if [ -s "$T/loops" ]; then
+	mv "$W/model.gb" "$W/unwound.gb"
+	goto-instrument --loop-contracts-file "$T/loops" \
+	    --apply-loop-contracts "$W/unwound.gb" "$W/model.gb" \
+	    > "$W/loops.out" 2>&1 ||
+	    { grep -v 'no body for function' "$W/loops.out" >&2; exit 2; }
+fi
+
 OPTS="$(cat "$T/opts" | tr '\n' ' ') --object-bits 12"
 TMO=${CBMC_TIMEOUT:-300}
 MEMMB=${CBMC_MEMLIMIT_MB:-6000}
