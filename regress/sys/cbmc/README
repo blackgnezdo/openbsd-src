@@ -670,12 +670,11 @@ netinet/ip_dooptions
 netinet6/ip6_hopopts
 	ip6_process_hopopts() of sys/netinet6/ip6_input.c on an arbitrary
 	option area of 0..32 bytes behind an IPv6 header, contract models,
-	loop contract.  VIOLATED: the six icmp6_error offset arguments
-	"erroff + opt + k - opthead" form the pointer erroff + opt, which
-	can lie past the mbuf's data (pointer arithmetic outside the
-	object; nothing is dereferenced).  With the operands reordered
-	the target is VERIFIED.  mutant/ (PadN length check removed)
-	adds an out-of-bounds read of opt[1].  Native: CLEAN.
+	loop contract.  VERIFIED.  mutant_prefix/ is the source before
+	the icmp6_error offset arguments were reordered ("erroff + opt +
+	k - opthead" formed the pointer erroff + opt, which can lie past
+	the mbuf's data): VIOLATED.  mutant/ (PadN length check removed)
+	is VIOLATED with an out-of-bounds read of opt[1].  Native: CLEAN.
 
 netinet6/ip6_hopopts_input
 	ip6_hopopts_input() on packets of up to 56 bytes with
