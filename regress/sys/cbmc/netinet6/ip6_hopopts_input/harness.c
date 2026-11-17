@@ -30,6 +30,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
+#define MC_COPY_LOOP
 #include "mbufcontract.h"
 
 #include <sys/protosw.h>

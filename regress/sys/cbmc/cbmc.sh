@@ -49,6 +49,7 @@ START=$(date +%s)
 NAME=$1
 
 # Run budget: one line per run in $CBMC_BUDGET_FILE, checked before any work.
+[ -z "${CBMC_DRY:-}" ] || unset CBMC_BUDGET_FILE
 if [ -n "${CBMC_BUDGET_FILE:-}" ]; then
 	BUDGET=${CBMC_BUDGET:-20}
 	used=0
@@ -233,14 +234,36 @@ goto-instrument $args "$W/bound.gb" "$W/model.gb" > "$W/replace.out" 2>&1 ||
 # contract is checked as one arbitrary iteration instead of being unwound.
 if [ -s "$T/loops" ]; then
 	mv "$W/model.gb" "$W/unwound.gb"
-	goto-instrument --loop-contracts-file "$T/loops" \
+	goto-instrument --show-symbol-table "$W/unwound.gb" \
+	    > "$W/symtab.txt" 2>/dev/null
+	python3 "$HERE/loopmap.py" "$T/loops" "$W/symtab.txt" \
+	    "$W/loops.json" || { echo "loops: not valid JSON" >&2; exit 2; }
+	goto-instrument --loop-contracts-file "$W/loops.json" \
 	    --apply-loop-contracts "$W/unwound.gb" "$W/model.gb" \
 	    > "$W/loops.out" 2>&1 ||
 	    { grep -v 'no body for function' "$W/loops.out" >&2; exit 2; }
 fi
 
+# CBMC_DRY=1: stop here.  The model is built and the loop contracts are
+# applied, so configuration errors show; the loops of the functions under
+# test are listed with the ids a loops file or --unwindset needs.  Not
+# counted in the run budget.
+if [ -n "${CBMC_DRY:-}" ]; then
+	lsrc="$W/model.gb"; [ -f "$W/unwound.gb" ] && lsrc="$W/unwound.gb"
+	goto-instrument --show-loops "$lsrc" 2>/dev/null |
+	    awk '/^Loop /{ id = $2; sub(/:$/, "", id) }
+		/^  file /{ n = split($2, a, "/");
+		    print "LOOP " id " " a[n] ":" $4 }'
+	echo "RESULT: DRY (model built, no check)"
+	exit 0
+fi
+
 OPTS="$(cat "$T/opts" | tr '\n' ' ') --object-bits 12"
-TMO=${CBMC_TIMEOUT:-300}
+# <target>/timeout: the target's own limit, for targets known to need more
+# than the default.
+TMO=300
+[ -f "$T/timeout" ] && TMO=$(sed -n 1p "$T/timeout")
+TMO=${CBMC_TIMEOUT:-$TMO}
 MEMMB=${CBMC_MEMLIMIT_MB:-6000}
 
 # run_cbmc OUTFILE ARGS...: run cbmc under the time and memory limits with
@@ -303,6 +326,10 @@ phase() {
 		    sep = ", " }')
 		echo "HINT $pn: symbolic execution dominates (symex $sxs of ${pt}s): loop bounds are probably too large."
 		echo "HINT $pn: most unwound loops: ${top:-none listed}; bound them with --unwindset ID:N in opts, or shrink the model's sizes."
+		[ -s "$T/loops" ] ||
+		    echo "HINT $pn: if the loop is in the function under test, give it a loop contract instead (README 'When a run exhausts time or memory', 3; CBMC_DRY=1 lists the loop ids)."
+	elif [ "$PSTATUS" = oom ] && [ "$pv" -eq 0 ]; then
+		echo "HINT $pn: out of memory before the first solver call although symex was short ($sxs): look for an object of symbolic size (an allocation with an arbitrary length) read through a struct pointer; allocate a constant size with the data at the end (README 'When a run exhausts time or memory', 1)."
 	elif [ "$pv" -gt 500000 ] || [ "$PSTATUS" = oom ]; then
 		echo "HINT $pn: the solver stage is the cost ($pv variables so far, symex only $sxs): usually untyped allocations (if the harness uses CBMC_NEW already, the target is simply large: split it)."
 		echo "HINT $pn: allocate objects reached through tables or lists with CBMC_NEW (README, 'Adding a target', step 3); worked example sysv/shm/harness.c."

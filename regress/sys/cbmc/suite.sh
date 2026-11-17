@@ -2,7 +2,7 @@
 #
 # Run every target and compare the result with the target's own files.
 #
-# usage: sh suite.sh [-n] [target-dir ...]
+# usage: sh suite.sh [-n | -m] [target-dir ...]
 #
 # Without arguments every directory below this one that has a harness.c,
 # except selftest/, is a target (the selftests have their own runner,
@@ -21,6 +21,9 @@
 # -n runs native.sh (default duration) instead of cbmc.sh, and only that:
 # the two engines are not run together, run the suite twice to get both.
 #
+# -m also runs each target on every <target>/mutant*/ directory (kernel
+# files with a defect put back, CBMC_OVERRIDE_DIR) and expects VIOLATED.
+#
 # One line per target:
 #   PASS|FAIL target result expected [check=<s>s vars=<n>]
 # check and vars come from the PHASE check line of cbmc.sh ("-" if the
@@ -31,9 +34,11 @@
 # is non-zero if anything failed.
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-engine=cbmc.sh; expfile=expect
+engine=cbmc.sh; expfile=expect; mutants=""
 if [ "${1:-}" = -n ]; then
 	engine=native.sh; expfile=expect.native; shift
+elif [ "${1:-}" = -m ]; then
+	mutants=1; shift
 fi
 
 if [ $# -gt 0 ]; then
@@ -83,6 +88,23 @@ for t in $targets; do
 		echo "FAIL $t $got $want$info"; fail=$((fail + 1))
 		tail -15 "$out" | sed 's/^/    | /'
 	fi
+	# -m: every <target>/mutant*/ directory is a set of kernel files with
+	# a defect put back; the target must be VIOLATED on each.
+	[ -n "$mutants" ] && [ $engine = cbmc.sh ] &&
+	for md in "$T"/mutant*/; do
+		[ -d "$md" ] || continue
+		( [ -n "$to" ] && export CBMC_TIMEOUT=$to
+		  CBMC_OVERRIDE_DIR=${md%/} CBMC_NO_COVER=1 \
+		    exec sh "$HERE/cbmc.sh" "$T" ) > "$out" 2>&1 < /dev/null
+		got=$(sed -n '/^RESULT: /{s///;s/ (.*//;p;}' "$out" | tail -1)
+		mn=$t/$(basename "$md")
+		if [ "${got:-ERROR}" = VIOLATED ]; then
+			echo "PASS $mn VIOLATED VIOLATED"; pass=$((pass + 1))
+		else
+			echo "FAIL $mn ${got:-ERROR} VIOLATED"
+			fail=$((fail + 1))
+		fi
+	done
 done
 echo "suite: $pass passed, $fail failed, $(($(date +%s) - start)) s"
 [ $fail -eq 0 ]

@@ -46,9 +46,15 @@
  *  an inline of sys/mbuf.h and calls the m_freem here).
  *
  * MC_MAXLEN (default 64) bounds the packet; define it before including.
- * Loops in this file run MC_MAXLEN or MC_MAXSEG times at most; opts
- * needs --unwind above MC_MAXSEG and
- *	--unwindset mc_copy.0:<MC_MAXLEN+1>
+ *
+ * Under CBMC nothing in this file loops: the two mbufs are handled one
+ * after the other and copies are stated with a quantifier (mc_copy).
+ * goto-instrument refuses a loop contract on a loop whose callees
+ * loop, so the models can be called from a loop under contract, and
+ * opts needs no entry for this file.  A target without loop contracts
+ * may define MC_COPY_LOOP before including: mc_copy is then a byte loop
+ * (--unwindset mc_copy.0:<MC_MAXLEN+1>), which was cheaper for
+ * netinet6/ip6_hopopts_input (93 s against 153 s).
  */
 #ifndef MBUFCONTRACT_H
 #define MBUFCONTRACT_H
@@ -84,13 +90,29 @@ mc_upto(int n)
 	return (v > n ? n : v);
 }
 
+/*
+ * dst[0..n) = src[0..n), n <= MC_MAXLEN.  Under CBMC without a loop:
+ * the destination becomes arbitrary and is then assumed equal.
+ */
 static void
 mc_copy(u_char *dst, const u_char *src, int n)
 {
+#if defined(NATIVE_SHIM_H) || defined(MC_COPY_LOOP)
 	int i;
 
 	for (i = 0; i < n; i++)
 		dst[i] = src[i];
+#else
+	__CPROVER_assert(n >= 0 && n <= MC_MAXLEN, "mc_copy: length");
+	if (n <= 0)
+		return;
+	__CPROVER_assert(__CPROVER_r_ok(src, n), "mc_copy: source readable");
+	__CPROVER_assert(__CPROVER_w_ok(dst, n), "mc_copy: destination writable");
+	__CPROVER_havoc_slice(dst, n);
+	__CPROVER_assume(__CPROVER_forall { int mc_i;
+	    (0 <= mc_i && mc_i < MC_MAXLEN) ==>
+	    (mc_i >= n || dst[mc_i] == src[mc_i]) });
+#endif
 }
 
 /* an object of n bytes with arbitrary content, seen by the leak check */
@@ -104,7 +126,7 @@ mc_copy(u_char *dst, const u_char *src, int n)
  * not set, nothing else reads it) */
 #define MC_BUF(m)	((m)->m_ext.ext_buf)
 
-/* one mbuf with a data area of exactly len bytes, arbitrary content */
+/* one mbuf whose len data bytes end where their object ends */
 static struct mbuf *
 mc_seg(int len)
 {
@@ -152,28 +174,22 @@ mc_build(int len)
 static int
 mc_total(struct mbuf *m)
 {
-	int n = 0, i;
-
-	for (i = 0; i < MC_MAXSEG && m != NULL; i++, m = m->m_next)
-		n += m->m_len;
-	return (n);
+	return (m->m_len + (m->m_next != NULL ? m->m_next->m_len : 0));
 }
 
 /* chain invariants: for the harness, after the parser returned */
 void
-mc_check(struct mbuf *m0)
+mc_check(struct mbuf *m)
 {
-	struct mbuf *m = m0;
-	int n = 0, i;
-
-	__CPROVER_assert(m0 != NULL, "mc_check: NULL chain");
-	for (i = 0; i < MC_MAXSEG && m != NULL; i++, m = m->m_next) {
-		__CPROVER_assert(m->m_len >= 0, "mc_check: m_len < 0");
-		n += m->m_len;
+	__CPROVER_assert(m != NULL, "mc_check: NULL chain");
+	__CPROVER_assert(m->m_len >= 0, "mc_check: m_len < 0");
+	if (m->m_next != NULL) {
+		__CPROVER_assert(m->m_next->m_len >= 0, "mc_check: m_len < 0");
+		__CPROVER_assert(m->m_next->m_next == NULL,
+		    "mc_check: chain too long");
 	}
-	__CPROVER_assert(m == NULL, "mc_check: chain too long");
-	if (m0->m_flags & M_PKTHDR)
-		__CPROVER_assert(m0->m_pkthdr.len == n,
+	if (m->m_flags & M_PKTHDR)
+		__CPROVER_assert(m->m_pkthdr.len == mc_total(m),
 		    "mc_check: m_pkthdr.len is the sum of m_len");
 }
 
@@ -192,10 +208,11 @@ m_free(struct mbuf *m)
 struct mbuf *
 m_freem(struct mbuf *m)
 {
-	int i;
-
-	for (i = 0; i < MC_MAXSEG && m != NULL; i++)
+	if (m != NULL)
 		m = m_free(m);
+	if (m != NULL)
+		m = m_free(m);
+	__CPROVER_assert(m == NULL, "m_freem: chain too long");
 	return (NULL);
 }
 
@@ -216,28 +233,37 @@ mc_fails(void)
 	return (0);
 }
 
-/* the packet's bytes [from, total) as a new mbuf; needs from >= the
- * first mbuf's length or the first mbuf to hold [from, m_len) */
+void
+m_copydata(struct mbuf *m, int off, int len, void *vp)
+{
+	u_char *cp = vp;
+	int n;
+
+	__CPROVER_assert(off >= 0 && len >= 0 && m != NULL &&
+	    off + len <= mc_total(m), "m_copydata: range inside the packet");
+	if (off < m->m_len) {
+		n = m->m_len - off;
+		if (n > len)
+			n = len;
+		mc_copy(cp, mtod(m, u_char *) + off, n);
+		cp += n;
+		len -= n;
+		off = 0;
+	} else
+		off -= m->m_len;
+	if (len > 0)
+		mc_copy(cp, mtod(m->m_next, u_char *) + off, len);
+}
+
+/* the packet's bytes [from, total) as a new mbuf */
 static struct mbuf *
 mc_tail(struct mbuf *m, int from, int total)
 {
 	struct mbuf *n = mc_seg(total - from);
-	int head = 0;
 
-	if (from < m->m_len) {
-		head = m->m_len - from;
-		mc_copy(mtod(n, u_char *), mtod(m, u_char *) + from, head);
-		from = 0;
-	} else
-		from -= m->m_len;
-	if (m->m_next != NULL)
-		mc_copy(mtod(n, u_char *) + head,
-		    mtod(m->m_next, u_char *) + from,
-		    m->m_next->m_len - from);
+	m_copydata(m, from, total - from, mtod(n, u_char *));
 	return (n);
 }
-
-void	m_copydata(struct mbuf *, int, int, void *);
 
 struct mbuf *
 m_pullup(struct mbuf *m, int len)
@@ -295,79 +321,52 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	return (n);
 }
 
-void
-m_copydata(struct mbuf *m, int off, int len, void *vp)
-{
-	u_char *cp = vp;
-	int i, n;
-
-	__CPROVER_assert(off >= 0 && len >= 0 && m != NULL &&
-	    off + len <= mc_total(m), "m_copydata: range inside the packet");
-	for (i = 0; i < MC_MAXSEG && m != NULL && len > 0; i++) {
-		if (off >= m->m_len) {
-			off -= m->m_len;
-		} else {
-			n = m->m_len - off;
-			if (n > len)
-				n = len;
-			mc_copy(cp, mtod(m, u_char *) + off, n);
-			cp += n;
-			len -= n;
-			off = 0;
-		}
-		m = m->m_next;
-	}
-}
-
 struct mbuf *
 m_getptr(struct mbuf *m, int loc, int *off)
 {
-	int i;
-
-	for (i = 0; i < MC_MAXSEG && m != NULL; i++) {
-		if (m->m_len > loc) {
-			*off = loc;
+	if (m->m_len > loc) {
+		*off = loc;
+		return (m);
+	}
+	loc -= m->m_len;
+	if (m->m_next == NULL) {
+		if (loc == 0) {
+			*off = m->m_len;
 			return (m);
 		}
-		loc -= m->m_len;
-		if (m->m_next == NULL) {
-			if (loc == 0) {
-				*off = m->m_len;
-				return (m);
-			}
-			return (NULL);
-		}
-		m = m->m_next;
+		return (NULL);
+	}
+	m = m->m_next;
+	if (m->m_len > loc || loc == m->m_len) {
+		*off = loc;
+		return (m);
 	}
 	return (NULL);
 }
 
+/* trim n bytes (0 <= n <= m_len) from the head of one mbuf */
+#define MC_HEAD(m, n)	((m)->m_data += (n), (m)->m_len -= (n))
+
 void
 m_adj(struct mbuf *mp, int req_len)
 {
-	struct mbuf *m = mp;
-	int len = req_len, total, i;
+	struct mbuf *m2;
+	int len = req_len, total, n;
 
 	if (mp == NULL)
 		return;
+	m2 = mp->m_next;
 	total = mc_total(mp);
 	if (len >= 0) {
 		if (len > total)
 			len = total;
-		for (i = 0; i < MC_MAXSEG && m != NULL; i++) {
-			if (m->m_len <= len) {
-				len -= m->m_len;
-				m->m_data += m->m_len;
-				m->m_len = 0;
-			} else {
-				m->m_data += len;
-				m->m_len -= len;
-				len = 0;
-			}
-			m = m->m_next;
-		}
 		if (mp->m_flags & M_PKTHDR)
-			mp->m_pkthdr.len -= (req_len > total ? total : req_len);
+			mp->m_pkthdr.len -= len;
+		n = len < mp->m_len ? len : mp->m_len;
+		MC_HEAD(mp, n);
+		len -= n;
+		if (m2 != NULL)
+			MC_HEAD(m2, len);
 	} else {
 		len = -len;
 		if (len > total)
@@ -375,12 +374,11 @@ m_adj(struct mbuf *mp, int req_len)
 		if (mp->m_flags & M_PKTHDR)
 			mp->m_pkthdr.len = total - len;
 		len = total - len;	/* bytes to keep */
-		for (i = 0; i < MC_MAXSEG && m != NULL; i++) {
-			if (m->m_len > len)
-				m->m_len = len;
-			len -= m->m_len;
-			m = m->m_next;
-		}
+		if (mp->m_len > len)
+			mp->m_len = len;
+		len -= mp->m_len;
+		if (m2 != NULL && m2->m_len > len)
+			m2->m_len = len;
 	}
 }
 

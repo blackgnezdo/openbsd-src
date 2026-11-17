@@ -1,11 +1,14 @@
 {
-  "functions": [
-    { "ip_dooptions": [
-      { "loop_id": "0",
-        "invariants": "cnt >= 0 && cnt <= 40 && cp + cnt == g_end",
-        "decreases": "cnt",
-        "assigns": "cnt, cp, opt, optlen, off, code, type, forward, ia, ipt, sin, dst, ntime, rt, ipaddr, model_rt, __CPROVER_object_whole(g_end)",
-        "symbol_map": "rt,ip_dooptions::1::rt;ipaddr,ip_dooptions::1::ipaddr;cnt,ip_dooptions::1::cnt;cp,ip_dooptions::1::cp;opt,ip_dooptions::1::opt;optlen,ip_dooptions::1::optlen;off,ip_dooptions::1::off;code,ip_dooptions::1::code;type,ip_dooptions::1::type;forward,ip_dooptions::1::forward;ia,ip_dooptions::1::ia;ipt,ip_dooptions::1::ipt;sin,ip_dooptions::1::sin;dst,ip_dooptions::1::dst;ntime,ip_dooptions::1::ntime" }
-    ] }
-  ]
+ "functions": [
+  {
+   "ip_dooptions": [
+    {
+     "loop_id": "0",
+     "invariants": "cnt >= 0 && cnt <= 40 && cp + cnt == g_end",
+     "decreases": "cnt",
+     "assigns": "cnt, cp, opt, optlen, off, code, type, forward, ia, ipt, sin, dst, ntime, rt, ipaddr, model_rt, __CPROVER_object_whole(g_end)"
+    }
+   ]
+  }
+ ]
 }
