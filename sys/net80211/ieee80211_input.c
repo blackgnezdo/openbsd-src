@@ -1512,7 +1512,7 @@ ieee80211_parse_rsn_body(struct ieee80211com *ic, const u_int8_t *frm,
 	rsn->rsn_npmkids = 0;
 
 	/* read Group Data Cipher Suite field */
-	if (frm + 4 > efrm)
+	if (efrm - frm < 4)
 		return 0;
 	rsn->rsn_groupcipher = ieee80211_parse_rsn_cipher(frm);
 	if (rsn->rsn_groupcipher == IEEE80211_CIPHER_NONE ||
@@ -1522,13 +1522,13 @@ ieee80211_parse_rsn_body(struct ieee80211com *ic, const u_int8_t *frm,
 	frm += 4;
 
 	/* read Pairwise Cipher Suite Count field */
-	if (frm + 2 > efrm)
+	if (efrm - frm < 2)
 		return 0;
 	m = rsn->rsn_nciphers = LE_READ_2(frm);
 	frm += 2;
 
 	/* read Pairwise Cipher Suite List */
-	if (frm + m * 4 > efrm)
+	if (m > (efrm - frm) / 4)
 		return IEEE80211_STATUS_IE_INVALID;
 	rsn->rsn_ciphers = IEEE80211_CIPHER_NONE;
 	while (m-- > 0) {
@@ -1543,13 +1543,13 @@ ieee80211_parse_rsn_body(struct ieee80211com *ic, const u_int8_t *frm,
 	}
 
 	/* read AKM Suite List Count field */
-	if (frm + 2 > efrm)
+	if (efrm - frm < 2)
 		return 0;
 	n = rsn->rsn_nakms = LE_READ_2(frm);
 	frm += 2;
 
 	/* read AKM Suite List */
-	if (frm + n * 4 > efrm)
+	if (n > (efrm - frm) / 4)
 		return IEEE80211_STATUS_IE_INVALID;
 	rsn->rsn_akms = IEEE80211_AKM_NONE;
 	while (n-- > 0) {
@@ -1558,19 +1558,19 @@ ieee80211_parse_rsn_body(struct ieee80211com *ic, const u_int8_t *frm,
 	}
 
 	/* read RSN Capabilities field */
-	if (frm + 2 > efrm)
+	if (efrm - frm < 2)
 		return 0;
 	rsn->rsn_caps = LE_READ_2(frm);
 	frm += 2;
 
 	/* read PMKID Count field */
-	if (frm + 2 > efrm)
+	if (efrm - frm < 2)
 		return 0;
 	s = rsn->rsn_npmkids = LE_READ_2(frm);
 	frm += 2;
 
 	/* read PMKID List */
-	if (frm + s * IEEE80211_PMKID_LEN > efrm)
+	if (s > (efrm - frm) / IEEE80211_PMKID_LEN)
 		return IEEE80211_STATUS_IE_INVALID;
 	if (s != 0) {
 		rsn->rsn_pmkids = frm;
@@ -1578,7 +1578,7 @@ ieee80211_parse_rsn_body(struct ieee80211com *ic, const u_int8_t *frm,
 	}
 
 	/* read Group Management Cipher Suite field */
-	if (frm + 4 > efrm)
+	if (efrm - frm < 4)
 		return 0;
 	rsn->rsn_groupmgmtcipher = ieee80211_parse_rsn_cipher(frm);
 	if (rsn->rsn_groupmgmtcipher != IEEE80211_CIPHER_BIP)
