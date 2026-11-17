@@ -871,7 +871,7 @@ ip6_process_hopopts(struct mbuf **mp, u_int8_t *opthead, int hbhlen,
 				/* XXX stat */
 				icmp6_error(*mp, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 1 - opthead);
+				    erroff + 1 + (int)(opt - opthead));
 				return (-1);
 			}
 			optlen = IP6OPT_RTALERT_LEN;
@@ -888,7 +888,7 @@ ip6_process_hopopts(struct mbuf **mp, u_int8_t *opthead, int hbhlen,
 				/* XXX stat */
 				icmp6_error(*mp, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 1 - opthead);
+				    erroff + 1 + (int)(opt - opthead));
 				return (-1);
 			}
 			optlen = IP6OPT_JUMBO_LEN;
@@ -902,7 +902,7 @@ ip6_process_hopopts(struct mbuf **mp, u_int8_t *opthead, int hbhlen,
 				ip6stat_inc(ip6s_badoptions);
 				icmp6_error(*mp, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt - opthead);
+				    erroff + (int)(opt - opthead));
 				return (-1);
 			}
 
@@ -926,7 +926,7 @@ ip6_process_hopopts(struct mbuf **mp, u_int8_t *opthead, int hbhlen,
 				ip6stat_inc(ip6s_badoptions);
 				icmp6_error(*mp, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 2 - opthead);
+				    erroff + 2 + (int)(opt - opthead));
 				return (-1);
 			}
 #endif
@@ -938,7 +938,7 @@ ip6_process_hopopts(struct mbuf **mp, u_int8_t *opthead, int hbhlen,
 				ip6stat_inc(ip6s_badoptions);
 				icmp6_error(*mp, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 2 - opthead);
+				    erroff + 2 + (int)(opt - opthead));
 				return (-1);
 			}
 			*plenp = jumboplen;
@@ -950,7 +950,7 @@ ip6_process_hopopts(struct mbuf **mp, u_int8_t *opthead, int hbhlen,
 				goto bad;
 			}
 			optlen = ip6_unknown_opt(mp, opt,
-			    erroff + opt - opthead);
+			    erroff + (int)(opt - opthead));
 			if (optlen == -1)
 				return (-1);
 			optlen += 2;
