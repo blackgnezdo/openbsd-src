@@ -174,11 +174,12 @@ nd6_options(void *opt, int icmp6len, struct nd_opts *ndopts)
 		if (olen == 0)
 			goto invalid;
 
-		next_opt = (struct nd_opt_hdr *)((caddr_t)nd_opt + olen);
-		if (next_opt > last_opt) {
+		if (olen > (caddr_t)last_opt - (caddr_t)nd_opt) {
 			/* option overruns the end of buffer */
 			goto invalid;
-		} else if (next_opt == last_opt) {
+		}
+		next_opt = (struct nd_opt_hdr *)((caddr_t)nd_opt + olen);
+		if (next_opt == last_opt) {
 			/* reached the end of options chain */
 			next_opt = NULL;
 		}
