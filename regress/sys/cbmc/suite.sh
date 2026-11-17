@@ -29,7 +29,8 @@
 # check and vars come from the PHASE check line of cbmc.sh ("-" if the
 # run stopped before it; always "-" with -n).  The last 15 lines of the
 # output of a failed run follow, indented.  SUITE_LOGDIR=<dir> keeps the
-# complete output of every target in <dir>/<target with / as _>.log.
+# complete output of every target and mutant run in
+# <dir>/<target with / as _>.log.
 # The summary line is "suite: N passed, M failed, S s"; the exit status
 # is non-zero if anything failed.
 
@@ -98,12 +99,16 @@ for t in $targets; do
 		    exec sh "$HERE/cbmc.sh" "$T" ) > "$out" 2>&1 < /dev/null
 		got=$(sed -n '/^RESULT: /{s///;s/ (.*//;p;}' "$out" | tail -1)
 		mn=$t/$(basename "$md")
+		[ -n "${SUITE_LOGDIR:-}" ] &&
+		    cp "$out" "$SUITE_LOGDIR/$(echo "$mn" | tr / _).log"
 		if [ "${got:-ERROR}" = VIOLATED ]; then
 			echo "PASS $mn VIOLATED VIOLATED"; pass=$((pass + 1))
 		else
 			echo "FAIL $mn ${got:-ERROR} VIOLATED"
 			fail=$((fail + 1))
 		fi
+		# the failed properties: a mutant must fail for its own reason
+		grep -a 'FAILURE$' "$out" | head -5 | sed 's/^/    | /'
 	done
 done
 echo "suite: $pass passed, $fail failed, $(($(date +%s) - start)) s"

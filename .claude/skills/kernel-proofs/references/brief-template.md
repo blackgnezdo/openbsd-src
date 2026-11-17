@@ -18,7 +18,8 @@ right: say so in your report.
 
 Read first, in the README: "Environment", "Reading the output",
 "Run budget", "Adding a target", "Rules for a harness"[, "Writing a
-packet parser target"][, "When a run exhausts time or memory"].
+packet parser target"][, "When a run exhausts time or memory"][,
+"When the only failures are pointer arithmetic"].
 Then read the worked example(s) completely: [target dirs closest in
 shape], every file in them[, and common/mbufcontract.h].
 

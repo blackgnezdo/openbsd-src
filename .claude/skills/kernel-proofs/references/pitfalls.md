@@ -57,8 +57,10 @@ case. Check the native anchors; rerun with a longer time and
 rarely reached without a seed input in `native/seeds`.
 
 **Mutant VIOLATED, for the wrong reason.** A mutant can fail on an
-unwinding assertion or on an old unrelated failure. Read the failing
-property; it must be the access the removed check protected.
+unwinding assertion or on an old unrelated failure. `suite.sh -m`
+prints the first failed properties of each mutant under its line
+(and keeps the full log with `SUITE_LOGDIR`); one of them must be the
+access the removed check protected.
 
 ## 2. Results that look bad and are not
 
@@ -90,9 +92,14 @@ kern_log_model` before the includes, or put `log` in `nobody`.
 names, or replace the function in that target.
 
 **A failure only on pointer arithmetic, nothing dereferenced.** This
-is the UB class (see SKILL.md, "Deciding what is a finding"). With
-constant-size objects and data at the end of the object, every
-pointer formed past the data is now visible; expect more of these.
+is the UB class (see SKILL.md, "Deciding what is a finding"; steps in
+the README, "When the only failures are pointer arithmetic"). With
+the data at the end of its object every pointer formed past the data
+is visible, including constant-offset tests: `frm + 4 > efrm` fails
+once `frm == efrm`. A prediction of three failing tests from reading
+came back as nine. In the kernel the pointer leaves its object only
+when the data ends its buffer, so the class stays "no memory effect";
+do not count the extra failures as extra findings.
 
 ## 3. Cost: time and memory
 

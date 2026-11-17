@@ -376,7 +376,9 @@ while IFS= read -r anchor; do
 		grep -qx "$src $l" "$W/reached" && hit=1
 	done
 	if [ $hit -eq 0 ]; then
-		echo "UNREACHED: $anchor"; vacuous=1
+		# Without a coverage run nothing was reached; say nothing.
+		[ -n "${CBMC_NO_COVER:-}" ] || echo "UNREACHED: $anchor"
+		vacuous=1
 	fi
 done < "$T/must_reach"
 [ -z "${CBMC_NO_COVER:-}" ] || vacuous=0

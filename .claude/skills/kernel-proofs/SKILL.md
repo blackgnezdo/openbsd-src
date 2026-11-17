@@ -35,7 +35,11 @@ change that stops the next subagent struggling the same way.
 6. **Commit** (you, never the subagent): kernel fixes as their own
    commits, target directories separately, shared-framework changes
    only after `sh selftest/run.sh` and `sh suite.sh -m` pass.
-7. **Record** open findings in `regress/sys/cbmc/FINDINGS`.
+7. **Record** in `regress/sys/cbmc/FINDINGS` what stays open after
+   the round: unfixed findings, observations made by reading, and
+   gaps in a target. A finding fixed in the same round, with its
+   `mutant_prefix/` committed, gets no entry; the target's README
+   entry describes it.
 
 ## Which model for what
 
@@ -119,9 +123,12 @@ before acting.
   input, no finding.
 - **Undefined behaviour without a memory effect.** Pointer arithmetic
   that leaves the object before a bounds test, then a comparison
-  (`rtm_xaddrs`, `ip6_process_hopopts`, `nd6_options`). The user has
-  accepted rewriting these as length comparisons, each as its own
-  small commit with the pre-fix source kept as `mutant_prefix/`.
+  (`rtm_xaddrs`, `ip6_process_hopopts`, `nd6_options`,
+  `ieee80211_parse_rsn_body`). The user has accepted rewriting these
+  as length comparisons, each as its own small commit with the
+  pre-fix source kept as `mutant_prefix/`. The README section "When
+  the only failures are pointer arithmetic" has the steps; name it in
+  the brief of any parser target.
 - **A defect with a memory or resource effect.** Confirm it three
   ways before calling it one: read the source and write down the
   input; see it fail under CBMC; see it under the native engine on

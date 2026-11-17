@@ -552,6 +552,29 @@ When a run exhausts time or memory
 	Splitting into cases by packet length did not help ip_dooptions:
 	the single case of 40 option bytes ran out of memory by itself.
 
+When the only failures are pointer arithmetic
+
+	"pointer outside object bounds" or "pointer relation" on an
+	expression that is never dereferenced: a bounds test written as
+	cursor + n > end forms the pointer before comparing it.  With the
+	data at the end of its object every such test is visible, the
+	constant ones too (cursor + 4 > end fails once the cursor has
+	reached the end), so expect more failures than variable-length
+	tests alone.  In the kernel the same pointer leaves its object
+	only when the data ends its buffer.  Steps:
+	1. Copy the kernel file to a scratch directory and rewrite each
+	   failing test as a length comparison (n > end - cursor), nothing
+	   else.  Run with CBMC_OVERRIDE_DIR on the copy: VERIFIED shows
+	   that nothing else is wrong.
+	2. Build mutant/ from the rewritten copy with one test removed;
+	   it must fail on a dereference.
+	3. Leave the tree alone and set expect to the result on the tree
+	   (VIOLATED); report the rewrite as a diff.  Whoever applies it
+	   to the tree then saves the old source as mutant_prefix/ and
+	   sets expect to VERIFIED.
+	The native engine does not see this class: CLEAN is expected.
+	Worked examples: netinet6/nd6_options, net80211/rsn_parse.
+
 Targets
 	usb/usps
 		usps_attach followed by usps_detach.  With usbd_open_pipe_intr
