@@ -1,0 +1,11 @@
+{
+  "functions": [
+    { "ip6_process_hopopts": [
+      { "loop_id": "0",
+        "invariants": "hbhlen <= 32 && opt + hbhlen == g_end && *mp == g_m && g_m->m_hdr.mh_data == g_buf && g_m->M_dat.MH.MH_dat.MH_ext.ext_buf == g_buf && g_m->m_hdr.mh_len == 72 && g_m->m_hdr.mh_next == 0 && g_m->m_hdr.mh_flags == 2 && g_m->M_dat.MH.MH_pkthdr.len == 72",
+        "decreases": "hbhlen > 0 ? hbhlen : 0",
+        "assigns": "hbhlen, opt, optlen, ip6, rtalert_val, jumboplen, *mp, *rtalertp, *plenp, __CPROVER_object_whole(g_m), __CPROVER_object_whole(g_buf)",
+        "symbol_map": "hbhlen,ip6_process_hopopts::hbhlen;opt,ip6_process_hopopts::1::opt;optlen,ip6_process_hopopts::1::optlen;ip6,ip6_process_hopopts::1::ip6;rtalert_val,ip6_process_hopopts::1::rtalert_val;jumboplen,ip6_process_hopopts::1::jumboplen;mp,ip6_process_hopopts::mp;rtalertp,ip6_process_hopopts::rtalertp;plenp,ip6_process_hopopts::plenp" }
+    ] }
+  ]
+}

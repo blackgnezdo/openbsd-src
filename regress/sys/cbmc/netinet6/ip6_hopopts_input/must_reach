@@ -1,0 +1,4 @@
+ip6_input.c:hbhlen = (hbh->ip6h_len + 1) << 3;
+ip6_input.c:ip6stat_inc(ip6s_tooshort);
+ip6_input.c:if (ip6_process_hopopts(mp, (u_int8_t *)hbh + sizeof(struct ip6_hbh),
+ip6_input.c:*offp = off;

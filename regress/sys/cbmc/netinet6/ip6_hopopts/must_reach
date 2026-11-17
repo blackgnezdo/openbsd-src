@@ -1,0 +1,5 @@
+ip6_input.c:optlen = 1;
+ip6_input.c:optlen = *(opt + 1) + 2;
+ip6_input.c:optlen = IP6OPT_RTALERT_LEN;
+ip6_input.c:*plenp = jumboplen;
+ip6_input.c:optlen = ip6_unknown_opt(mp, opt,

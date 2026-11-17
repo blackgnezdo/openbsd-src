@@ -42,7 +42,8 @@
  *  m_copydata(m, off, len, dst)
  *			asserts that the range is inside the packet (the
  *			kernel panics) and copies.
- *  m_adj, m_freem, m_free, m_freemp, m_getptr: as in the kernel.
+ *  m_adj, m_freem, m_free, m_getptr: as in the kernel (m_freemp is
+ *  an inline of sys/mbuf.h and calls the m_freem here).
  *
  * MC_MAXLEN (default 64) bounds the packet; define it before including.
  * Loops in this file run MC_MAXLEN or MC_MAXSEG times at most; opts
@@ -196,15 +197,6 @@ m_freem(struct mbuf *m)
 	for (i = 0; i < MC_MAXSEG && m != NULL; i++)
 		m = m_free(m);
 	return (NULL);
-}
-
-struct mbuf *
-m_freemp(struct mbuf **mp)
-{
-	struct mbuf *m = *mp;
-
-	*mp = NULL;
-	return (m_freem(m));
 }
 
 /* for the harness */

@@ -485,6 +485,23 @@ When a run exhausts time or memory
 	     is missing; add it and run again until none is left.  Leave
 	     the clause out and uninitialised pointer locals make the
 	     checks fail.
+	   - Parameters of the function are FUNCTION::name in the
+	     symbol_map, without a scope number.
+	   - The clauses are parsed as plain C expressions: no macros.
+	     Write m->m_hdr.mh_len for m_len, 0 for NULL, numbers for
+	     flags.
+	   - A loop inside a function called from the contracted loop is
+	     refused ("Inner loop ... unwind it first"); opts cannot help,
+	     contracts are applied before unwinding.  Replace the callee
+	     by a loop-free model in the harness (netinet6/ip6_hopopts
+	     does it for m_freem).
+	   - If the loop can free or write an object through a pointer
+	     (the mbuf, via icmp6_error or m_freem), assigns needs
+	     __CPROVER_object_whole() of it, and the invariant must then
+	     restate every field of it that the loop leaves alone and the
+	     code after the loop relies on; otherwise that code runs on
+	     an arbitrary object (netinet6/ip6_hopopts/loops).
+	   - A loops file can only be checked by running cbmc.sh.
 	   - Remove the loop's --unwindset from opts.
 	   - "Check that loop invariant is preserved: FAILURE" on the
 	     unmodified source means the invariant is too weak or wrong,
@@ -644,3 +661,20 @@ netinet/ip_dooptions
 	no out-of-bounds access, the walk ends (decreases clause), the
 	chain is intact on return 0.  mutant/ (optlen > cnt removed) is
 	VIOLATED.  About 75 s.
+
+netinet6/ip6_hopopts
+	ip6_process_hopopts() of sys/netinet6/ip6_input.c on an arbitrary
+	option area of 0..32 bytes behind an IPv6 header, contract models,
+	loop contract.  VIOLATED: the six icmp6_error offset arguments
+	"erroff + opt + k - opthead" form the pointer erroff + opt, which
+	can lie past the mbuf's data (pointer arithmetic outside the
+	object; nothing is dereferenced).  With the operands reordered
+	the target is VERIFIED.  mutant/ (PadN length check removed)
+	adds an out-of-bounds read of opt[1].  Native: CLEAN.
+
+netinet6/ip6_hopopts_input
+	ip6_hopopts_input() on packets of up to 56 bytes with
+	ip6_process_hopopts replaced by a model asserting what the
+	target above assumes: the option bytes are readable and
+	contiguous within one mbuf's m_len.  VERIFIED, about 100 s;
+	mutant/ (second header fetch too short) is VIOLATED.
