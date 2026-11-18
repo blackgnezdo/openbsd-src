@@ -859,7 +859,9 @@ arplookup(struct in_addr *inp, int create, int proxy, u_int tableid)
 
 	if (proxy && !ISSET(rt->rt_flags, RTF_ANNOUNCE)) {
 		while ((rt = rtable_iterate(rt)) != NULL) {
-			if (ISSET(rt->rt_flags, RTF_ANNOUNCE)) {
+			if (ISSET(rt->rt_flags, RTF_ANNOUNCE) &&
+			    ISSET(rt->rt_flags, RTF_LLINFO) &&
+			    rt->rt_gateway->sa_family == AF_LINK) {
 				break;
 			}
 		}
