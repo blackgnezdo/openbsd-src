@@ -2,3 +2,4 @@
 --unwindset usbd_abort_pipe.0:2
 --unwindset strlcpy.0:17
 --unwindset strlcpy.1:17
+--unwindset vsnprintf.1:33

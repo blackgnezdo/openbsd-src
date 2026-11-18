@@ -9,7 +9,8 @@ memory.  See native/README.native.
 
 	sh native.sh usb/usps 30	# RESULT: CLEAN | FINDING | VACUOUS | ERROR
 
-Needs cbmc (tested with 5.95.1) and gcc on the build host.  The kernel
+Needs cbmc (tested with 6.8.0; written against 5.95.1, see "CBMC
+versions") and gcc on the build host.  The kernel
 sources are preprocessed with a minimal stand-in for a compile directory,
 so no config(8) run is needed.
 
@@ -69,7 +70,8 @@ Reading the output
 
 	NOBODY f g h ...
 		every function the check run called that has no body
-		(CBMC's "no body for function" warnings), sorted, or
+		(CBMC 6's reachable "no body for callee" properties, or
+		5.95's "no body for function" warnings), sorted, or
 		"NOBODY -".  Each of them returned an arbitrary value and
 		had no side effects: no memory was read, written or checked.
 		That is intended for hardware access and for subsystems a
@@ -112,6 +114,34 @@ Reading the output
 	If cbmc.sh is interrupted or killed with SIGTERM, SIGINT or SIGHUP
 	it stops its cbmc process first.  SIGKILL cannot be caught: after a
 	kill -9 of the script the cbmc may still be running.
+
+CBMC versions
+	The targets, the expect files and this README were written against
+	CBMC 5.95.1.  CBMC 6 differs in three ways that cbmc.sh hides:
+	- it enables checks by default (malloc may fail, signed overflow,
+	  undefined shifts, pointer primitives, bounds); cbmc.sh passes
+	  --no-standard-checks, so a run checks what it checked under
+	  5.95 (see "What is modelled" and the opts of each target).
+	  M_WAITOK allocations still never fail.
+	- it prints less: cbmc.sh passes --verbosity 8, which brings back
+	  the Runtime Symex, variables and "Unwinding loop" lines the
+	  PHASE and HINT lines are made from.
+	- a call to a function without a body becomes a property
+	  "[F.no-body.G] ... no body for callee G", FAILURE when the call
+	  is reachable.  cbmc.sh moves the raw output to check.raw, builds
+	  the NOBODY line from these properties, and leaves them out of
+	  check.out, the failure list and the counts.
+	CBMC 6's library has a vsnprintf body that writes up to size bytes
+	in a loop; cbmc.sh bounds it with --unwindset vsnprintf.1:17
+	(mbinit's 16 byte pool names) before the target's opts, so a
+	target can raise it (usb/usps: 33, for the 32 byte sensor
+	descriptions).  The model writes and checks the buffer, which
+	5.95's did not.
+	netinet/tcp_dooptions (704,000 variables) passed within its 600 s
+	limit under 5.95; under 6.8 the default solver did not finish in
+	1500 s and --sat-solver cadical takes about 1100 s, so the target
+	now has that option and a 1500 s timeout.  Other targets took
+	about as long as before.
 
 Running the suite
 	sh suite.sh [-n] [target-dir ...]

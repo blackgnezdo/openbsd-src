@@ -274,7 +274,15 @@ run_cbmc() {
 	(
 		ulimit -v $((MEMMB * 1024)) ||
 		    echo "warning: cannot set the memory limit"
-		exec timeout "$TMO" cbmc "$@"
+		# CBMC 6 turns on checks by default that 5.95 did not have
+		# (malloc may fail, signed overflow, shifts, pointer
+		# primitives) and prints less; keep the 5.95 behaviour that
+		# the targets and README were written against.  Its library
+		# vsnprintf writes up to size bytes in a loop (5.95's did
+		# not); 17 covers the 16-byte pool names of mbinit().  A
+		# target's own --unwindset for it comes later and wins.
+		exec timeout "$TMO" cbmc --no-standard-checks --verbosity 8 \
+		    --unwindset vsnprintf.1:17 "$@"
 	) > "$out" 2>&1 &
 	CPID=$!
 	crc=0
@@ -388,13 +396,31 @@ t0=$(date +%s)
 run_cbmc "$W/check.out" "$W/model.gb" $OPTS --pointer-check \
     --unwinding-assertions --slice-formula
 rc=$crc
+# CBMC 6 reports a call to a function without a body as a property
+# "[F.no-body.G] ... no body for callee G", FAILURE when the call is
+# reachable, instead of the 5.95 warning.  It feeds the NOBODY line below
+# and is not a failure: drop it from check.out and recount.
+mv "$W/check.out" "$W/check.raw"
+awk '/\.no-body\./ { if ($NF == "FAILURE") nbf++; nbt++; next }
+    { lines[++n] = $0 }
+    END { for (i = 1; i <= n; i++) { l = lines[i]
+	if (l ~ /^\*\* [0-9]+ of [0-9]+ failed/) {
+		split(l, w, " "); f = w[2] - nbf; t = w[4] - nbt
+		sub(/^\*\* [0-9]+ of [0-9]+/, "** " f " of " t, l) }
+	if (l == "VERIFICATION FAILED" && f == 0) l = "VERIFICATION SUCCESSFUL"
+	print l } }' "$W/check.raw" > "$W/check.out"
+if [ $rc -eq 10 ] && ! grep -q 'FAILURE$' "$W/check.out"; then
+	rc=0
+fi
 grep -E 'FAILURE$' "$W/check.out" | sed 's/^\[[^]]*\] //' | sort | uniq -c || true
 grep -E '^\*\* [0-9]+ of|^VERIFICATION' "$W/check.out" || true
 phase check "$W/check.out" $rc $t0
 # Functions the check run called without a body: they returned arbitrary
 # values and had no side effects.  One line, at most about 1000 bytes.
-nobody_seen=$(sed -n 's/^\*\*\*\* WARNING: no body for function \(.*\)$/\1/p' \
-    "$W/check.out" | sort -u | tr '\n' ' ' | sed 's/ $//')
+nobody_seen=$( { sed -n 's/^\*\*\*\* WARNING: no body for function \(.*\)$/\1/p' \
+    "$W/check.raw"
+    sed -n 's/^\[[^]]*\.no-body\.[^]]*\] .* no body for callee \(.*\): FAILURE$/\1/p' \
+    "$W/check.raw"; } | sort -u | tr '\n' ' ' | sed 's/ $//')
 echo "NOBODY ${nobody_seen:--}" | awk '{ if (length($0) > 1000) {
 	n = 0; s = $1; for (i = 2; i <= NF; i++) { if (length(s) + length($i) > 960)
 	    break; s = s " " $i } printf "%s ... (%d more)\n", s, NF - i + 1 }
