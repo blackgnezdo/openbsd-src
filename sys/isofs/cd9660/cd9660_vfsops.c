@@ -1,4 +1,4 @@
-/*	$OpenBSD: cd9660_vfsops.c,v 1.100 2026/11/08 15:35:01 kirill Exp $	*/
+/*	$OpenBSD: cd9660_vfsops.c,v 1.102 2026/11/14 22:28:44 kirill Exp $	*/
 /*	$NetBSD: cd9660_vfsops.c,v 1.26 1997/06/13 15:38:58 pk Exp $	*/
 
 /*-

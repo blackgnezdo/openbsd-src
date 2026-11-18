@@ -1,4 +1,4 @@
-/*	$OpenBSD: validate.c,v 1.92 2026/11/02 14:01:08 tb Exp $ */
+/*	$OpenBSD: validate.c,v 1.95 2026/11/16 20:13:31 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -98,6 +98,7 @@ valid_resources(const char *fn, struct auth *a, const struct cert *cert)
 			 * Many MFTs are issued by a CA without AS resources.
 			 * Accept this non-compliance with RFC 3779, 3.3.
 			 * Apart from MFTs, this affects only TAKs and GBRs.
+			 * https://errata.rfc-editor.org/eid9314/
 			 */
 			if (cert->purpose == CERT_PURPOSE_EE)
 				continue;
@@ -130,6 +131,7 @@ valid_resources(const char *fn, struct auth *a, const struct cert *cert)
 			 * Many MFT are issued by a CA without IP resources.
 			 * Accept this non-compliance with RFC 3779, 2.3.
 			 * Apart from MFTs, this affects only TAKs and GBRs.
+			 * https://errata.rfc-editor.org/eid9314/
 			 */
 			if (cert->purpose == CERT_PURPOSE_EE)
 				continue;
@@ -538,7 +540,8 @@ valid_econtent_version(const char *fn, const ASN1_INTEGER *aint,
 	if (aint == NULL) {
 		if (expected == 0)
 			return 1;
-		warnx("%s: unexpected version 0", fn);
+		warnx("%s: unexpected version (expected %llu, got 0)",
+		    fn, (unsigned long long)expected);
 		return 0;
 	}
 
@@ -559,23 +562,6 @@ valid_econtent_version(const char *fn, const ASN1_INTEGER *aint,
 	}
 
 	return 1;
-}
-
-/*
- * Validate the ASPA: check that the customerASID is contained.
- * Returns 1 if valid, 0 otherwise.
- */
-int
-valid_aspa(const char *fn, struct cert *cert, struct aspa *aspa)
-{
-
-	if (as_check_covered(aspa->custasid, aspa->custasid,
-	    cert->ases, cert->num_ases) > 0)
-		return 1;
-
-	warnx("%s: ASPA: uncovered Customer ASID: %u", fn, aspa->custasid);
-
-	return 0;
 }
 
 /*

@@ -1,4 +1,4 @@
-/*	$OpenBSD: autoconf.c,v 1.17 2022/09/02 20:06:56 miod Exp $	*/
+/*	$OpenBSD: autoconf.c,v 1.19 2026/11/12 16:34:09 visa Exp $	*/
 /*
  * Copyright (c) 2009 Miodrag Vallat.
  *
@@ -19,6 +19,7 @@
 #include <sys/systm.h>
 #include <sys/conf.h>
 #include <sys/device.h>
+#include <sys/mbuf.h>
 #include <sys/reboot.h>
 
 #include <machine/autoconf.h>
@@ -40,7 +41,10 @@ cpu_configure(void)
 	(void)splhigh();
 
 	softintr_init();
+	bus_dma_init();
 	(void)config_rootfound("mainbus", NULL);
+
+	mbuf_dma_64bit_enable();
 
 	unmap_startup();
 

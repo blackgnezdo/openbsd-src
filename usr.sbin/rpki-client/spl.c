@@ -1,4 +1,4 @@
-/*	$OpenBSD: spl.c,v 1.22 2026/10/15 20:43:32 tb Exp $ */
+/*	$OpenBSD: spl.c,v 1.24 2026/11/13 06:35:47 tb Exp $ */
 /*
  * Copyright (c) 2024 Job Snijders <job@fastly.com>
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
@@ -213,7 +213,7 @@ spl_parse_econtent(const char *fn, void *obj, const unsigned char *d,
 static int
 spl_cert_info(const char *fn, void *obj, const struct cert *cert)
 {
-	if (x509_any_inherits(cert->x509)) {
+	if (cert_any_inherits(cert)) {
 		warnx("%s: inherit elements not allowed in EE cert", fn);
 		return 0;
 	}
@@ -238,7 +238,8 @@ spl_validate(const char *fn, void *obj, struct cert *cert)
 
 	spl->valid = valid_spl(fn, cert, spl);
 
-	return 1; /* XXX */
+	/* return success for filemode and accounting in the main process */
+	return 1;
 }
 
 static const ASN1_OBJECT *

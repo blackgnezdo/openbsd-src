@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.322 2026/11/10 06:53:27 tb Exp $ */
+/*	$OpenBSD: extern.h,v 1.329 2026/11/16 12:23:59 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -61,8 +61,8 @@ struct cert_as_range {
 struct cert_as {
 	enum cert_as_type type; /* type of AS specification */
 	union {
-		uint32_t id; /* singular identifier */
 		struct cert_as_range range; /* range */
+		uint32_t id; /* singular identifier */
 	};
 };
 
@@ -112,8 +112,8 @@ struct cert_ip {
 	unsigned char		min[16]; /* full range minimum */
 	unsigned char		max[16]; /* full range maximum */
 	union {
-		struct ip_addr ip; /* singular address */
 		struct ip_addr_range range; /* range */
+		struct ip_addr ip; /* singular address */
 	};
 };
 
@@ -629,14 +629,21 @@ enum publish_type {
  */
 struct entity {
 	TAILQ_ENTRY(entity) entries;
-	char		*path;		/* path relative to repository */
-	char		*file;		/* filename or valid repo path */
-	char		*mftaki;	/* expected AKI (taken from Manifest) */
-	unsigned char	*data;		/* optional data blob */
-	size_t		 datasz;	/* length of optional data blob */
+	union {
+		struct {
+			char		*file;		/* filename */
+			char		*mftaki;	/* expected AKI */
+			unsigned char	*data;		/* optional data blob */
+			size_t		 datasz;	/* data blob length */
+			int		 talid;		/* tal identifier */
+			int		 certid;
+		};
+		struct {
+			char		*validpath;
+			char		*tmppath;
+		};
+	};
 	unsigned int	 repoid;	/* repository identifier */
-	int		 talid;		/* tal identifier */
-	int		 certid;
 	enum rtype	 type;		/* type of entity (not RTYPE_EOF) */
 	enum location	 location;	/* which directory the file lives in */
 };
@@ -651,6 +658,7 @@ enum stype {
 	STYPE_UNIQUE,
 	STYPE_DEC_UNIQUE,
 	STYPE_PROVIDERS,
+	STYPE_DEC_PROVIDERS,
 	STYPE_OVERFLOW,
 	STYPE_SEQNUM_GAP,
 };
@@ -779,6 +787,8 @@ struct cert	*cert_parse_filemode(const char *, const unsigned char *,
 struct cert	*ta_validate(const char *, struct cert *, const unsigned char *,
 		    size_t);
 struct cert	*cert_read(struct ibuf *);
+int		 cert_any_inherits(const struct cert *);
+int		 cert_inherits(const struct cert *);
 int		 cert_has_one_as(const struct cert *);
 void		 cert_insert_brks(struct brk_tree *, struct cert *);
 
@@ -794,6 +804,8 @@ int		 ca_confirmed_in_last_run(struct ca_tree *, const struct cert *);
 void		 ca_set_confirmed(struct ca_tree *, int);
 int		 ca_is_bad(struct ca_tree *, int);
 void		 carepo_tree_free(void);
+void		 carepo_increment(const struct cert *);
+unsigned int	 carepo_get_count(const struct cert *);
 
 enum rtype	 rtype_from_file_extension(const char *);
 void		 mft_buffer(struct ibuf *, const struct mft *);
@@ -802,8 +814,7 @@ const struct signed_obj *mft_obj(void);
 struct mft	*mft_read(struct ibuf *);
 int		 mft_compare_issued(const struct mft *, const struct mft *);
 int		 mft_compare_seqnum(const struct mft *, const struct mft *);
-int		 mft_seqnum_gap_present(const struct mft *, const struct mft *,
-		    BN_CTX *);
+int		 mft_seqnum_gap_present(const struct mft *, const struct mft *);
 
 void		 roa_buffer(struct ibuf *, const struct roa *);
 void		 roa_free(struct roa *);
@@ -853,7 +864,6 @@ int		 valid_cert(char *, X509_STORE_CTX *, struct cert *,
 int		 valid_rsc(const char *, struct cert *, struct rsc *);
 int		 valid_econtent_version(const char *, const ASN1_INTEGER *,
 		    uint64_t);
-int		 valid_aspa(const char *, struct cert *, struct aspa *);
 int		 valid_uuid(const char *);
 int		 valid_spl(const char *, struct cert *, struct spl *);
 
@@ -911,9 +921,9 @@ void		 constraints_parse(void);
 int		 constraints_validate(const char *, const struct cert *);
 
 /* Parser-specific */
-struct entity	*entity_new(const char *, const char *, enum rtype,
-		    enum location, unsigned int, unsigned char *, size_t,
-		    int, int, const char *);
+struct entity	*entity_new(const char *, enum rtype, enum location,
+		    unsigned int, unsigned char *, size_t, int, int,
+		    const char *);
 void		 entity_free(struct entity *);
 void		 entity_read_req(struct ibuf *, struct entity *);
 void		 entityq_flush(struct entityq *, struct repo *);
@@ -1025,8 +1035,6 @@ int		 x509_valid_serial(const char *, const char *,
 int		 x509_check_tbs_sigalg(const char *, const X509_ALGOR *);
 int		 x509_location(const char *, const char *, GENERAL_NAME *,
 		    char **);
-int		 x509_inherits(X509 *);
-int		 x509_any_inherits(X509 *);
 int		 x509_valid_subject_name(const char *, const X509_NAME *);
 int		 x509_valid_issuer_name(const char *, const X509_NAME *);
 time_t		 x509_find_expires(time_t, struct auth *, struct crl *);

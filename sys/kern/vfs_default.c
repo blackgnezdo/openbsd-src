@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_default.c,v 1.53 2026/11/08 15:35:01 kirill Exp $  */
+/*	$OpenBSD: vfs_default.c,v 1.56 2026/11/15 01:58:37 dgl Exp $  */
 
 /*
  * Portions of this code are:
@@ -175,8 +175,10 @@ vop_generic_abortop(void *v)
 {
 	struct vop_abortop_args *ap = v;
  
-	if ((ap->a_cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF)
+	if ((ap->a_cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF) {
 		pool_put(&namei_pool, ap->a_cnp->cn_pnbuf);
+		ap->a_cnp->cn_pnbuf = NULL;
+	}
 
 	return (0);
 }

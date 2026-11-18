@@ -1,4 +1,4 @@
-/*	$OpenBSD: ccr.c,v 1.47 2026/11/02 15:23:17 claudio Exp $ */
+/*	$OpenBSD: ccr.c,v 1.49 2026/11/16 17:02:04 tb Exp $ */
 /*
  * Copyright (c) 2025 Job Snijders <job@openbsd.org>
  *
@@ -1020,7 +1020,7 @@ parse_mft_instances(const char *fn, struct ccr *ccr,
 			    fn, i);
 			goto out;
 		}
-		if (size < 1000 || size > MAX_FILE_SIZE) {
+		if (size > MAX_FILE_SIZE) {
 			warnx("%s: manifest instance #%d corrupted: size",
 			    fn, i);
 			goto out;
@@ -1322,6 +1322,11 @@ parse_aspa_providers(const char *fn, struct ccr *ccr, uint32_t asid,
 
 		vap->providers[i] = provider;
 		prev = provider;
+	}
+	if (p_num > 1 && vap->providers[0] == 0) {
+		warnx("%s: AS %u malformed ASPA payload: AS 0 alongside others",
+		    fn, asid);
+		goto out;
 	}
 
 	if ((RB_INSERT(vap_tree, &ccr->vaps, vap)) != NULL) {

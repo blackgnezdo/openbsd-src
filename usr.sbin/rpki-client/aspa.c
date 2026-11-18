@@ -1,7 +1,7 @@
-/*	$OpenBSD: aspa.c,v 1.49 2026/11/10 06:53:27 tb Exp $ */
+/*	$OpenBSD: aspa.c,v 1.58 2026/11/16 20:07:46 tb Exp $ */
 /*
+ * Copyright (c) 2022,2026 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2022 Job Snijders <job@fastly.com>
- * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -17,68 +17,99 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <sys/tree.h>
+
 #include <assert.h>
 #include <err.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include <time.h>
 
-#include <openssl/asn1.h>
-#include <openssl/asn1t.h>
-#include <openssl/stack.h>
-#include <openssl/safestack.h>
-#include <openssl/x509.h>
-
+#include "bytestring.h"
 #include "extern.h"
-#include "rpki-asn1.h"
+#include "rpki-der.h"
 
 /*
- * ASPA eContent definition in draft-ietf-sidrops-aspa-profile-20, section 3.
+ * ASPA eContent definition in draft-ietf-sidrops-aspa-profile-30, section 3.
  */
 
-ASN1_ITEM_EXP ASProviderAttestation_it;
-
-ASN1_SEQUENCE(ASProviderAttestation) = {
-	ASN1_EXP_OPT(ASProviderAttestation, version, ASN1_INTEGER, 0),
-	ASN1_SIMPLE(ASProviderAttestation, customerASID, ASN1_INTEGER),
-	ASN1_SEQUENCE_OF(ASProviderAttestation, providers, ASN1_INTEGER),
-} ASN1_SEQUENCE_END(ASProviderAttestation);
-
-IMPLEMENT_ASN1_FUNCTIONS(ASProviderAttestation);
-
-/*
- * Parse the ProviderASSet sequence.
- * Return zero on failure, non-zero on success.
- */
 static int
-aspa_parse_providers(const char *fn, struct aspa *aspa,
-    const STACK_OF(ASN1_INTEGER) *providers)
+aspa_parse_version(const char *fn, CBS *cbs, struct aspa *aspa)
 {
-	const ASN1_INTEGER	*pa;
-	size_t			 providersz, i;
+	uint64_t version;
 
-	if ((providersz = sk_ASN1_INTEGER_num(providers)) == 0) {
+	if (!cbs_get_econtent_version(cbs, &version)) {
+		warnx("%s: ASPA failed to parse eContent version", fn);
+		return 0;
+	}
+	if (version != 1) {
+		warnx("%s: unexpected version (expected %d, got %llu)",
+		    fn, 1, (unsigned long long)version);
+		return 0;
+	}
+	return 1;
+}
+
+static int
+aspa_parse_customerASID(const char *fn, CBS *cbs, struct aspa *aspa)
+{
+	if (!cbs_get_asid(cbs, &aspa->custasid)) {
+		warnx("%s: malformed CustomerASID", fn);
+		return 0;
+	}
+	if (aspa->custasid == 0) {
+		warnx("%s: CustomerASID 0 not allowed", fn);
+		return 0;
+	}
+	return 1;
+}
+
+static int
+aspa_parse_providers(const char *fn, CBS *cbs, struct aspa *aspa)
+{
+	CBS child, providers;
+	size_t num;
+
+	assert(aspa->providers == NULL && aspa->num_providers == 0);
+
+	/* ProviderASSet ::= SEQUENCE (SIZE(1..MAX)) OF PAS */
+	if (!CBS_get_asn1(cbs, &child, CBS_ASN1_SEQUENCE)) {
+		warnx("%s: failed to parse ProviderASSet", fn);
+		return 0;
+	}
+
+	num = 0;
+	CBS_dup(&child, &providers);
+	while (CBS_len(&providers) > 0) {
+		uint32_t provider;
+
+		if (!cbs_get_asid(&providers, &provider)) {
+			warnx("%s: ASPA: malformed ProviderAS", fn);
+			return 0;
+		}
+
+		if (++num >= MAX_ASPA_PROVIDERS) {
+			warnx("%s: ASPA: too many providers (more than %d)",
+			    fn, MAX_ASPA_PROVIDERS);
+			return 0;
+		}
+
+	}
+	if (num == 0) {
 		warnx("%s: ASPA: ProviderASSet needs at least one entry", fn);
 		return 0;
 	}
 
-	if (providersz >= MAX_ASPA_PROVIDERS) {
-		warnx("%s: ASPA: too many providers (more than %d)", fn,
-		    MAX_ASPA_PROVIDERS);
-		return 0;
-	}
-
-	aspa->providers = calloc(providersz, sizeof(aspa->providers[0]));
-	if (aspa->providers == NULL)
+	if ((aspa->providers = calloc(num, sizeof(aspa->providers[0]))) == NULL)
 		err(1, NULL);
+	aspa->num_providers = num;
 
-	for (i = 0; i < providersz; i++) {
-		uint32_t provider = 0;
+	num = 0;
+	CBS_dup(&child, &providers);
+	while (CBS_len(&providers) > 0) {
+		uint32_t provider;
 
-		pa = sk_ASN1_INTEGER_value(providers, i);
-
-		if (!as_id_parse(pa, &provider)) {
+		if (!cbs_get_asid(&providers, &provider)) {
 			warnx("%s: ASPA: malformed ProviderAS", fn);
 			return 0;
 		}
@@ -89,20 +120,22 @@ aspa_parse_providers(const char *fn, struct aspa *aspa,
 			return 0;
 		}
 
-		if (i > 0) {
-			if (aspa->providers[i - 1] > provider) {
+		assert(num < aspa->num_providers);
+		if (num > 0) {
+			if (aspa->providers[num - 1] > provider) {
 				warnx("%s: ASPA: invalid ProviderASSet order",
 				    fn);
 				return 0;
 			}
-			if (aspa->providers[i - 1] == provider) {
+			if (aspa->providers[num - 1] == provider) {
 				warnx("%s: ASPA: duplicate ProviderAS", fn);
 				return 0;
 			}
 		}
 
-		aspa->providers[aspa->num_providers++] = provider;
+		aspa->providers[num++] = provider;
 	}
+	assert(aspa->num_providers == num);
 
 	if (aspa->num_providers > 1 && aspa->providers[0] == 0) {
 		warnx("%s: ASPA: invalid ProviderASSet", fn);
@@ -117,40 +150,42 @@ aspa_parse_providers(const char *fn, struct aspa *aspa,
  * Returns zero on failure, non-zero on success.
  */
 static int
-aspa_parse_econtent(const char *fn, void *obj, const unsigned char *d,
-    size_t dsz)
+aspa_parse_econtent(const char *fn, void *obj, const uint8_t *d, size_t dsz)
 {
-	struct aspa		*aspa = obj;
-	const unsigned char	*oder;
-	ASProviderAttestation	*aspa_asn1;
-	int			 rc = 0;
+	CBS cbs, econtent;
+	struct aspa *aspa = obj;
 
-	oder = d;
-	if ((aspa_asn1 = d2i_ASProviderAttestation(NULL, &d, dsz)) == NULL) {
+	CBS_init(&econtent, d, dsz);
+
+	/*
+	 * ASProviderAttestation ::= SEQUENCE {
+	 *   version       [0] INTEGER DEFAULT 0,
+	 *   customerASID      CAS,
+	 *   providers         ProviderASSet }
+	 */
+	if (!CBS_get_asn1(&econtent, &cbs, CBS_ASN1_SEQUENCE)) {
 		warnx("%s: ASPA: failed to parse ASProviderAttestation", fn);
-		goto out;
+		return 0;
 	}
-	if (d != oder + dsz) {
-		warnx("%s: %td bytes trailing garbage in eContent", fn,
-		    oder + dsz - d);
-		goto out;
-	}
-
-	if (!valid_econtent_version(fn, aspa_asn1->version, 1))
-		goto out;
-
-	if (!as_id_parse(aspa_asn1->customerASID, &aspa->custasid)) {
-		warnx("%s: malformed CustomerASID", fn);
-		goto out;
+	if (CBS_len(&econtent) > 0) {
+		warnx("%s: %zu bytes trailing garbage in eContent",
+		    fn, CBS_len(&cbs));
+		return 0;
 	}
 
-	if (!aspa_parse_providers(fn, aspa, aspa_asn1->providers))
-		goto out;
+	if (!aspa_parse_version(fn, &cbs, aspa))
+		return 0;
+	if (!aspa_parse_customerASID(fn, &cbs, aspa))
+		return 0;
+	if (!aspa_parse_providers(fn, &cbs, aspa))
+		return 0;
 
-	rc = 1;
- out:
-	ASProviderAttestation_free(aspa_asn1);
-	return rc;
+	if (CBS_len(&cbs) > 0) {
+		warnx("%s: trailing garbage in ASProviderAttestation", fn);
+		return 0;
+	}
+
+	return 1;
 }
 
 static int
@@ -166,11 +201,6 @@ aspa_cert_info(const char *fn, void *obj, const struct cert *cert)
 		return 0;
 	}
 
-	if (x509_any_inherits(cert->x509)) {
-		warnx("%s: inherit elements not allowed in EE cert", fn);
-		return 0;
-	}
-
 	return 1;
 }
 
@@ -179,9 +209,17 @@ aspa_validate(const char *fn, void *obj, struct cert *cert)
 {
 	struct aspa *aspa = obj;
 
-	aspa->valid = valid_aspa(fn, cert, aspa);
+	if (as_check_covered(aspa->custasid, aspa->custasid,
+	    cert->ases, cert->num_ases) > 0) {
+		aspa->valid = 1;
+	} else {
+		warnx("%s: ASPA: uncovered Customer ASID: %u",
+		    fn, aspa->custasid);
+		aspa->valid = 0;
+	}
 
-	return 1; /* XXX */
+	/* return success for filemode and accounting in the main process */
+	return 1;
 }
 
 static const ASN1_OBJECT *
@@ -291,21 +329,6 @@ aspa_read(struct ibuf *b)
 }
 
 /*
- * Insert a new uint32_t at index idx in the struct vap v.
- * All elements in the provider array from idx are moved up by one
- * to make space for the new element.
- */
-static void
-insert_vap(struct vap *v, uint32_t idx, uint32_t *p)
-{
-	if (idx < v->num_providers)
-		memmove(v->providers + idx + 1, v->providers + idx,
-		    (v->num_providers - idx) * sizeof(v->providers[0]));
-	v->providers[idx] = *p;
-	v->num_providers++;
-}
-
-/*
  * Add each ProviderAS entry into the Validated ASPA Providers (VAP) tree.
  * Duplicated entries are merged.
  */
@@ -313,8 +336,9 @@ void
 aspa_insert_vaps(char *fn, struct vap_tree *tree, struct aspa *aspa,
     struct repo *rp)
 {
-	struct vap	*v, *found;
-	size_t		 i, j;
+	struct vap *v, *found;
+	uint32_t *providers;
+	size_t i, j, max, num;
 
 	if ((v = calloc(1, sizeof(*v))) == NULL)
 		err(1, NULL);
@@ -344,30 +368,72 @@ aspa_insert_vaps(char *fn, struct vap_tree *tree, struct aspa *aspa,
 
 	repo_stat_inc(rp, aspa->talid, RTYPE_ASPA, STYPE_TOTAL);
 
-	v->providers = reallocarray(v->providers,
-	    v->num_providers + aspa->num_providers, sizeof(v->providers[0]));
-	if (v->providers == NULL)
+	/*
+	 * The ->providers[] array is either {0}, or {non-zero providers}.
+	 */
+
+	/* If v isn't new, merging {0} from aspa changes nothing. */
+	if (v->num_providers > 0 && aspa->providers[0] == 0)
+		return;
+
+	/* If v->providers[] is {0}, drop the 0, then copy aspa->providers[]. */
+	if (v->num_providers == 1 && v->providers[0] == 0) {
+		repo_stat_inc(rp, v->talid, RTYPE_ASPA, STYPE_DEC_PROVIDERS);
+		v->num_providers = 0;
+	}
+
+	max = aspa->num_providers + v->num_providers;
+	providers = calloc(max, sizeof(providers[0]));
+	if (providers == NULL)
 		err(1, NULL);
 
 	/*
 	 * Merge all data from aspa into v: loop over all aspa providers,
 	 * insert them in the right place in v->providers while keeping the
-	 * order of the providers array.
+	 * order of the providers array and eliminating duplicates.
 	 */
-	for (i = 0, j = 0; i < aspa->num_providers; ) {
-		if (j == v->num_providers ||
-		    aspa->providers[i] < v->providers[j]) {
-			/* merge provider from aspa into v */
+
+	num = 0;
+	for (i = 0, j = 0; i < aspa->num_providers && j < v->num_providers;) {
+		uint32_t add, new, old;
+
+		new = aspa->providers[i];
+		old = v->providers[j];
+
+		/* Advance the array with the smaller provider, or both. */
+		if (new <= old) {
+			i++;
+			add = new;
+		}
+		if (new >= old) {
+			j++;
+			add = old;
+		}
+
+		assert(num < max);
+		providers[num++] = add;
+
+		if (new < old) {
+			/* A new provider was added */
 			repo_stat_inc(rp, v->talid, RTYPE_ASPA,
 			    STYPE_PROVIDERS);
-			insert_vap(v, j, &aspa->providers[i]);
-			i++;
-		} else if (aspa->providers[i] == v->providers[j])
-			i++;
-
-		if (j < v->num_providers)
-			j++;
+		}
 	}
+
+	/* Add the remainder of providers from either aspa or v, if any. */
+	for (; i < aspa->num_providers; i++) {
+		assert(num < max);
+		providers[num++] = aspa->providers[i];
+		repo_stat_inc(rp, v->talid, RTYPE_ASPA, STYPE_PROVIDERS);
+	}
+	for (; j < v->num_providers; j++) {
+		assert(num < max);
+		providers[num++] = v->providers[j];
+	}
+
+	free(v->providers);
+	v->providers = providers;
+	v->num_providers = num;
 
 	if (v->num_providers >= MAX_ASPA_PROVIDERS) {
 		v->overflowed = 1;

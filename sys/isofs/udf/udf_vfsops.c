@@ -1,4 +1,4 @@
-/*	$OpenBSD: udf_vfsops.c,v 1.74 2026/11/08 15:35:01 kirill Exp $	*/
+/*	$OpenBSD: udf_vfsops.c,v 1.76 2026/11/14 22:28:44 kirill Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002 Scott Long <scottl@freebsd.org>

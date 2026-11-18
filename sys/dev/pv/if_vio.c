@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_vio.c,v 1.82 2026/11/05 15:47:44 sf Exp $	*/
+/*	$OpenBSD: if_vio.c,v 1.84 2026/11/18 00:03:36 jan Exp $	*/
 
 /*
  * Copyright (c) 2012 Stefan Fritsch, Alexander Fiveg.
@@ -784,19 +784,20 @@ negotiate:
 		if (device_mtu)
 			sc->sc_rx_mbuf_size = MAX(sc->sc_rx_mbuf_size,
 			    sc->sc_rx_mbuf_offset + device_mtu +
-			    sc->sc_hdr_size + ETHER_HDR_LEN);
+			    sc->sc_hdr_size + ETHER_HDR_LEN + EVL_ENCAPLEN);
 		ifp->if_hardmtu = MIN(ifp->if_hardmtu,
 		    sc->sc_rx_mbuf_size - sc->sc_rx_mbuf_offset -
-		    sc->sc_hdr_size - ETHER_HDR_LEN);
+		    sc->sc_hdr_size - ETHER_HDR_LEN - EVL_ENCAPLEN);
 	}
 
-	txsize = ifp->if_hardmtu + sc->sc_hdr_size + ETHER_HDR_LEN;
+	txsize = ifp->if_hardmtu + sc->sc_hdr_size + ETHER_HDR_LEN +
+	    EVL_ENCAPLEN;
 	if (virtio_has_feature(vsc, VIRTIO_NET_F_HOST_TSO4) ||
 	    virtio_has_feature(vsc, VIRTIO_NET_F_HOST_TSO6))
 		txsize = MAXMCLBYTES + sc->sc_hdr_size;
 
 	rxsize = ifp->if_hardmtu + sc->sc_rx_mbuf_offset +
-	    sc->sc_hdr_size + ETHER_HDR_LEN;
+	    sc->sc_hdr_size + ETHER_HDR_LEN + EVL_ENCAPLEN;
 	if (virtio_has_feature(vsc, VIRTIO_NET_F_GUEST_TSO4) ||
 	    virtio_has_feature(vsc, VIRTIO_NET_F_GUEST_TSO6))
 		rxsize = MAXMCLBYTES + sc->sc_rx_mbuf_offset +
@@ -1449,7 +1450,7 @@ vio_add_rx_mbuf(struct vio_softc *sc, struct vio_queue *vioq, int i)
 	if (m == NULL)
 		return ENOBUFS;
 	vioq->viq_rxmbufs[i] = m;
-	m->m_len = m->m_pkthdr.len = m->m_ext.ext_size;
+	m->m_len = m->m_pkthdr.len = sc->sc_rx_mbuf_size;
 	m_adj(m, sc->sc_rx_mbuf_offset);
 	r = bus_dmamap_load_mbuf(sc->sc_virtio->sc_dmat,
 	    vioq->viq_rxdmamaps[i], m, BUS_DMA_READ|BUS_DMA_NOWAIT);

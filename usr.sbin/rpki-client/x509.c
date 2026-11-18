@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509.c,v 1.139 2026/11/03 14:58:42 tb Exp $ */
+/*	$OpenBSD: x509.c,v 1.141 2026/11/13 06:35:47 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -202,87 +202,6 @@ x509_pubkey_get_ski(X509_PUBKEY *pubkey, const char *fn)
 }
 
 /*
- * Check whether all RFC 3779 extensions are set to inherit.
- * Return 1 if both AS & IP are set to inherit.
- * Return 0 on failure (such as missing extensions or no inheritance).
- */
-int
-x509_inherits(X509 *x)
-{
-	STACK_OF(IPAddressFamily)	*addrblk = NULL;
-	ASIdentifiers			*asidentifiers = NULL;
-	const IPAddressFamily		*af;
-	int				 crit, i, rc = 0;
-
-	addrblk = X509_get_ext_d2i(x, NID_sbgp_ipAddrBlock, &crit, NULL);
-	if (addrblk == NULL) {
-		if (crit != -1)
-			warnx("error parsing ipAddrBlocks");
-		goto out;
-	}
-
-	/*
-	 * Check by hand, since X509v3_addr_inherits() success only means that
-	 * at least one address family inherits, not all of them.
-	 */
-	for (i = 0; i < sk_IPAddressFamily_num(addrblk); i++) {
-		af = sk_IPAddressFamily_value(addrblk, i);
-		if (af->ipAddressChoice->type != IPAddressChoice_inherit)
-			goto out;
-	}
-
-	asidentifiers = X509_get_ext_d2i(x, NID_sbgp_autonomousSysNum, NULL,
-	    NULL);
-	if (asidentifiers == NULL) {
-		if (crit != -1)
-			warnx("error parsing asIdentifiers");
-		goto out;
-	}
-
-	/* We need to have AS numbers and don't want RDIs. */
-	if (asidentifiers->asnum == NULL || asidentifiers->rdi != NULL)
-		goto out;
-	if (!X509v3_asid_inherits(asidentifiers))
-		goto out;
-
-	rc = 1;
- out:
-	ASIdentifiers_free(asidentifiers);
-	sk_IPAddressFamily_pop_free(addrblk, IPAddressFamily_free);
-	return rc;
-}
-
-/*
- * Check whether at least one RFC 3779 extension is set to inherit.
- * Return 1 if an inherit element is encountered in AS or IP.
- * Return 0 otherwise.
- */
-int
-x509_any_inherits(X509 *x)
-{
-	STACK_OF(IPAddressFamily)	*addrblk = NULL;
-	ASIdentifiers			*asidentifiers = NULL;
-	int				 crit, rc = 0;
-
-	addrblk = X509_get_ext_d2i(x, NID_sbgp_ipAddrBlock, &crit, NULL);
-	if (addrblk == NULL && crit != -1)
-		warnx("error parsing ipAddrBlocks");
-	if (X509v3_addr_inherits(addrblk))
-		rc = 1;
-
-	asidentifiers = X509_get_ext_d2i(x, NID_sbgp_autonomousSysNum, &crit,
-	    NULL);
-	if (asidentifiers == NULL && crit != -1)
-		warnx("error parsing asIdentifiers");
-	if (X509v3_asid_inherits(asidentifiers))
-		rc = 1;
-
-	ASIdentifiers_free(asidentifiers);
-	sk_IPAddressFamily_pop_free(addrblk, IPAddressFamily_free);
-	return rc;
-}
-
-/*
  * Convert passed ASN1_TIME to time_t *t.
  * Returns 1 on success and 0 on failure.
  */
@@ -456,12 +375,6 @@ x509_valid_name_internal(const char *fn, const char *descr, const X509_NAME *xn)
 				    fn);
 				return 0;
 			}
-			/*
-			 * XXX - For some reason RFC 8209, section 3.1.1 decided
-			 * to allow UTF8String for the subject of BGPsec Router
-			 * Certificates, although RECOMMENDED contents fit in
-			 * a PrintableString.
-			 */
 			if (!valid_printable_string(fn, descr, as))
 				return 0;
 			break;

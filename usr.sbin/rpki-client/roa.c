@@ -1,4 +1,4 @@
-/*	$OpenBSD: roa.c,v 1.96 2026/10/22 06:15:57 tb Exp $ */
+/*	$OpenBSD: roa.c,v 1.98 2026/11/13 06:35:47 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -269,7 +269,7 @@ roa_parse_econtent(const char *fn, void *obj, const unsigned char *d,
 static int
 roa_cert_info(const char *fn, void *obj, const struct cert *cert)
 {
-	if (x509_any_inherits(cert->x509)) {
+	if (cert_any_inherits(cert)) {
 		warnx("%s: inherit elements not allowed in EE cert", fn);
 		return 0;
 	}
@@ -294,7 +294,8 @@ roa_validate(const char *fn, void *obj, struct cert *cert)
 
 	roa->valid = valid_roa(fn, cert, roa);
 
-	return 1; /* XXX */
+	/* return success for filemode and accounting in the main process */
+	return 1;
 }
 
 static const ASN1_OBJECT *

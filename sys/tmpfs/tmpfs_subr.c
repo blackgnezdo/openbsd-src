@@ -1,4 +1,4 @@
-/*	$OpenBSD: tmpfs_subr.c,v 1.29 2026/11/08 15:35:01 kirill Exp $	*/
+/*	$OpenBSD: tmpfs_subr.c,v 1.31 2026/11/14 22:28:44 kirill Exp $	*/
 /*	$NetBSD: tmpfs_subr.c,v 1.79 2012/03/13 18:40:50 elad Exp $	*/
 
 /*

@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.202 2026/11/10 11:04:01 claudio Exp $ */
+/*	$OpenBSD: parser.c,v 1.208 2026/11/17 15:23:08 claudio Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -56,8 +56,8 @@ static volatile int	 quit;
 
 struct parse_repo {
 	RB_ENTRY(parse_repo)	 entry;
-	char			*path;
 	char			*validpath;
+	char			*tmppath;
 	unsigned int		 id;
 };
 
@@ -84,22 +84,22 @@ repo_get(unsigned int id)
 }
 
 static void
-repo_add(unsigned int id, char *path, char *validpath)
+repo_add(unsigned int id, char *validpath, char *tmppath)
 {
 	struct parse_repo *rp;
 
 	if ((rp = calloc(1, sizeof(*rp))) == NULL)
 		err(1, NULL);
 	rp->id = id;
-	if (path != NULL)
-		if ((rp->path = strdup(path)) == NULL)
-			err(1, NULL);
 	if ((rp->validpath = strdup(validpath)) == NULL)
 		err(1, NULL);
+	if (tmppath != NULL)
+		if ((rp->tmppath = strdup(tmppath)) == NULL)
+			err(1, NULL);
 
 	rw_enter_write(&repos_lk);
 	if (RB_INSERT(repo_tree, &repos, rp) != NULL)
-		errx(1, "repository already added: id %d, %s", id, path);
+		errx(1, "repository already added: id %d, %s", id, validpath);
 	rw_leave(&repos_lk);
 }
 
@@ -111,8 +111,8 @@ repo_tree_free(struct repo_tree *tree)
 	rw_enter_write(&repos_lk);
 	RB_FOREACH_SAFE(repo, repo_tree, tree, trepo) {
 		RB_REMOVE(repo_tree, tree, repo);
-		free(repo->path);
 		free(repo->validpath);
+		free(repo->tmppath);
 		free(repo);
 	}
 	rw_leave(&repos_lk);
@@ -155,16 +155,15 @@ find_issuer(const char *fn, int id, const char *aki, const char *mftaki)
 }
 
 /*
- * Build access path to file based on repoid, path, location and file values.
+ * Build access path to file based on repoid and file.
+ * Can return NULL when loc is set to DIR_TEMP.
  */
 static char *
-parse_filepath(unsigned int repoid, const char *path, const char *file,
-    enum location loc)
+parse_filepath(unsigned int repoid, const char *file, enum location loc)
 {
 	struct parse_repo	*rp;
 	char			*fn, *repopath;
 
-	/* build file path based on repoid, entity path and filename */
 	rp = repo_get(repoid);
 	if (rp == NULL)
 		errx(1, "build file path: repository %u missing", repoid);
@@ -172,18 +171,41 @@ parse_filepath(unsigned int repoid, const char *path, const char *file,
 	if (loc == DIR_VALID)
 		repopath = rp->validpath;
 	else
-		repopath = rp->path;
+		repopath = rp->tmppath;
 
 	if (repopath == NULL)
 		return NULL;
 
-	if (path == NULL) {
-		if (asprintf(&fn, "%s/%s", repopath, file) == -1)
-			err(1, NULL);
-	} else {
-		if (asprintf(&fn, "%s/%s/%s", repopath, path, file) == -1)
-			err(1, NULL);
-	}
+	if (asprintf(&fn, "%s/%s", repopath, file) == -1)
+		err(1, NULL);
+	return fn;
+}
+
+/*
+ * Build access path based on mft and file value.
+ * Can return NULL when loc is set to DIR_TEMP.
+ */
+static char *
+mft_filepath(const struct mft *mft, const char *file, enum location loc)
+{
+	struct parse_repo	*rp;
+	char			*fn, *repopath;
+
+	/* build file path based on repoid, entity path and filename */
+	rp = repo_get(mft->repoid);
+	if (rp == NULL)
+		errx(1, "mft file path: repository %u missing", mft->repoid);
+
+	if (loc == DIR_VALID)
+		repopath = rp->validpath;
+	else
+		repopath = rp->tmppath;
+
+	if (repopath == NULL)
+		return NULL;
+
+	if (asprintf(&fn, "%s/%s%s", repopath, mft->path, file) == -1)
+		err(1, NULL);
 	return fn;
 }
 
@@ -294,8 +316,8 @@ proc_parser_mft_check(const char *fn, struct mft *mft)
 		int try, fd = -1, noent = 0, valid = 0;
 
 		for (try = 0; try < 2 && !valid; try++) {
-			if ((path = parse_filepath(mft->repoid, mft->path,
-			    m->file, loc[try])) == NULL)
+			path = mft_filepath(mft, m->file, loc[try]);
+			if (path == NULL)
 				continue;
 			fd = open(path, O_RDONLY);
 			if (fd == -1 && errno == ENOENT)
@@ -335,17 +357,14 @@ proc_parser_mft_check(const char *fn, struct mft *mft)
  * Load the CRL from loc using the info from the MFT.
  */
 static struct crl *
-parse_load_crl_from_mft(struct entity *ent, struct mft *mft, enum location loc,
-    char **crlfile)
+parse_load_crl_from_mft(struct mft *mft, enum location loc, char **crlfile)
 {
 	struct crl	*crl = NULL;
 	unsigned char	*f = NULL;
 	char		*fn = NULL;
 	size_t		 flen;
 
-	*crlfile = NULL;
-
-	fn = parse_filepath(ent->repoid, ent->path, mft->crl, loc);
+	fn = mft_filepath(mft, mft->crl, loc);
 	if (fn == NULL)
 		goto out;
 
@@ -395,19 +414,16 @@ parse_load_crl_from_mft(struct entity *ent, struct mft *mft, enum location loc,
 static struct mft *
 proc_parser_mft_pre(struct entity *ent, char *file, struct crl **crl,
     char **crlfile, struct mft *cached_mft, const char **errstr,
-    X509_STORE_CTX *ctx, BN_CTX *bn_ctx)
+    X509_STORE_CTX *ctx)
 {
 	struct mft	*mft;
 	struct cert	*cert = NULL;
 	struct auth	*a;
 	unsigned char	*der;
+	char		*pathend;
 	size_t		 len;
 	time_t		 now;
 	int		 issued_cmp, seqnum_cmp;
-
-	*crl = NULL;
-	*crlfile = NULL;
-	*errstr = NULL;
 
 	if (file == NULL)
 		return NULL;
@@ -422,19 +438,23 @@ proc_parser_mft_pre(struct entity *ent, char *file, struct crl **crl,
 		return NULL;
 	}
 
-	if (ent->path != NULL) {
-		if ((mft->path = strdup(ent->path)) == NULL)
-			err(1, NULL);
-	}
+	mft->repoid = ent->repoid;
+	pathend = strrchr(ent->file, '/');
+	if (pathend == NULL)
+		mft->path = strdup("");
+	else
+		mft->path = strndup(ent->file, pathend + 1 - ent->file);
+	if (mft->path == NULL)
+		err(1, NULL);
 
 	if (!EVP_Digest(der, len, mft->mfthash, NULL, EVP_sha256(), NULL))
 		errx(1, "EVP_Digest failed");
 
 	free(der);
 
-	*crl = parse_load_crl_from_mft(ent, mft, DIR_TEMP, crlfile);
+	*crl = parse_load_crl_from_mft(mft, DIR_TEMP, crlfile);
 	if (*crl == NULL)
-		*crl = parse_load_crl_from_mft(ent, mft, DIR_VALID, crlfile);
+		*crl = parse_load_crl_from_mft(mft, DIR_VALID, crlfile);
 
 	a = find_issuer(file, ent->certid, mft->aki, NULL);
 	if (a == NULL)
@@ -444,18 +464,15 @@ proc_parser_mft_pre(struct entity *ent, char *file, struct crl **crl,
 	cert_free(cert);
 	cert = NULL;
 
-	mft->repoid = ent->repoid;
 	mft->talid = a->cert->talid;
 	mft->issuerid = ent->certid;
 
 	now = get_current_time();
-	/* check that now is not before from */
 	if (now < mft->thisupdate) {
 		warnx("%s: manifest not yet valid %s", file,
 		    time2str(mft->thisupdate));
 		goto err;
 	}
-	/* check that now is not after until */
 	if (now > mft->nextupdate) {
 		warnx("%s: manifest expired on %s", file,
 		    time2str(mft->nextupdate));
@@ -503,7 +520,7 @@ proc_parser_mft_pre(struct entity *ent, char *file, struct crl **crl,
 	}
 
 	if (seqnum_cmp > 0) {
-		if (mft_seqnum_gap_present(mft, cached_mft, bn_ctx)) {
+		if (mft_seqnum_gap_present(mft, cached_mft)) {
 			mft->seqnum_gap = 1;
 			if (verbose)
 				warnx("%s: seqnum gap detected #%s -> #%s",
@@ -528,7 +545,7 @@ proc_parser_mft_pre(struct entity *ent, char *file, struct crl **crl,
  */
 static char *
 proc_parser_mft(struct entity *ent, struct mft **mp, char **crlfile,
-    time_t *crlmtime, X509_STORE_CTX *ctx, BN_CTX *bn_ctx)
+    time_t *crlmtime, X509_STORE_CTX *ctx)
 {
 	struct mft	*mft1 = NULL, *mft2 = NULL;
 	struct crl	*crl, *crl1 = NULL, *crl2 = NULL;
@@ -537,17 +554,17 @@ proc_parser_mft(struct entity *ent, struct mft **mp, char **crlfile,
 	const char	*err1 = NULL, *err2 = NULL;
 
 	*mp = NULL;
+	*crlfile = NULL;
 	*crlmtime = 0;
 
-	file2 = parse_filepath(ent->repoid, ent->path, ent->file, DIR_VALID);
+	file2 = parse_filepath(ent->repoid, ent->file, DIR_VALID);
 	mft2 = proc_parser_mft_pre(ent, file2, &crl2, &crl2file, NULL,
-	    &err2, ctx, bn_ctx);
+	    &err2, ctx);
 
 	if (!noop) {
-		file1 = parse_filepath(ent->repoid, ent->path, ent->file,
-		    DIR_TEMP);
+		file1 = parse_filepath(ent->repoid, ent->file, DIR_TEMP);
 		mft1 = proc_parser_mft_pre(ent, file1, &crl1, &crl1file, mft2,
-		    &err1, ctx, bn_ctx);
+		    &err1, ctx);
 	}
 
 	if (proc_parser_mft_check(file1, mft1)) {
@@ -589,9 +606,15 @@ proc_parser_mft(struct entity *ent, struct mft **mp, char **crlfile,
 	}
 
 	if (*mp != NULL) {
+		struct auth *a;
+
 		*crlmtime = crl->thisupdate;
 		if (crl_insert(&crls, crl))
 			crl = NULL;
+
+		a = auth_find(&auths, (*mp)->issuerid);
+		if (a != NULL)
+			carepo_increment(a->cert);
 	}
 	crl_free(crl);
 
@@ -604,6 +627,7 @@ proc_enqueue_mft(struct entityq *mftq, const struct mft *mft, const char *file)
 	const struct mftfile *f;
 	struct entity *new;
 	size_t i, inserted = 0;
+	char *fn;
 
 	for (i = 0; i < mft->filesz; i++) {
 		unsigned char *mfthash = NULL;
@@ -621,9 +645,14 @@ proc_enqueue_mft(struct entityq *mftq, const struct mft *mft, const char *file)
 			mfthashsz = sizeof(mft->mfthash);
 		}
 
-		new = entity_new(mft->path, f->file, f->type, f->location,
+		if (asprintf(&fn, "%s%s", mft->path, f->file) == -1)
+			err(1, NULL);
+
+		new = entity_new(fn, f->type, f->location,
 		    mft->repoid, mfthash, mfthashsz, mft->talid,
 		    mft->issuerid, mft->aki);
+
+		free(fn);
 
 		TAILQ_INSERT_TAIL(mftq, new, entries);
 		inserted++;
@@ -671,8 +700,7 @@ proc_parser_cert(char *file, const unsigned char *der, size_t len,
 	cert->talid = a->cert->talid;
 	cert->issuerid = a->cert->certid;
 
-	cert->path = parse_filepath(ent->repoid, ent->path, ent->file,
-	    DIR_VALID);
+	cert->path = parse_filepath(ent->repoid, ent->file, DIR_VALID);
 	if (cert->path == NULL) {
 		warnx("%s: failed to create file path", file);
 		goto out;
@@ -690,6 +718,12 @@ proc_parser_cert(char *file, const unsigned char *der, size_t len,
 	if (cert->purpose == CERT_PURPOSE_CA) {
 		if (sizeof(cert->mfthash) != ent->datasz)
 			errx(1, "%s: corrupted entity", file);
+
+		if (carepo_get_count(cert) >= MAX_CA_PER_CAREPO) {
+			warnx("%s: ca repository overflowed %s", file,
+			    cert->repo);
+			goto out;
+		}
 
 		memcpy(cert->mfthash, ent->data, ent->datasz);
 		auth_insert(file, &auths, cert, a, crl);
@@ -760,14 +794,13 @@ proc_parser_root_cert(struct entity *ent, struct cert **out_cert)
 
 	*out_cert = NULL;
 
-	file2 = parse_filepath(ent->repoid, ent->path, ent->file, DIR_VALID);
+	file2 = parse_filepath(ent->repoid, ent->file, DIR_VALID);
 	der = load_file(file2, &der_len);
 	cert2 = cert_parse_ta(file2, der, der_len, spki, spkisz);
 	free(der);
 
 	if (!noop) {
-		file1 = parse_filepath(ent->repoid, ent->path, ent->file,
-		    DIR_TEMP);
+		file1 = parse_filepath(ent->repoid, ent->file, DIR_TEMP);
 		der = load_file(file1, &der_len);
 		cert1 = cert_parse_ta(file1, der, der_len, spki, spkisz);
 		free(der);
@@ -900,8 +933,7 @@ parse_load_file(struct entity *ent, unsigned char **f, size_t *flen)
 {
 	char *file;
 
-	file = parse_filepath(ent->repoid, ent->path, ent->file,
-	    ent->location);
+	file = parse_filepath(ent->repoid, ent->file, ent->location);
 	if (file == NULL)
 		errx(1, "no path to file");
 
@@ -917,7 +949,7 @@ parse_load_file(struct entity *ent, unsigned char **f, size_t *flen)
  */
 static void
 parse_entity(struct entityq *q, struct ibufqueue *msgq, struct entityq *mftq,
-    X509_STORE_CTX *ctx, BN_CTX *bn_ctx)
+    X509_STORE_CTX *ctx)
 {
 	struct entity	*ent;
 	struct tal	*tal;
@@ -992,7 +1024,7 @@ parse_entity(struct entityq *q, struct ibufqueue *msgq, struct entityq *mftq,
 			break;
 		case RTYPE_MFT:
 			file = proc_parser_mft(ent, &mft, &crlfile, &crlmtime,
-			    ctx, bn_ctx);
+			    ctx);
 			io_str_buffer(b, file);
 			if (mft != NULL)
 				mtime = mft->signtime;
@@ -1081,8 +1113,8 @@ parse_entity(struct entityq *q, struct ibufqueue *msgq, struct entityq *mftq,
 			break;
 		case RTYPE_CRL:
 		default:
-			file = parse_filepath(ent->repoid, ent->path,
-			    ent->file, ent->location);
+			file = parse_filepath(ent->repoid, ent->file,
+			    ent->location);
 			io_str_buffer(b, file);
 			io_simple_buffer(b, &mtime, sizeof(mtime));
 			warnx("%s: unhandled type %d", file, ent->type);
@@ -1105,13 +1137,10 @@ parse_worker(void *arg)
 	struct entity *ent;
 	struct ibufqueue *myq;
 	X509_STORE_CTX *ctx;
-	BN_CTX *bn_ctx;
 	int n;
 
 	if ((ctx = X509_STORE_CTX_new()) == NULL)
 		err(1, "X509_STORE_CTX_new");
-	if ((bn_ctx = BN_CTX_new()) == NULL)
-		err(1, "BN_CTX_new");
 	if ((myq = ibufq_new()) == NULL)
 		err(1, "ibufqueue_new");
 
@@ -1135,7 +1164,7 @@ parse_worker(void *arg)
 			cond_signal(&globalq_cond);
 		mtx_leave(&globalq_mtx);
 
-		parse_entity(&q, myq, &mftq, ctx, bn_ctx);
+		parse_entity(&q, myq, &mftq, ctx);
 
 		if (ibufq_queuelen(myq) > 0) {
 			mtx_enter(&globalmsgq_mtx);
@@ -1153,7 +1182,6 @@ parse_worker(void *arg)
 	}
 
 	X509_STORE_CTX_free(ctx);
-	BN_CTX_free(bn_ctx);
 	ibufq_free(myq);
 	return NULL;
 }
@@ -1290,8 +1318,8 @@ proc_parser(int fd, int nthreads)
 
 				/* handle RTYPE_REPO first */
 				if (ent->type == RTYPE_REPO) {
-					repo_add(ent->repoid, ent->path,
-					    ent->file);
+					repo_add(ent->repoid, ent->validpath,
+					    ent->tmppath);
 					entity_free(ent);
 					continue;
 				}
@@ -1339,6 +1367,7 @@ proc_parser(int fd, int nthreads)
 	auth_tree_free(&auths);
 	crl_tree_free(&crls);
 	repo_tree_free(&repos);
+	carepo_tree_free();
 
 	msgbuf_free(inbufq);
 	ibufq_free(globalmsgq);

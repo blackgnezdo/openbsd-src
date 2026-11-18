@@ -1,4 +1,4 @@
-/*	$OpenBSD: nfs_subs.c,v 1.155 2026/11/08 15:35:01 kirill Exp $	*/
+/*	$OpenBSD: nfs_subs.c,v 1.157 2026/11/14 22:28:44 kirill Exp $	*/
 /*	$NetBSD: nfs_subs.c,v 1.27.4.3 1996/07/08 20:34:24 jtc Exp $	*/
 
 /*

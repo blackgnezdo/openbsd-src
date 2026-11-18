@@ -1,4 +1,4 @@
-/*	$OpenBSD: dired.c,v 1.106 2026/10/16 04:05:51 jsg Exp $	*/
+/*	$OpenBSD: dired.c,v 1.108 2026/11/12 15:03:58 op Exp $	*/
 
 /* This file is in the public domain. */
 
@@ -521,9 +521,8 @@ d_copy(int f, int n)
 		ewprintf("Cannot copy to same file: %s", frname);
 		return (TRUE);
 	}
-	ret = (copy(frname, topath) >= 0) ? TRUE : FALSE;
-	if (ret != TRUE)
-		return (ret);
+	if (copy(frname, topath) == FALSE)
+		return (FALSE);
 	if ((bp = refreshbuffer(curbp)) == NULL)
 		return (FALSE);
 
@@ -667,7 +666,7 @@ d_exec(int space, struct buffer *bp, const char *input, const char *cmd, ...)
 	/* Allocate and build the argv. */
 	if ((argv = calloc(n, sizeof(*argv))) == NULL) {
 		dobeep();
-		ewprintf("Can't allocate argv : %s", strerror(errno));
+		ewprintf("Can't allocate argv: %s", strerror(errno));
 		goto out;
 	}
 
@@ -683,13 +682,13 @@ d_exec(int space, struct buffer *bp, const char *input, const char *cmd, ...)
 
 	if ((infd = open(input, O_RDONLY)) == -1) {
 		dobeep();
-		ewprintf("Can't open input file : %s", strerror(errno));
+		ewprintf("Can't open input file: %s", strerror(errno));
 		goto out;
 	}
 
 	if (pipe(fds) == -1) {
 		dobeep();
-		ewprintf("Can't create pipe : %s", strerror(errno));
+		ewprintf("Can't create pipe: %s", strerror(errno));
 		goto out;
 	}
 

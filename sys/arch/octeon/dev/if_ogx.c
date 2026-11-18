@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ogx.c,v 1.9 2026/09/11 16:22:55 visa Exp $	*/
+/*	$OpenBSD: if_ogx.c,v 1.13 2026/11/12 16:34:09 visa Exp $	*/
 
 /*
  * Copyright (c) 2019-2020 Visa Hankala
@@ -479,7 +479,7 @@ ogx_attach(struct device *parent, struct device *self, void *aux)
 	strlcpy(ifp->if_xname, DEVNAME(sc), IFNAMSIZ);
 	ifp->if_softc = sc;
 	ifp->if_flags = IFF_BROADCAST | IFF_MULTICAST;
-	ifp->if_xflags |= IFXF_MPSAFE;
+	ifp->if_xflags = IFXF_MPSAFE | IFXF_MBUF_64BIT;
 	ifp->if_ioctl = ogx_ioctl;
 	ifp->if_qstart = ogx_start;
 	ifp->if_hardmtu = OGX_MAX_MTU;
@@ -2200,11 +2200,11 @@ ogx_fpa3_pool_init(struct ogx_node *node, struct fpa3pool *pool,
 	pool->poolid = poolid;
 
 	if (bus_dmamap_create(node->node_dmat, segsize, 1, segsize, 0,
-	    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW, &pool->dmap))
+	    BUS_DMA_NOWAIT | BUS_DMA_ALLOCNOW | BUS_DMA_64BIT, &pool->dmap))
 		panic("%s: out of memory", __func__);
 	if (bus_dmamem_alloc(node->node_dmat, segsize, CACHELINESIZE,
 	    0, &pool->dmaseg, 1, &rsegs,
-	    BUS_DMA_NOWAIT | BUS_DMA_ZERO))
+	    BUS_DMA_NOWAIT | BUS_DMA_ZERO | BUS_DMA_64BIT))
 		panic("%s: out of memory", __func__);
 	if (bus_dmamem_map(node->node_dmat, &pool->dmaseg, 1, segsize,
 	    &pool->kva, BUS_DMA_NOWAIT | BUS_DMA_COHERENT))
@@ -2266,10 +2266,11 @@ ogx_fpa3_aura_load(struct ogx_node *node, struct fpa3aura *aura, size_t nelem,
 	totsize = nelem * size;
 
 	if (bus_dmamap_create(node->node_dmat, totsize, 1, totsize, 0,
-	    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW, &aura->dmap))
+	    BUS_DMA_NOWAIT | BUS_DMA_ALLOCNOW | BUS_DMA_64BIT, &aura->dmap))
 		panic("%s: out of memory", __func__);
 	if (bus_dmamem_alloc(node->node_dmat, totsize, CACHELINESIZE, 0,
-	    &aura->dmaseg, 1, &rsegs, BUS_DMA_NOWAIT | BUS_DMA_ZERO))
+	    &aura->dmaseg, 1, &rsegs,
+	    BUS_DMA_NOWAIT | BUS_DMA_ZERO | BUS_DMA_64BIT))
 		panic("%s: out of memory", __func__);
 	if (bus_dmamem_map(node->node_dmat, &aura->dmaseg, rsegs, totsize,
 	    &kva, BUS_DMA_NOWAIT | BUS_DMA_COHERENT))
