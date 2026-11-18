@@ -1,0 +1,5 @@
+if_ether.c:bad gateway value: %s
+if_ether.c:(u_char *)LLADDR(satosdl(gate)));
+if_ether.c:memcpy(eh->ether_shost, enaddr, sizeof(eh->ether_shost));
+if_ether.c:rt->rt_llinfo = (caddr_t)la;
+if_ether.c:LIST_REMOVE(la, la_list);

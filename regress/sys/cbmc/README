@@ -783,6 +783,24 @@ net80211/rsn_parse
 	count): VIOLATED.  mutant/ (pairwise list length check removed)
 	is VIOLATED.  Native: CLEAN.
 
+netinet/arp_rtrequest
+	arp_rtrequest() and arprequest() of sys/netinet/if_ether.c for
+	RTM_ADD and RTM_RESOLVE on an arbitrary gateway sockaddr (sa_len
+	0..255, any family, any sdl_nlen and sdl_alen, laid out as
+	rt_setgate leaves it: exactly ROUNDUP(sa_len) bytes, at the end
+	of a 264 byte object) and arbitrary rt_flags, then RTM_DELETE as
+	the teardown.  VERIFIED: no out-of-bounds access (the 6 byte
+	memcpy from enaddr in arprequest), no leak, and the
+	postcondition that an accepted gateway is AF_LINK with
+	offsetof(sdl_data) + sdl_nlen + sdl_alen <= sa_len.
+	mutant_prefix/ is the source before that bound was added and the
+	check moved in front of the arprequest call: VIOLATED (the
+	memcpy reads past the gateway; the postcondition fails).
+	mutant/ (the sdl_nlen + sdl_alen clause removed) is VIOLATED the
+	same two ways.  Native: CLEAN; on mutant_prefix the seed in
+	native/seeds reaches the ASan heap over-read at once.  Check
+	phase about 2 s.
+
 net/pppoe_disc
 	pppoe_dispatch_disc_pkt() of sys/net/if_pppoe.c on discovery
 	packets of up to 26 bytes, contract models, bounded unwinding.

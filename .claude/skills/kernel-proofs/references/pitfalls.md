@@ -51,6 +51,14 @@ bugs (validate a byte, re-read it through a copy) and uninitialised
 reads are then invisible to CBMC. The native engine covers some of
 this only if the model does real work natively.
 
+**Native FINDING on the harness postcondition, not on the memory
+error.** The fuzzer reaches the cheapest failing assertion first. To
+show the sanitizer report on a pre-fix source, add a seed in
+`native/seeds/<target>/`. The seed is the byte stream of nondet draws
+in call order, including the return values of bodiless functions
+(timeout_add_sec in arpinit drew the first 4 bytes of
+netinet/arp_rtrequest's seed); a harness change can shift it.
+
 **Native CLEAN after 20 seconds.** The fuzzer may not have reached the
 case. Check the native anchors; rerun with a longer time and
 `NATIVE_SEED=2`, `3`. Tags that need specific multi-byte values are
@@ -62,7 +70,19 @@ prints the first failed properties of each mutant under its line
 (and keeps the full log with `SUITE_LOGDIR`); one of them must be the
 access the removed check protected.
 
+**Concrete inputs in a report that the code rejects.** `cbmc.sh`
+prints no trace, so subagents derive inputs by reading, and get them
+wrong: the arp_rtrequest report gave sa_len 20 for a gateway that
+both versions reject below sizeof(struct sockaddr_dl) = 32. The
+result stood; the inputs did not. Check every reported input against
+each guard on the path, or reproduce it natively. A CBMC_TRACE
+option in cbmc.sh would remove this; not done yet.
+
 ## 2. Results that look bad and are not
+
+**`rw_status` and `splassert_fail` on the NOBODY line.** They come
+from NET_ASSERT_LOCKED under DIAGNOSTIC: no out-parameter, and
+splassert_fail does not end the path. Harmless.
 
 **A NULL dereference in a statistics or counter helper.**
 `ip6stat_inc`, `tcpstat_inc` and friends are header inlines over a
