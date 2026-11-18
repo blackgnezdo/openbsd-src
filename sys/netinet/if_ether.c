@@ -218,23 +218,27 @@ arp_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 		}
 		if ((rt->rt_flags & RTF_LOCAL) && rt->rt_llinfo == NULL)
 			rt->rt_expire = 0;
-		/*
-		 * Announce a new entry if requested or warn the user
-		 * if another station has this IP address.
-		 */
-		if (rt->rt_flags & (RTF_ANNOUNCE|RTF_LOCAL))
-			arprequest(ifp,
-			    &satosin(rt_key(rt))->sin_addr.s_addr,
-			    &satosin(rt_key(rt))->sin_addr.s_addr,
-			    (u_char *)LLADDR(satosdl(gate)));
 		/*FALLTHROUGH*/
 	case RTM_RESOLVE:
 		if (gate->sa_family != AF_LINK ||
-		    gate->sa_len < sizeof(struct sockaddr_dl)) {
+		    gate->sa_len < sizeof(struct sockaddr_dl) ||
+		    gate->sa_len < offsetof(struct sockaddr_dl, sdl_data) +
+		    satosdl(gate)->sdl_nlen + satosdl(gate)->sdl_alen) {
 			log(LOG_DEBUG, "%s: bad gateway value: %s\n", __func__,
 			    ifp->if_xname);
 			break;
 		}
+		/*
+		 * Announce a new entry if requested or warn the user
+		 * if another station has this IP address.
+		 */
+		if (req == RTM_ADD &&
+		    (rt->rt_flags & (RTF_ANNOUNCE|RTF_LOCAL)) &&
+		    satosdl(gate)->sdl_alen == ETHER_ADDR_LEN)
+			arprequest(ifp,
+			    &satosin(rt_key(rt))->sin_addr.s_addr,
+			    &satosin(rt_key(rt))->sin_addr.s_addr,
+			    (u_char *)LLADDR(satosdl(gate)));
 		satosdl(gate)->sdl_type = ifp->if_type;
 		satosdl(gate)->sdl_index = ifp->if_index;
 		/*
