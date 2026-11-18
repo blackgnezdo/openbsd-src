@@ -1,10 +1,25 @@
 /*
  * Harness: arp_rtrequest() of sys/netinet/if_ether.c, with arprequest()
- * which it calls, on an arbitrary gateway sockaddr and arbitrary
- * rt_flags, for req RTM_ADD or RTM_RESOLVE, then the teardown
- * arp_rtrequest(ifp, RTM_DELETE, rt).  if_ether.c is #included so
- * that its static and global objects (arp_pool, arp_list, arp_mtx)
- * match.
+ * which it calls, on the life of one route in two phases, then the
+ * teardown arp_rtrequest(ifp, RTM_DELETE, rt).  if_ether.c is
+ * #included so that its static and global objects (arp_pool, arp_list,
+ * arp_mtx) match.
+ *
+ * Phase 1, a new route: req is RTM_ADD (rtrequest1) or RTM_RESOLVE
+ * (rtable_match, a clone), on an arbitrary gateway (build_gate) and
+ * arbitrary rt_flags (all 32 bits, drawn before the gateway).
+ *
+ * Phase 2 (optional), RTM_CHANGE as route_output() does it (sys/net/
+ * rtsock.c, case RTM_CHANGE): maybe a new arbitrary gateway (rt_setgate
+ * replaces the old object), then the flags in RTF_FMASK, except
+ * RTF_MPLS, are toggled to arbitrary values (route_output clears
+ * RTF_MPLS from rtm_fmask and rtm_flags first, "set by rt_mpls_set()"),
+ * the other flags stay; then if_rtrequest(RTM_ADD), that is
+ * arp_rtrequest(ifp, RTM_ADD, rt), is called on the same rt, which
+ * may by now hold an llinfo from phase 1.  RTF_LLINFO is in RTF_FMASK,
+ * so a toggle can set it on a route that has no llinfo, or clear it on
+ * one that has.  The gateway comparison, the family check and rtm_getifa
+ * before rt_setgate are not modelled: the new gateway is arbitrary.
  *
  * What the callers guarantee, checked against the source:
  *  - The gateway comes from rt_setgate() (sys/net/route.c): a fresh
@@ -17,10 +32,30 @@
  *    So: sa_len any of 0..255, family AF_LINK or any other value,
  *    sdl_nlen and sdl_alen any bytes, bytes past sa_len zero, the
  *    object exactly ROUNDUP(sa_len) bytes.
- *  - rt is fresh: rt_llinfo NULL, rt_flags arbitrary (all 32 bits),
+ *  - rt is fresh in phase 1: rt_llinfo NULL, rt_flags arbitrary,
  *    rt_dest a valid sockaddr_in (rt_key), rt_gateway as above.
- *  - req is RTM_ADD or RTM_RESOLVE (the callers rtrequest1 and
- *    rtable_match use these two for a new route).
+ *
+ * Why RTF_LLINFO, not only rt_llinfo, is the key.  route_output
+ * (rtsock.c, about line 822) sets RTF_LLINFO in rti_flags for every
+ * route whose gateway has sa_family AF_LINK (unless RTF_CLONING),
+ * before rtrequest1() calls the hook, so the flag is set whether or not
+ * arp_rtrequest accepts the gateway.  arplookup() and arpresolve()
+ * test the flag (not rt_llinfo) and then read the gateway as a
+ * sockaddr_dl; arpcache() writes an Ethernet address at LLADDR.  So a
+ * route with RTF_LLINFO whose gateway is not a usable sockaddr_dl is
+ * a wild read or write, even if no llinfo was allocated.  The code
+ * therefore clears RTF_LLINFO (and deletes an existing llinfo) when it
+ * rejects the gateway.
+ *
+ * Postcondition (check_entry, after each phase): when RTF_LLINFO is set
+ * or rt_llinfo is not NULL, the gateway is AF_LINK, sa_len >=
+ * sizeof(struct sockaddr_dl), sdl_alen is 0 or ETHER_ADDR_LEN, and
+ * offsetof(sdl_data) + sdl_nlen + ETHER_ADDR_LEN <= sa_len (room for
+ * the address arpcache stores).  Not checked: routes for which
+ * arp_rtrequest returns before looking at the gateway, that is rt_flags
+ * with RTF_GATEWAY, RTF_BROADCAST, RTF_MULTICAST or RTF_MPLS, and an
+ * RTM_ADD of an RTF_CLONING route.  For these the flag is whatever the
+ * caller made it; their consumers are other code.
  *
  * Sizes: the gateway lives at the END of a constant 264 byte object
  * (264 = ROUNDUP(255)), at offset 264 - ROUNDUP(sa_len), so a read
@@ -37,8 +72,17 @@
  *    every property checked; they are zero here.
  *  - The ifp and rt objects are zero except for what is set below
  *    (rt_flags, if_type, if_index, if_rdomain, if_llprio arbitrary).
+ *  - Phase 2 changes only the gateway and the flags; metrics, labels,
+ *    rt_ifa and the interface are not touched (rtm_getifa and the
+ *    RTM_DELETE for a changed ifa are not modelled; the delete is
+ *    exercised by the teardown).  The new gateway object replaces the
+ *    old, which is freed, as rt_setgate does.
  *  - The hold queue la_mq stays empty (nothing here enqueues), so
  *    mq_purge in the teardown frees nothing.
+ *  - arplookup(), arpresolve(), arpcache() and the rtable are not
+ *    modelled: the fix to arplookup (proxy entries must carry ARP
+ *    information, 12a68fffb) is NOT covered by this target; only the
+ *    gateway invariant they rely on is.
  *
  * Models (replace file):
  *  pool_init   sets pr_size only, as the common pool model needs
@@ -61,9 +105,17 @@
  *
  * Properties: no out-of-bounds access (in particular the memcpy from
  * enaddr in arprequest); no leak or double free (--memory-leak-check);
- * postcondition: if the gateway was accepted (rt_llinfo != NULL) it is
- * AF_LINK and LLADDR(gate) .. + sdl_alen lies inside the sa_len bytes
- * that rt_setgate copied.
+ * the postcondition above after each phase; teardown leaves rt_llinfo
+ * NULL.
+ *
+ * Mutants (suite.sh -m, all VIOLATED): mutant_prefix/ source before
+ * e3dbf8882 (arprequest called before the gateway check, which has no
+ * sdl_nlen bound and no sdl_alen test); mutant_prefix2/ source before
+ * 96dde7faa (bound sdl_nlen + sdl_alen, no sdl_alen test, no
+ * RTM_DELETE and no CLR of RTF_LLINFO on a rejected gateway); mutant/
+ * current source without the "+ ETHER_ADDR_LEN" room (sdl_nlen only);
+ * mutant_noclr/ without CLR(rt_flags, RTF_LLINFO); mutant_nodel/
+ * without the RTM_DELETE of an existing llinfo.
  */
 #define log	kern_log_model
 #include "if_ether.c"

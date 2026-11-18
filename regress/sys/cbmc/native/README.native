@@ -196,7 +196,17 @@ Limits and deviations from CBMC
 	  offset of an 8 KB block.  Seeds for both are in native/seeds; the
 	  layout of a seed depends on the order in which the harness draws
 	  values, so a harness change can invalidate it (the result then
-	  becomes VACUOUS, not wrong).
+	  becomes VACUOUS, not wrong).  The input is consumed in call order
+	  by every draw: nondet_* in the harness and the return value of
+	  every bodiless function (getuptime, rw_status behind
+	  NET_ASSERT_LOCKED, ...), each its type's size, little endian.
+	  NATIVE_TRACE=1 lists the stub calls in order; with NATIVE_WORKDIR
+	  kept, $W/fuzz FILE runs one candidate (it writes default.profraw
+	  into the current directory).  netinet/arp_rtrequest's seed is
+	  laid out in the commit that added it.
+	- A fuzzer that reaches a harness assertion first may report that
+	  and not the sanitizer finding behind it: on the source before a
+	  fix, a seed for the path to the memory error shows the latter.
 	- Bounds are real: a loop CBMC unwinds N times runs as often as the
 	  input says; a non-terminating loop is a libFuzzer timeout (10 s),
 	  reported as a FINDING.

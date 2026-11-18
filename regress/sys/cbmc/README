@@ -784,22 +784,37 @@ net80211/rsn_parse
 	is VIOLATED.  Native: CLEAN.
 
 netinet/arp_rtrequest
-	arp_rtrequest() and arprequest() of sys/netinet/if_ether.c for
-	RTM_ADD and RTM_RESOLVE on an arbitrary gateway sockaddr (sa_len
-	0..255, any family, any sdl_nlen and sdl_alen, laid out as
-	rt_setgate leaves it: exactly ROUNDUP(sa_len) bytes, at the end
-	of a 264 byte object) and arbitrary rt_flags, then RTM_DELETE as
-	the teardown.  VERIFIED: no out-of-bounds access (the 6 byte
-	memcpy from enaddr in arprequest), no leak, and the
-	postcondition that an accepted gateway is AF_LINK with
-	offsetof(sdl_data) + sdl_nlen + sdl_alen <= sa_len.
-	mutant_prefix/ is the source before that bound was added and the
-	check moved in front of the arprequest call: VIOLATED (the
-	memcpy reads past the gateway; the postcondition fails).
-	mutant/ (the sdl_nlen + sdl_alen clause removed) is VIOLATED the
-	same two ways.  Native: CLEAN; on mutant_prefix the seed in
-	native/seeds reaches the ASan heap over-read at once.  Check
-	phase about 2 s.
+	arp_rtrequest() and arprequest() of sys/netinet/if_ether.c on the
+	life of one route, in two phases, then RTM_DELETE as the teardown.
+	Phase 1 is a new route, RTM_ADD or RTM_RESOLVE, on an arbitrary
+	gateway sockaddr (sa_len 0..255, any family, any sdl_nlen and
+	sdl_alen, laid out as rt_setgate leaves it: exactly ROUNDUP(sa_len)
+	bytes, at the end of a 264 byte object) and arbitrary rt_flags.
+	Phase 2 (optional) is RTM_CHANGE as route_output does it: maybe a
+	new arbitrary gateway, the flags in RTF_FMASK except RTF_MPLS
+	toggled, then arp_rtrequest(RTM_ADD) again on the same route.
+	VERIFIED: no out-of-bounds access (the 6 byte memcpy from enaddr
+	in arprequest), no leak, and after each phase the invariant that
+	arplookup, arpresolve and arpcache rely on: when RTF_LLINFO is set
+	or rt_llinfo is not NULL, the gateway is AF_LINK, sa_len >=
+	sizeof(struct sockaddr_dl), sdl_alen is 0 or ETHER_ADDR_LEN and
+	offsetof(sdl_data) + sdl_nlen + ETHER_ADDR_LEN <= sa_len.  The
+	flag, not only rt_llinfo, is checked because route_output sets
+	RTF_LLINFO for every AF_LINK gateway before the hook runs.  Routes
+	for which arp_rtrequest returns before looking at the gateway
+	(RTF_GATEWAY, RTF_BROADCAST, RTF_MULTICAST, RTF_MPLS, and RTM_ADD
+	of RTF_CLONING) are excluded.  Five mutants, all VIOLATED:
+	mutant_prefix/ (source before e3dbf8882: no sdl_nlen bound, check
+	after the arprequest call), mutant_prefix2/ (source before
+	96dde7faa: no room for an address when sdl_alen is 0, any
+	sdl_alen, RTF_LLINFO and the llinfo left on a rejected gateway),
+	mutant/ (no "+ ETHER_ADDR_LEN" room), mutant_noclr/ (RTF_LLINFO
+	not cleared), mutant_nodel/ (existing llinfo not deleted).  Not
+	covered: the arplookup change of 12a68fffb; rtalloc and
+	rtable_iterate are not modelled.  Native: CLEAN; each mutant is a
+	FINDING on the postcondition within a second; on mutant_prefix the
+	seed in native/seeds reaches the ASan heap over-read in arprequest
+	at once.  Check phase about 2 s.
 
 net/pppoe_disc
 	pppoe_dispatch_disc_pkt() of sys/net/if_pppoe.c on discovery
