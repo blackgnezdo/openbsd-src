@@ -136,16 +136,75 @@ model_if_output(struct ifnet *ifp, struct mbuf *m, struct sockaddr *dst,
 	return (0);
 }
 
+/*
+ * A gateway as rt_setgate() leaves it: ROUNDUP(sa_len) bytes at the end
+ * of a GATE_OBJ byte object (*objp, freed by the caller).
+ */
+static struct sockaddr *
+build_gate(unsigned char **objp)
+{
+	struct sockaddr *gate;
+	unsigned int sa_len;
+	int rounded;
+
+	sa_len = nondet_uchar();
+	rounded = ROUNDUP8(sa_len);
+	*objp = CBMC_NEW_ARRAY(unsigned char, GATE_OBJ);
+	gate = (struct sockaddr *)(*objp + GATE_OBJ - rounded);
+	gate->sa_len = sa_len;
+	if (sa_len >= 2)
+		gate->sa_family = nondet_bool() ? AF_LINK : nondet_uchar();
+	if (sa_len >= 6)
+		satosdl(gate)->sdl_nlen = nondet_uchar();
+	if (sa_len >= 7)
+		satosdl(gate)->sdl_alen = nondet_uchar();
+	return (gate);
+}
+
+/*
+ * What the consumers of an ARP entry (arpresolve, arpcache, arpproxy,
+ * in_arpinput through arplookup) rely on when RTF_LLINFO is set: an
+ * AF_LINK gateway whose sdl_alen is 0 or ETHER_ADDR_LEN and that has
+ * room for an Ethernet address at LLADDR, which arpcache stores there.
+ */
+static void
+check_entry(struct rtentry *rt, int req)
+{
+	struct sockaddr *gate = rt->rt_gateway;
+	struct sockaddr_dl *sdl = satosdl(gate);
+
+	/*
+	 * arp_rtrequest returns before looking at the gateway of these
+	 * (and of an RTM_ADD of a cloning route); not covered here.
+	 */
+	if (ISSET(rt->rt_flags,
+	    RTF_GATEWAY|RTF_BROADCAST|RTF_MULTICAST|RTF_MPLS) ||
+	    (req == RTM_ADD && ISSET(rt->rt_flags, RTF_CLONING)))
+		return;
+	if (rt->rt_llinfo == NULL && !ISSET(rt->rt_flags, RTF_LLINFO))
+		return;
+	__CPROVER_assert(gate->sa_family == AF_LINK,
+	    "post: RTF_LLINFO gateway is AF_LINK");
+	__CPROVER_assert(gate->sa_len >= sizeof(struct sockaddr_dl),
+	    "post: RTF_LLINFO gateway holds a sockaddr_dl");
+	__CPROVER_assert(sdl->sdl_alen == 0 || sdl->sdl_alen == ETHER_ADDR_LEN,
+	    "post: RTF_LLINFO sdl_alen is 0 or ETHER_ADDR_LEN");
+	__CPROVER_assert(offsetof(struct sockaddr_dl, sdl_data) +
+	    sdl->sdl_nlen + ETHER_ADDR_LEN <= gate->sa_len,
+	    "post: RTF_LLINFO gateway has room for LLADDR .. + 6");
+}
+
+#define FMASK_NO_MPLS	(RTF_LLINFO | RTF_PROTO1 | RTF_PROTO2 | \
+	RTF_PROTO3 | RTF_BLACKHOLE | RTF_REJECT | RTF_STATIC | RTF_BFD)
+
 int
 main(void)
 {
 	struct ifnet *ifp;
 	struct rtentry *rt;
 	struct sockaddr_in *dst;
-	struct sockaddr *gate;
-	unsigned char *obj;
-	unsigned int sa_len;
-	int req, rounded;
+	unsigned char *obj, *nobj;
+	int req;
 
 	arpinit();
 
@@ -156,19 +215,6 @@ main(void)
 	ifp->if_rdomain = nondet_uint();
 	ifp->if_llprio = nondet_uchar();
 
-	/* the gateway: ROUNDUP(sa_len) bytes at the end of a 264 byte object */
-	sa_len = nondet_uchar();
-	rounded = ROUNDUP8(sa_len);
-	obj = CBMC_NEW_ARRAY(unsigned char, GATE_OBJ);
-	gate = (struct sockaddr *)(obj + GATE_OBJ - rounded);
-	gate->sa_len = sa_len;
-	if (sa_len >= 2)
-		gate->sa_family = nondet_bool() ? AF_LINK : nondet_uchar();
-	if (sa_len >= 6)
-		satosdl(gate)->sdl_nlen = nondet_uchar();
-	if (sa_len >= 7)
-		satosdl(gate)->sdl_alen = nondet_uchar();
-
 	dst = CBMC_NEW(struct sockaddr_in);
 	dst->sin_len = sizeof(*dst);
 	dst->sin_family = AF_INET;
@@ -176,22 +222,33 @@ main(void)
 	rt = CBMC_NEW(struct rtentry);
 	rt->rt_flags = nondet_uint();
 	rt->rt_dest = sintosa(dst);
-	rt->rt_gateway = gate;
+	rt->rt_gateway = build_gate(&obj);
 	rt->rt_llinfo = NULL;
 
+	/* rtrequest: a new route, RTM_ADD, or a clone, RTM_RESOLVE */
 	req = nondet_bool() ? RTM_ADD : RTM_RESOLVE;
 	arp_rtrequest(ifp, req, rt);
+	check_entry(rt, req);
 
-	if (rt->rt_llinfo != NULL) {
-		struct sockaddr_dl *sdl = satosdl(gate);
+	/*
+	 * route_output RTM_CHANGE (rtsock.c): rt_setgate() installs a new
+	 * gateway when its bytes differ (the family check before it only
+	 * runs when they do not), the flags in RTF_FMASK but RTF_MPLS may
+	 * be toggled, then if_rtrequest(RTM_ADD).
+	 */
+	if (nondet_bool()) {
+		unsigned int fmask, nflags;
 
-		__CPROVER_assert(gate->sa_family == AF_LINK,
-		    "post: accepted gateway is AF_LINK");
-		__CPROVER_assert(gate->sa_len >= sizeof(struct sockaddr_dl),
-		    "post: accepted gateway holds a sockaddr_dl");
-		__CPROVER_assert(offsetof(struct sockaddr_dl, sdl_data) +
-		    sdl->sdl_nlen + sdl->sdl_alen <= gate->sa_len,
-		    "post: LLADDR .. + sdl_alen lies inside sa_len");
+		if (nondet_bool()) {
+			rt->rt_gateway = build_gate(&nobj);
+			harness_release(obj);
+			obj = nobj;
+		}
+		fmask = nondet_uint() & FMASK_NO_MPLS;
+		nflags = nondet_uint();
+		rt->rt_flags = (rt->rt_flags & ~fmask) | (nflags & fmask);
+		arp_rtrequest(ifp, RTM_ADD, rt);
+		check_entry(rt, RTM_ADD);
 	}
 
 	/* teardown by the kernel's own code, then what the harness made */
