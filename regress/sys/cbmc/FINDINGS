@@ -52,6 +52,31 @@ net80211/rsn_parse)
 	Bounds hold (the target's postcondition); a parsing mismatch
 	only.
 
+sys/net/rtsock.c, route_output RTM_CHANGE (read)
+	The gateway family check runs only when !newgate, that is when
+	the new gateway's bytes equal the old ones; it never rejects.
+	ARP no longer depends on it (96dde7faa).  RTF_LLINFO is in
+	RTF_FMASK, so userland can toggle it.
+
+sys/netinet/if_ether.c, routes arp_rtrequest returns early for (read)
+	route_output sets RTF_LLINFO for any AF_LINK gateway that is not
+	RTF_CLONING; with RTF_MULTICAST (not refused for userland) or
+	RTF_GATEWAY the gateway is never checked.  Not traced whether
+	arplookup/arpresolve can then reach it (arplookup rejects
+	RTF_GATEWAY).
+
+sys/netinet6/nd6.c, nd6_nbr.c, icmp6.c (read, from the e3dbf88825a sweep)
+	nd6_rtrequest checks only family and sa_len >= sizeof(struct
+	sockaddr_dl); nd6_cache_lladdr and nd6_na_input write if_addrlen
+	bytes at LLADDR, nd6_resolve, nd6_na_output and
+	icmp6_redirect_output read them, with no sdl_nlen bound;
+	nd6_na_input has no family check.  Same shape as the ARP fixes;
+	no target yet.
+
+sys/net/if_bpe.c, bpe_add_addr (read)
+	LLADDR of an ioctl-supplied sockaddr_dl read with alen checked but
+	not sdl_nlen.  Root only.
+
 Gaps in the targets themselves
 
 netinet/tcp_dooptions
@@ -71,5 +96,8 @@ netinet6/ip6_hopopts_input
 common/mbufcontract.h
 	The contract models are hand-written; nothing ties them
 	mechanically to the net/mbuf_* proofs of the real functions.
+netinet/arp_rtrequest
+	arplookup's proxy loop (12a68fffb) is not covered; routes with
+	early-return flags are excluded from the postcondition.
 no expect.native for most targets
 	The native suite pass (suite.sh -n) has not been recorded.
