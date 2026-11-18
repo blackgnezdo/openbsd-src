@@ -220,12 +220,27 @@ arp_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 			rt->rt_expire = 0;
 		/*FALLTHROUGH*/
 	case RTM_RESOLVE:
+		/*
+		 * arpcache() later stores an Ethernet address at LLADDR,
+		 * so there must be room for one whatever sdl_alen is now.
+		 */
 		if (gate->sa_family != AF_LINK ||
 		    gate->sa_len < sizeof(struct sockaddr_dl) ||
+		    (satosdl(gate)->sdl_alen != 0 &&
+		    satosdl(gate)->sdl_alen != ETHER_ADDR_LEN) ||
 		    gate->sa_len < offsetof(struct sockaddr_dl, sdl_data) +
-		    satosdl(gate)->sdl_nlen + satosdl(gate)->sdl_alen) {
+		    satosdl(gate)->sdl_nlen + ETHER_ADDR_LEN) {
 			log(LOG_DEBUG, "%s: bad gateway value: %s\n", __func__,
 			    ifp->if_xname);
+			/*
+			 * The caller has set RTF_LLINFO for an AF_LINK
+			 * gateway, and RTM_CHANGE may have replaced the
+			 * gateway of an entry with ARP information: drop
+			 * both, so that nothing uses this gateway.
+			 */
+			if (rt->rt_llinfo != NULL)
+				arp_rtrequest(ifp, RTM_DELETE, rt);
+			CLR(rt->rt_flags, RTF_LLINFO);
 			break;
 		}
 		/*
