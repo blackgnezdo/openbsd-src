@@ -1,0 +1,6 @@
+nd6.c:bad gateway value: %s
+nd6.c:rt->rt_llinfo = (caddr_t)ln;
+nd6.c:TAILQ_REMOVE(&nd6_list, ln, ln_list);
+nd6.c:nd6_llinfo_settimer(ln, 0);
+nd6.c:in6_addmulti(&llsol, ifp, &error);
+nd6.c:in6_delmulti(in6m);

@@ -73,7 +73,9 @@ access the removed check protected.
 **Concrete inputs in a report that the code rejects.** `cbmc.sh`
 prints no trace, so subagents derive inputs by reading, and get them
 wrong: the arp_rtrequest report gave sa_len 20 for a gateway that
-both versions reject below sizeof(struct sockaddr_dl) = 32. The
+both versions reject below sizeof(struct sockaddr_dl) = 32, and the
+nd6_rtrequest report repeated the same error (it is 32: sdl_data is
+24 bytes). Put struct sizes the inputs depend on in the brief. The
 result stood; the inputs did not. Check every reported input against
 each guard on the path, or reproduce it natively. A CBMC_TRACE
 option in cbmc.sh would remove this; not done yet.

@@ -836,3 +836,29 @@ net/bpe_add_addr
 	ifba_dstsa: sdl_nlen 243 to 255 (AF_LINK, IFT_ETHER, sdl_alen 6)
 	reads up to 13 bytes past the request: VIOLATED.  Native: CLEAN;
 	on mutant_prefix an ASan heap over-read.
+
+netinet6/nd6_rtrequest
+	nd6_rtrequest() of sys/netinet6/nd6.c on the life of one route, in
+	two phases, then RTM_DELETE as the teardown, like
+	netinet/arp_rtrequest.  Phase 1 is a new route, RTM_ADD or
+	RTM_RESOLVE, on an arbitrary gateway sockaddr (sa_len 0..255, any
+	family, any sdl_nlen and sdl_alen, exactly ROUNDUP(sa_len) bytes
+	at the end of a 264 byte object), arbitrary rt_flags (RTM_RESOLVE:
+	without RTF_CLONING, which rtrequest clears for a clone, and
+	RTF_LOCAL, which no cloning route has and nd6_llinfo_settimer
+	KASSERTs) and an ifp with arbitrary if_addrlen 0..255.  Phase 2
+	(optional) is RTM_CHANGE as route_output does it.  nd6_need_cache
+	is a model with one arbitrary result per run; in6ifa_ifpwithaddr
+	and in6_lookupmulti return NULL or an object, in6_addmulti and
+	in6_delmulti do nothing.  VERIFIED: no out-of-bounds access, no
+	leak, no KASSERT, and after each phase the invariant nd6_lookup's
+	and nd6_resolve's callers rely on: when rt_llinfo is not NULL and
+	RTF_GATEWAY is not set, the gateway is AF_LINK, sa_len >=
+	sizeof(struct sockaddr_dl) and offsetof(sdl_data) + sdl_nlen +
+	if_addrlen <= sa_len.  Three mutants, all VIOLATED:
+	mutant_prefix/ (source before ad7fd44ef), mutant/ (no
+	"+ ifp->if_addrlen" room), mutant_nodel/ (existing llinfo not
+	deleted on a rejected gateway).  Not covered: the nd6_ns_input
+	change of 089ef3708, and the consumers themselves.  Native: CLEAN;
+	each mutant a FINDING on the postcondition.  Check phase about
+	3 s.

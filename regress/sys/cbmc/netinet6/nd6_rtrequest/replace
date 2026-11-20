@@ -1,0 +1,8 @@
+m_freem:model_m_freem
+refcnt_init:model_refcnt_init
+refcnt_rele:model_refcnt_rele
+nd6_need_cache:model_nd6_need_cache
+in6ifa_ifpwithaddr:model_in6ifa_ifpwithaddr
+in6_addmulti:model_in6_addmulti
+in6_lookupmulti:model_in6_lookupmulti
+in6_delmulti:model_in6_delmulti
