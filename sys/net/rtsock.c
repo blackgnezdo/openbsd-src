@@ -1115,7 +1115,8 @@ rtm_output(struct rt_msghdr *rtm, struct rtentry **prt,
 change:
 		if (info->rti_info[RTAX_GATEWAY] != NULL) {
 			/* When updating the gateway, make sure it is valid. */
-			if (!newgate && rt->rt_gateway->sa_family !=
+			if (newgate && rt->rt_gateway != NULL &&
+			    rt->rt_gateway->sa_family !=
 			    info->rti_info[RTAX_GATEWAY]->sa_family) {
 				error = EINVAL;
 				break;
