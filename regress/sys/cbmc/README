@@ -824,3 +824,15 @@ net/pppoe_disc
 net/sppp_lcp_rcr
 	sppp_lcp_RCR() of sys/net/if_spppsubr.c on configure requests of
 	up to 20 option bytes (flat buffer), bounded unwinding.
+
+net/bpe_add_addr
+	bpe_add_addr() of sys/net/if_bpe.c on one SIOCBRDGSADDR request,
+	the buffer of exactly sizeof(struct ifbareq) bytes that bpe_ioctl
+	passes on, with arbitrary flags, family, sdl_type, sdl_nlen and
+	sdl_alen.  etherbridge_add_addr is replaced by a model that reads
+	the six endpoint bytes at LLADDR (the real read is in
+	bpe_eb_port_take, called through eb_ops).  VERIFIED.
+	mutant_prefix/ is the source before the endpoint was bounded by
+	ifba_dstsa: sdl_nlen 243 to 255 (AF_LINK, IFT_ETHER, sdl_alen 6)
+	reads up to 13 bytes past the request: VIOLATED.  Native: CLEAN;
+	on mutant_prefix an ASan heap over-read.

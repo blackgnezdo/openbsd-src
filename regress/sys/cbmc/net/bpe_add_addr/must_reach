@@ -1,0 +1,3 @@
+if_bpe.c:return (EAFNOSUPPORT);
+if_bpe.c:if (sdl->sdl_alen != ETHER_ADDR_LEN)
+if_bpe.c:etherbridge_add_addr(&sc->sc_eb
