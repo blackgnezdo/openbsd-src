@@ -706,6 +706,9 @@ bpe_add_addr(struct bpe_softc *sc, const struct ifbareq *ifba)
 		return (EAFNOSUPPORT);
 	if (sdl->sdl_alen != ETHER_ADDR_LEN)
 		return (EINVAL);
+	if (offsetof(struct sockaddr_dl, sdl_data) + sdl->sdl_nlen +
+	    ETHER_ADDR_LEN > sizeof(ifba->ifba_dstsa))
+		return (EINVAL);
 	endpoint = (struct ether_addr *)LLADDR(sdl);
 	/* check endpoint for multicast or broadcast? */
 
