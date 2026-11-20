@@ -51,11 +51,14 @@
  * or rt_llinfo is not NULL, the gateway is AF_LINK, sa_len >=
  * sizeof(struct sockaddr_dl), sdl_alen is 0 or ETHER_ADDR_LEN, and
  * offsetof(sdl_data) + sdl_nlen + ETHER_ADDR_LEN <= sa_len (room for
- * the address arpcache stores).  Not checked: routes for which
- * arp_rtrequest returns before looking at the gateway, that is rt_flags
- * with RTF_GATEWAY, RTF_BROADCAST, RTF_MULTICAST or RTF_MPLS, and an
- * RTM_ADD of an RTF_CLONING route.  For these the flag is whatever the
- * caller made it; their consumers are other code.
+ * the address arpcache stores).  It holds for every route, also those
+ * arp_rtrequest returns early for (RTF_GATEWAY, RTF_BROADCAST,
+ * RTF_MULTICAST, RTF_MPLS, an RTM_ADD of RTF_CLONING): route_output
+ * passes userland's rtm_flags through, RTF_LLINFO included, so these
+ * can carry the flag too, and arplookup (in_arpinput's proxy path,
+ * arpproxy) and arpresolve would read their gateway.  For RTM_RESOLVE
+ * the harness clears RTF_CLONING, RTF_CONNECTED and RTF_STATIC, as
+ * rtrequest does for a clone (route.c).
  *
  * Sizes: the gateway lives at the END of a constant 264 byte object
  * (264 = ROUNDUP(255)), at offset 264 - ROUNDUP(sa_len), so a read
@@ -112,10 +115,14 @@
  * e3dbf8882 (arprequest called before the gateway check, which has no
  * sdl_nlen bound and no sdl_alen test); mutant_prefix2/ source before
  * 96dde7faa (bound sdl_nlen + sdl_alen, no sdl_alen test, no
- * RTM_DELETE and no CLR of RTF_LLINFO on a rejected gateway); mutant/
- * current source without the "+ ETHER_ADDR_LEN" room (sdl_nlen only);
- * mutant_noclr/ without CLR(rt_flags, RTF_LLINFO); mutant_nodel/
- * without the RTM_DELETE of an existing llinfo.
+ * RTM_DELETE and no CLR of RTF_LLINFO on a rejected gateway);
+ * mutant_prefix3/ source before 569b20305 (early-return paths keep
+ * RTF_LLINFO whatever the gateway).  Built from the current source:
+ * mutant/ without the "+ ETHER_ADDR_LEN" room (sdl_nlen only);
+ * mutant_noclr/ without CLR(rt_flags, RTF_LLINFO) for a rejected
+ * gateway; mutant_nodel/ without the RTM_DELETE of an existing llinfo;
+ * mutant_noearly/ and mutant_nocloning/ without the CLR on the
+ * early-return and RTF_CLONING paths.
  */
 #define log	kern_log_model
 #include "if_ether.c"
@@ -225,14 +232,6 @@ check_entry(struct rtentry *rt, int req)
 	struct sockaddr *gate = rt->rt_gateway;
 	struct sockaddr_dl *sdl = satosdl(gate);
 
-	/*
-	 * arp_rtrequest returns before looking at the gateway of these
-	 * (and of an RTM_ADD of a cloning route); not covered here.
-	 */
-	if (ISSET(rt->rt_flags,
-	    RTF_GATEWAY|RTF_BROADCAST|RTF_MULTICAST|RTF_MPLS) ||
-	    (req == RTM_ADD && ISSET(rt->rt_flags, RTF_CLONING)))
-		return;
 	if (rt->rt_llinfo == NULL && !ISSET(rt->rt_flags, RTF_LLINFO))
 		return;
 	__CPROVER_assert(gate->sa_family == AF_LINK,
@@ -279,6 +278,9 @@ main(void)
 
 	/* rtrequest: a new route, RTM_ADD, or a clone, RTM_RESOLVE */
 	req = nondet_bool() ? RTM_ADD : RTM_RESOLVE;
+	/* rtrequest RTM_RESOLVE: a clone never has these (route.c) */
+	if (req == RTM_RESOLVE)
+		rt->rt_flags &= ~(RTF_CLONING|RTF_CONNECTED|RTF_STATIC);
 	arp_rtrequest(ifp, req, rt);
 	check_entry(rt, req);
 

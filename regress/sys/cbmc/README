@@ -800,21 +800,22 @@ netinet/arp_rtrequest
 	sizeof(struct sockaddr_dl), sdl_alen is 0 or ETHER_ADDR_LEN and
 	offsetof(sdl_data) + sdl_nlen + ETHER_ADDR_LEN <= sa_len.  The
 	flag, not only rt_llinfo, is checked because route_output sets
-	RTF_LLINFO for every AF_LINK gateway before the hook runs.  Routes
-	for which arp_rtrequest returns before looking at the gateway
-	(RTF_GATEWAY, RTF_BROADCAST, RTF_MULTICAST, RTF_MPLS, and RTM_ADD
-	of RTF_CLONING) are excluded.  Five mutants, all VIOLATED:
-	mutant_prefix/ (source before e3dbf8882: no sdl_nlen bound, check
-	after the arprequest call), mutant_prefix2/ (source before
-	96dde7faa: no room for an address when sdl_alen is 0, any
-	sdl_alen, RTF_LLINFO and the llinfo left on a rejected gateway),
-	mutant/ (no "+ ETHER_ADDR_LEN" room), mutant_noclr/ (RTF_LLINFO
-	not cleared), mutant_nodel/ (existing llinfo not deleted).  Not
-	covered: the arplookup change of 12a68fffb; rtalloc and
-	rtable_iterate are not modelled.  Native: CLEAN; each mutant is a
-	FINDING on the postcondition within a second; on mutant_prefix the
-	seed in native/seeds reaches the ASan heap over-read in arprequest
-	at once.  Check phase about 2 s.
+	RTF_LLINFO for every AF_LINK gateway before the hook runs and
+	passes userland's flags through, so it holds for every route,
+	also those arp_rtrequest returns early for (RTF_GATEWAY,
+	RTF_BROADCAST, RTF_MULTICAST, RTF_MPLS, RTM_ADD of RTF_CLONING).
+	RTM_RESOLVE clears RTF_CLONING, RTF_CONNECTED and RTF_STATIC, as
+	rtrequest does for a clone.  Eight mutants, all VIOLATED:
+	mutant_prefix/, mutant_prefix2/, mutant_prefix3/ (the sources
+	before e3dbf8882, 96dde7faa and 569b20305), and, built from the
+	current source, mutant/ (no "+ ETHER_ADDR_LEN" room),
+	mutant_noclr/ (RTF_LLINFO not cleared for a rejected gateway),
+	mutant_nodel/ (existing llinfo not deleted), mutant_noearly/ and
+	mutant_nocloning/ (RTF_LLINFO not cleared on the early-return and
+	RTF_CLONING paths).  Not covered: the arplookup change of
+	12a68fffb; rtalloc and rtable_iterate are not modelled.  Native:
+	CLEAN; on mutant_prefix the seed in native/seeds reaches the ASan
+	heap over-read in arprequest at once.  Check phase about 2 s.
 
 net/pppoe_disc
 	pppoe_dispatch_disc_pkt() of sys/net/if_pppoe.c on discovery
