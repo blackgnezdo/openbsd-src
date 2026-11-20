@@ -196,6 +196,24 @@ arpinit(void)
 	timeout_add_sec(&arptimer_to, arpt_prune);
 }
 
+/*
+ * Whether a gateway can stand behind an entry with RTF_LLINFO: its
+ * consumers (arpresolve, arpcache, arpproxy, in_arpinput) read or
+ * store an Ethernet address at LLADDR, arpcache whatever sdl_alen
+ * is now.
+ */
+static int
+arp_gateway_ok(struct sockaddr *gate)
+{
+	struct sockaddr_dl *sdl = satosdl(gate);
+
+	return (gate->sa_family == AF_LINK &&
+	    gate->sa_len >= sizeof(struct sockaddr_dl) &&
+	    (sdl->sdl_alen == 0 || sdl->sdl_alen == ETHER_ADDR_LEN) &&
+	    gate->sa_len >= offsetof(struct sockaddr_dl, sdl_data) +
+	    sdl->sdl_nlen + ETHER_ADDR_LEN);
+}
+
 void
 arp_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 {
@@ -205,38 +223,39 @@ arp_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 
 	NET_ASSERT_LOCKED();
 
+	/*
+	 * The caller sets RTF_LLINFO for an AF_LINK gateway, and route(8)
+	 * may set it with any flags: wherever the gateway is not checked
+	 * below, clear it for a gateway its consumers cannot use.
+	 */
 	if (ISSET(rt->rt_flags,
-	    RTF_GATEWAY|RTF_BROADCAST|RTF_MULTICAST|RTF_MPLS))
+	    RTF_GATEWAY|RTF_BROADCAST|RTF_MULTICAST|RTF_MPLS)) {
+		if ((req == RTM_ADD || req == RTM_RESOLVE) &&
+		    !arp_gateway_ok(gate))
+			CLR(rt->rt_flags, RTF_LLINFO);
 		return;
+	}
 
 	uptime = getuptime();
 	switch (req) {
 	case RTM_ADD:
 		if (rt->rt_flags & RTF_CLONING) {
 			rt->rt_expire = 0;
+			if (!arp_gateway_ok(gate))
+				CLR(rt->rt_flags, RTF_LLINFO);
 			break;
 		}
 		if ((rt->rt_flags & RTF_LOCAL) && rt->rt_llinfo == NULL)
 			rt->rt_expire = 0;
 		/*FALLTHROUGH*/
 	case RTM_RESOLVE:
-		/*
-		 * arpcache() later stores an Ethernet address at LLADDR,
-		 * so there must be room for one whatever sdl_alen is now.
-		 */
-		if (gate->sa_family != AF_LINK ||
-		    gate->sa_len < sizeof(struct sockaddr_dl) ||
-		    (satosdl(gate)->sdl_alen != 0 &&
-		    satosdl(gate)->sdl_alen != ETHER_ADDR_LEN) ||
-		    gate->sa_len < offsetof(struct sockaddr_dl, sdl_data) +
-		    satosdl(gate)->sdl_nlen + ETHER_ADDR_LEN) {
+		if (!arp_gateway_ok(gate)) {
 			log(LOG_DEBUG, "%s: bad gateway value: %s\n", __func__,
 			    ifp->if_xname);
 			/*
-			 * The caller has set RTF_LLINFO for an AF_LINK
-			 * gateway, and RTM_CHANGE may have replaced the
-			 * gateway of an entry with ARP information: drop
-			 * both, so that nothing uses this gateway.
+			 * RTM_CHANGE may have replaced the gateway of an
+			 * entry with ARP information: drop it, and the flag,
+			 * so that nothing uses this gateway.
 			 */
 			if (rt->rt_llinfo != NULL)
 				arp_rtrequest(ifp, RTM_DELETE, rt);
