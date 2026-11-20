@@ -211,6 +211,7 @@ nd6_ns_input(struct mbuf *m, int off, int icmp6len)
 
 		rt = rtalloc(sin6tosa(&tsin6), 0, m->m_pkthdr.ph_rtableid);
 		if (rt && (rt->rt_flags & RTF_ANNOUNCE) != 0 &&
+		    rt->rt_llinfo != NULL &&
 		    rt->rt_gateway->sa_family == AF_LINK) {
 			/*
 			 * proxy NDP for single entry
