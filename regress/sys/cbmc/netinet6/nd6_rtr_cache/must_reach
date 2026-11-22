@@ -1,0 +1,9 @@
+nd6_rtr.c:if (ip6->ip6_hlim != 255)
+nd6_rtr.c:if (nd6_options(nd_rs + 1, icmp6len, &ndopts) < 0) {
+nd6_rtr.c:if (nd6_options(nd_ra + 1, icmp6len, &ndopts) < 0) {
+nd6_rtr.c:if (ndopts.nd_opts_src_lladdr) {
+nd6_rtr.c:lladdr = (char *)(ndopts.nd_opts_src_lladdr + 1);
+nd6_rtr.c:ifp = if_get(m->m_pkthdr.ph_ifidx);
+nd6_rtr.c:nd6_cache_lladdr(ifp, &saddr6, lladdr, lladdrlen, icmp6_type, 0,
+nd6_rtr.c:icmp6stat_inc(icmp6_type == ND_ROUTER_SOLICIT ? icp6s_badrs :
+nd6.c:olen = nd_opt->nd_opt_len << 3;

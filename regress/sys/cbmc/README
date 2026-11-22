@@ -317,6 +317,15 @@ Adding a target
 	   counts a multi-line condition on its first line only.
 	6. opts: every loop on the path needs a bound at least as large as
 	   its trip count; --unwinding-assertions reports one that is not.
+	7. Mutants: mutant*/ directories next to the harness, each holding
+	   a copy of one kernel file under its own name with one check
+	   weakened (by one where possible: deleting a block can leave a
+	   redundant later check doing the work); mutant_prefix*/ hold the
+	   source before a fix.  suite.sh -m runs each with
+	   CBMC_OVERRIDE_DIR and CBMC_NO_COVER and expects VIOLATED.
+	Every file in step 4 must exist, empty if unused (an included-only
+	target has empty sources and keep).  Run cbmc.sh and suite.sh from
+	this directory, with target paths relative to it.
 
 Techniques used by the targets
 	- validator, then consumer (acpi/madt_validate, ffs/mountfs)
@@ -1054,3 +1063,18 @@ netinet/arp_input
 	end.  mutant/ and mutant_hdr/ drop arppullup's pullup to 28 and to
 	8 bytes: VIOLATED.  Native: CLEAN.  Check phase about 5 minutes,
 	2.3 million variables (timeout 600).
+
+netinet6/nd6_rtr_cache
+	nd6_rtr_cache() of sys/netinet6/nd6_rtr.c on a Router Solicitation
+	or Advertisement: IPv6 header, RS or RA and 0..16 option bytes of
+	arbitrary content, 48..72 bytes in one or two mbufs, on the
+	contract models, real nd6_options and ip6_exthdr_get.  Caller
+	guarantee (icmp6_input, icmp6.c:642-659): icmp6len = m_pkthdr.len
+	- off, at least 8 or 16, code 0; the function owns the chain (the
+	m_copym copy, or m when the copy failed).  if_get may return NULL;
+	nd6_cache_lladdr is the model of netinet6/icmp6_redirect.
+	VERIFIED: no out-of-bounds access, no leak, interface references
+	balanced.  mutant/ (the lladdr length test removed) and
+	mutant_off1/ (rounding one short: an if_addrlen of 7 passes a 6
+	byte address) are VIOLATED.  Native: CLEAN.  Check phase about
+	40 s quiet.
