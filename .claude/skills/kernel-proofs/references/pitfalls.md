@@ -353,3 +353,9 @@ So that a VERIFIED is not read as more than it is:
 - Counterexample inputs: `cbmc.sh` prints failed properties, not
   traces. To get concrete bytes, reproduce natively or derive them by
   reading.
+- Briefs that prescribe anchor text: an anchor must be text every
+  mutant keeps, on the first line of a statement.  A break inside a
+  switch whose cases break too, or a line the mutation removes, has
+  no such text (pf/pf_walk_header: the EOL break and the length-opt
+  case could not be anchored).  Name the property in the brief, let
+  the builder pick the anchor text from the tree.

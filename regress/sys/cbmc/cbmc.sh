@@ -422,6 +422,12 @@ nobody_seen=$( { sed -n 's/^\*\*\*\* WARNING: no body for function \(.*\)$/\1/p'
     "$W/check.raw"
     sed -n 's/^\[[^]]*\.no-body\.[^]]*\] .* no body for callee \(.*\): FAILURE$/\1/p' \
     "$W/check.raw"; } | sort -u | tr '\n' ' ' | sed 's/ $//')
+# a replaced function's calls go to the harness model; the bodiless
+# original is unreachable, and the link-time warning about it is noise
+for r in $(cat "$T/replace" 2>/dev/null); do
+    nobody_seen=$(printf '%s' "$nobody_seen" |
+        sed "s/ *${r%%:*} */ /" | sed 's/^ //;s/ $//')
+done
 echo "NOBODY ${nobody_seen:--}" | awk '{ if (length($0) > 1000) {
 	n = 0; s = $1; for (i = 2; i <= NF; i++) { if (length(s) + length($i) > 960)
 	    break; s = s " " $i } printf "%s ... (%d more)\n", s, NF - i + 1 }

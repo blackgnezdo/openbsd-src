@@ -88,6 +88,21 @@ netinet/tcp_dooptions
 netinet/ip_dooptions
 	Native run VACUOUS in the default time: the source-route forward
 	anchor is not reached.
+pf/pf_walk_header
+	m_copydata is a contract model (havoc and assume equal), so the
+	property "pf_walk_option reads only delivered bytes" is proven
+	for the flat opts[40] buffer, not for the mbuf the model stands
+	for.  The embedded-ICMP caller of pf_walk_header (pf.c 6496,
+	6516) is not covered by any target.
+pf_statelim_add
+	pf_ioctl.c:967, the sibling of pf_sourcelim_add without the
+	masks; unproven.  It shares the tree/table/error-path shape.
+pf tables
+	pfr_attach_table/pfr_detach_table reference counting in the
+	DIOCADDTABLE and rule overload-table paths (pf_table.c) is
+	modelled, not proven; a target over pfr_attach_table would
+	need the table refcount discipline pf/pf_addrule established
+	for tags.
 net/mbuf_split
 	The cluster/reference path and its recursion are covered
 	natively only.
