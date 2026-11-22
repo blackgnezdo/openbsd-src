@@ -52,13 +52,6 @@ net80211/rsn_parse)
 	Bounds hold (the target's postcondition); a parsing mismatch
 	only.
 
-sys/net/rtsock.c, rtm_setmetrics (native, from net/rtm_output_cached)
-	expire = in->rmx_expire, a 64-bit value from the message, then
-	expire -= gettime(): signed overflow for values near INT64_MIN,
-	undefined behaviour (the amd64 kernel builds with -fno-wrapv).
-	Root only, no memory effect.  Undecided: whether to bound or
-	saturate rmx_expire.
-
 sys/netinet6/nd6_nbr.c, nd6_ns_input (read, from netinet6/nd6_proxy)
 	proxydl = satosdl(rt->rt_gateway) is used by nd6_na_output after
 	rtfree(rt).  The table's reference keeps the gateway alive unless

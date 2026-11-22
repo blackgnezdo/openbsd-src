@@ -1,0 +1,3 @@
+gettime:model_gettime
+getuptime:model_getuptime
+rt_timer_get_expire:model_rt_timer_get_expire

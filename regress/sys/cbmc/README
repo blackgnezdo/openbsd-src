@@ -1134,3 +1134,16 @@ netinet6/dest6_input
 	leak.  mutant/ (the IP6OPT_MINLEN test at dest6.c:71 one short) is
 	VIOLATED on opt[1].  Native: CLEAN.  Check phase about 7 minutes,
 	1.4 million variables, --sat-solver cadical (timeout 1500).
+
+net/rtm_metrics
+	rtm_setmetrics() and rtm_getmetrics() of sys/net/rtsock.c on an
+	arbitrary rmx_expire from the routing message and arbitrary
+	non-negative clocks (gettime, getuptime and rt_timer_get_expire
+	are models).  opts adds --signed-overflow-check.  VERIFIED: no
+	signed overflow in either direction; a nonzero expiry is stored
+	nonzero and positive (one at or before boot as 1, expired); one
+	that does not saturate is the same instant in uptime and reads
+	back unchanged.  mutant_prefix/ (before 584889ed7) is VIOLATED on
+	overflow and on an expiry at boot stored as 0 (never);
+	mutant_set/ and mutant_get/ revert one direction each.  Native:
+	CLEAN.  Check phase a few seconds.

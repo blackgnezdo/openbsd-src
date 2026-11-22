@@ -1,0 +1,4 @@
+rtsock.c:boot = gettime() - getuptime();
+rtsock.c:expire = 1;
+rtsock.c:expire -= boot;
+rtsock.c:expire += boot;
