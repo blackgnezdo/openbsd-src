@@ -1,0 +1,2 @@
+netinet6/icmp6.c
+netinet6/nd6.c

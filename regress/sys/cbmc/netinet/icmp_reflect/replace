@@ -1,0 +1,8 @@
+rtalloc:model_rtalloc
+rtisvalid:model_rtisvalid
+rtfree:model_rtfree
+rtable_getsource:model_rtable_getsource
+ifa_ifwithaddr:model_ifa_ifwithaddr
+ip_srcroute:model_ip_srcroute
+m_gethdr:model_m_gethdr
+m_resethdr:model_m_resethdr

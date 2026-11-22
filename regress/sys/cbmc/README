@@ -987,3 +987,39 @@ netinet6/nd6_consumers
 	scratch copy.  Not covered: icmp6_redirect_output, the proxy path
 	(netinet6/nd6_proxy), packets above 72 bytes.  Native: CLEAN.
 	Check phase about 4 minutes, 1.8 million variables (timeout 600).
+
+netinet/icmp_reflect
+	icmp_reflect() of sys/netinet/ip_icmp.c on an IP header of 5..15
+	words (0..40 option bytes) and 8..16 payload bytes in the first
+	mbuf, maybe a second, on the contract models, the option walk under
+	a loop contract.  Caller guarantee: icmp_input_if's m_pullup puts
+	the header, options and 8 more bytes in the first mbuf; ia is NULL
+	or an address, op NULL or a pointer.  ip_srcroute (NULL or an mbuf
+	of MLEN bytes with 12..48 bytes of route), m_gethdr, m_resethdr
+	(without the tags) and the route lookups are models; in_canforward
+	and ip_stripoptions are the kernel's.  memcpy/memmove store
+	arbitrary bytes under CBMC (MEMCPY_HAVOC); the payload move is
+	checked natively.  VERIFIED: the option walk, the record-route,
+	timestamp and security copies and the padding stay in bounds, the
+	options mbuf's length is within its storage and a multiple of 4,
+	the reply header is rewritten (ip_hl 5, addresses swapped, ttl
+	MAXTTL, lengths reduced), references balanced, no leak on either
+	path.  mutant/ (len > cnt removed) is VIOLATED.  Native: CLEAN.
+	Check phase about 90 s, 2.3 million variables (timeout 600).
+
+netinet6/icmp6_redirect
+	icmp6_redirect_input() of sys/netinet6/icmp6.c on a Redirect of
+	80..96 bytes (IPv6 header, nd_redirect, 0..16 option bytes, one or
+	two mbufs, arbitrary content, ip6_plen as ip6_input leaves it) on
+	the contract models, real nd6_options.  if_get may return NULL;
+	rtalloc returns NULL or a route whose gateway is any family (an
+	AF_INET6 one at least 28 bytes, as rtm_xaddrs requires);
+	rtredirect, rt_timer_add and pfctlinput are models asserting their
+	sockaddrs readable; nd6_cache_lladdr is a model asserting what
+	netinet6/nd6_consumers assumes (lladdrlen consistent with
+	if_addrlen, lladdr readable).  VERIFIED: no out-of-bounds access,
+	no leak, route and interface references balanced.  mutant/ (the
+	lladdr length test removed) is VIOLATED on the lladdr assertions;
+	mutant_prefix/ (before 5d53f1e73) leaks the mbuf when if_get fails.
+	Not covered: jumbograms (ip6_plen 0), extension headers, the real
+	rtredirect.  Native: CLEAN.  Check phase about 40 s quiet.

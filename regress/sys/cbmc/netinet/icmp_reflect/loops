@@ -1,0 +1,14 @@
+{
+ "functions": [
+  {
+   "icmp_reflect": [
+    {
+     "loop_id": "0",
+     "invariants": "cnt >= 0 && cnt <= 40 && cp + cnt == g_end && opts != 0 && opts->m_hdr.mh_data == (char *)g_obuf && opts->m_hdr.mh_len >= 4 && opts->m_hdr.mh_len <= g_room && opts->m_hdr.mh_len + cnt <= g_room",
+     "decreases": "cnt",
+     "assigns": "cnt, cp, opt, len, opts->m_hdr.mh_len, __CPROVER_object_whole(g_obuf)"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,13 @@
+ip_icmp.c:return (EHOSTUNREACH);
+ip_icmp.c:return (ELOOP);
+ip_icmp.c:ip_src = ia->ia_addr.sin_addr;
+ip_icmp.c:rt = rtalloc(sintosa(&sin), RT_RESOLVE, rtableid);
+ip_icmp.c:ip->ip_dst = ip->ip_src;
+ip_icmp.c:ip->ip_ttl = MAXTTL;
+ip_icmp.c:opts->m_len = sizeof(struct in_addr);
+ip_icmp.c:len = cp[IPOPT_OLEN];
+ip_icmp.c:memcpy(mtod(opts, caddr_t) +
+ip_icmp.c:if ((cnt = opts->m_len % 4) != 0)
+ip_icmp.c:IPOPT_EOL;
+ip_icmp.c:ip_stripoptions(m);
+ip_icmp.c:*op = opts;

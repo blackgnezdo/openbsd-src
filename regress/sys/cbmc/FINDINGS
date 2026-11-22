@@ -67,6 +67,19 @@ sys/netinet6/nd6_nbr.c, nd6_ns_input (read, from netinet6/nd6_proxy)
 	in the target) deletes only routes that fail the proxy tests.  No
 	path found; the target cannot exclude one.
 
+sys/netinet/ip_icmp.c, icmp_reflect (read, from netinet/icmp_reflect)
+	m_resethdr(m) deletes the packet's tags before ip_srcroute(m)
+	looks for PACKET_TAG_SRCROUTE, so a reflected echo, timestamp,
+	mask or information request never carries the reversed source
+	route.  Functional only; source-routed packets are refused unless
+	net.inet.ip.sourceroute is set.  Undecided: intended or not.
+
+sys/netinet6/icmp6.c, icmp6_redirect_input (read)
+	icmp6len comes from ip6_plen, 0 for a jumbogram; ip6_exthdr_get(
+	&m, off, 0) then guarantees no bytes and the redirect's fields are
+	read beyond that.  Needs a packet of 65536 bytes or more; not
+	covered.
+
 Gaps in the targets themselves
 
 netinet/tcp_dooptions
