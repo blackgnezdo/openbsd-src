@@ -1,0 +1,4 @@
+rtsock.c:goto change;
+rtsock.c:error = rt_setgate(rt,
+rtsock.c:ifp->if_rtrequest(ifp, RTM_ADD, rt);
+rtsock.c:rt->rt_locks |= (rtm->rtm_inits & rtm->rtm_rmx.rmx_locks);

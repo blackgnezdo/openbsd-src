@@ -1,0 +1,8 @@
+rtable_match:model_rtable_match
+rtfree:model_rtfree
+if_get:model_if_get
+if_put:model_if_put
+rt_setgate:model_rt_setgate
+if_group_routechange:model_if_group_routechange
+gettime:model_gettime
+getuptime:model_gettime

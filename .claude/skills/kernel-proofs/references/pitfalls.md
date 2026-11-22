@@ -86,6 +86,11 @@ unreached. suite.sh runs mutants with CBMC_NO_COVER=1 and sees
 VIOLATED; a direct cbmc.sh run on the same copy can say VACUOUS. Read
 the failed properties, not only the RESULT word.
 
+**A must_reach anchor on the line a mutant removes.** cbmc.sh tests
+VACUOUS before VIOLATED, so the mutant comes back VACUOUS. Anchor only
+text every mutant keeps, and cover the removed line with an exact
+postcondition (net/rtm_output_cached asserts the result code).
+
 ## 2. Results that look bad and are not
 
 **Native FINDING on signed overflow in a nondet time or counter.**

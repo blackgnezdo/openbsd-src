@@ -904,3 +904,25 @@ netinet/arp_proxy
 	12a68fffb) and mutant_prefix/ (the source before 12a68fffb) are
 	VIOLATED on both reads.  Native: CLEAN; on mutant/ an ASan heap
 	over-read.  Check phase about 3 s.
+
+net/rtm_output_cached
+	rtm_output() of sys/net/rtsock.c for an RTM_ADD that finds an
+	existing RTF_CACHED entry (an ARP entry used as a gateway route's
+	L2 entry) and takes "goto change" with newgate 0, the path the
+	family check at "change:" exists for (3bb04c23e89).  The entry has
+	RTF_UP|CACHED|LLINFO|HOST and any flags such an entry can carry,
+	and an AF_LINK gateway that satisfies netinet/arp_rtrequest's
+	invariant; the message has an arbitrary gateway of any family below
+	AF_MAX with the length rtm_xaddrs guarantees, sa_len at most 64
+	(real: 255; 255 took 58 s and 5M variables), arbitrary flags,
+	fmask and metrics (rmx_expire 32 bits, see FINDINGS).  rtable_match,
+	rtfree, if_get/if_put, rt_setgate, if_group_routechange, gettime
+	and the interface's if_rtrequest are models; MPLS and BFD are not
+	compiled.  VERIFIED: the entry's gateway stays AF_LINK on every
+	return, a gateway of another family gives EINVAL, the hook runs
+	once on success, references balance, no out-of-bounds access, no
+	leak.  The check's own line is not an anchor (the mutants remove
+	it, and an unreached anchor turns VIOLATED into VACUOUS); the exact
+	result code covers it.  mutant/ is 9264ea9da's rtsock.c (accepts
+	gateway family 0, sa_len 8) and mutant_nocheck/ has the check
+	removed: VIOLATED.  Native: CLEAN.  Check phase about 30 s.

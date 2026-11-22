@@ -52,6 +52,13 @@ net80211/rsn_parse)
 	Bounds hold (the target's postcondition); a parsing mismatch
 	only.
 
+sys/net/rtsock.c, rtm_setmetrics (native, from net/rtm_output_cached)
+	expire = in->rmx_expire, a 64-bit value from the message, then
+	expire -= gettime(): signed overflow for values near INT64_MIN,
+	undefined behaviour (the amd64 kernel builds with -fno-wrapv).
+	Root only, no memory effect.  Undecided: whether to bound or
+	saturate rmx_expire.
+
 Gaps in the targets themselves
 
 netinet/tcp_dooptions
