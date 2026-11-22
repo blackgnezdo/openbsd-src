@@ -1205,7 +1205,7 @@ icmp6_redirect_input(struct mbuf *m, int off)
 
 	ifp = if_get(m->m_pkthdr.ph_ifidx);
 	if (ifp == NULL)
-		return;
+		goto freeit;
 
 	/* if we are router, we don't update route by icmp6 redirect */
 	if (i_am_router)
