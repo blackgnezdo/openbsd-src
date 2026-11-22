@@ -219,7 +219,11 @@ What is modelled
 	  less, for a bucket above 16 bytes, is "free: size too small"; size
 	  0 is accepted.  The allocation size is that of the object, also
 	  for objects made with CBMC_NEW.  pool(9) sits on top of that
-	  (common/stubs_pool.c); the harness sets pr_size.
+	  (common/stubs_pool.c); the harness sets pr_size, also when it
+	  replaces pool_get: natively the common pool_get runs regardless.
+	- KASSERT (DIAGNOSTIC is defined): goto-cc turns its __assert call
+	  into an assertion, so a failing KASSERT is reported; unlike
+	  panic it does not end the path (selftest kassert_fails).
 	- bcopy is a byte loop; targets that reach it bound it with
 	  --unwindset __builtin_bcopy.0:N
 	- memcpy and memmove are CBMC's models, which check both regions
@@ -539,7 +543,12 @@ When a run exhausts time or memory
 	   Recipe:
 	   - loop_id is the N of the loop's name FUNCTION.N.
 	     CBMC_DRY=1 sh cbmc.sh <target> lists every loop as
-	     "LOOP FUNCTION.N file:line".  The "Unwinding loop" lines of
+	     "LOOP FUNCTION.N file:line"; do { } while (0) macros count
+	     as loops (inner first), so pick the real loop by file:line.
+	     A mutant that deletes a statement containing such a macro
+	     renumbers the ids and the loops file no longer applies: make
+	     the check ineffective instead (if (0 && off + 2 > end),
+	     pf/pf_walk_header).  The "Unwinding loop" lines of
 	     cbmc count loops of inlined callees under the caller and do
 	     not give the id.
 	   - Check every change to loops, replace, keep or the harness
@@ -555,7 +564,9 @@ When a run exhausts time or memory
 	   - symbol_map: leave it out.  cbmc.sh (loopmap.py) maps every
 	     local and parameter named in the clauses.
 	   - assigns: start with the locals the loop writes and
-	     __CPROVER_object_whole(<pointer into the packet>).  Run; every
+	     __CPROVER_object_whole(<pointer into the packet>).  For a
+	     struct the loop writes only in part, name the fields
+	     (pd->badopts): object_whole havocs the rest.  Run; every
 	     "Check that X is assignable: FAILURE" names a location that
 	     is missing; add it and run again until none is left.  Leave
 	     the clause out and uninitialised pointer locals make the
@@ -609,7 +620,30 @@ When a run exhausts time or memory
 	     validated: net/sppp_lcp_rcr; 24-byte packets, check 15 s).
 	   An empty loops file means no contracts.
 
-	4. The solver dominates (symex small, time in the solver): an
+	4. Strings that are not compile-time constants through the
+	   byte-loop libkern models: one strlcpy of a 64 byte buffer with
+	   a single symbolic byte cost 24,500 variables.  Give strings
+	   constant shapes per branch (memset, then one character per if
+	   arm), or replace the string functions by loop-free region
+	   models with the real loops under NATIVE_SHIM_H (pf/pf_addrule).
+
+	5. A queue.h or tree.h macro loop without its own bound unwinds
+	   on every explored path: TAILQ_FOREACH_SAFE over three entries
+	   unwound 280 times and the cover run timed out; --unwindset on
+	   its id (from CBMC_DRY, inner loops first) brought it to 35 s
+	   (pf/pf_addrule).  Count the "Unwinding loop" lines per id in
+	   check.out before splitting a target.
+
+	6. Integer-to-pointer casts case-split over every object at each
+	   cast: kern/subr_tree.c's rb_n2e/rb_e2n (node to entry through
+	   unsigned long) ran symex out of memory.  Replace them by models
+	   doing the same arithmetic on char pointers (pf/pf_sourcelim_add).
+	   A target over an RBT tree also needs kern/subr_tree.c in
+	   sources, _rb_insert/_rb_remove and their helpers and the tree's
+	   compare function in keep, fptargets for the comparator call, and
+	   --unwindset for the _rb_* loops sized to the seeded tree.
+
+	7. The solver dominates (symex small, time in the solver): an
 	   external solver is a constant factor only.  net/rtm_xaddrs:
 	   default 380 s, --sat-solver cadical 290 s,
 	   --external-sat-solver cadical 234 s.  Prefer 2 and 3.
@@ -1147,3 +1181,35 @@ net/rtm_metrics
 	overflow and on an expiry at boot stored as 0 (never);
 	mutant_set/ and mutant_get/ revert one direction each.  Native:
 	CLEAN.  Check phase a few seconds.
+
+pf/pf_walk_header
+	pf_walk_header() and pf_walk_option() of sys/net/pf.c on one mbuf
+	of 0..68 bytes (pf_test guarantees the IP header in the first mbuf
+	and m_pkthdr.len >= ip_len), arbitrary options up to 40 bytes, the
+	option walk under a loop contract, --bounds-check for the opts
+	array.  VERIFIED: the walk stays inside opts and the delivered
+	bytes.  mutant/ (the off + 2 > end check made ineffective) is
+	VIOLATED on opts[off + 1].  m_copydata is a contract model, so
+	"reads only delivered bytes" holds for the opts copy, not the mbuf
+	behind it.  Native: CLEAN with seeds (native/seeds).
+
+pf/pf_addrule
+	pf_rule_copyin() and the DIOCADDRULE error paths of pfioctl() on a
+	rule with arbitrary scalars and constant string shapes, pf_tags
+	seeded with two entries.  Property: the tag tree is as before
+	(references balanced, no new entry).  String functions are
+	loop-free region models under CBMC, the real ones natively.
+	VERIFIED; mutant_prefix/ (before 34d59093f) and mutant/ (the
+	two unrefs removed) are VIOLATED on both tag properties.  Native: CLEAN with seeds.
+
+pf/pf_sourcelim_add
+	pf_sourcelim_add() (DIOCADDSOURCELIM) on an arbitrary request with
+	one seeded entry in each RBT tree (real kern/subr_tree.c).
+	Properties: the IPv4 and IPv6 masks match their prefixes bit for
+	bit, the overload table reference is 1 on success and 0 on error,
+	no double insert, no leak; --undefined-shift-check.  VERIFIED;
+	mutant_prefix/ (before the /0 mask fix) is VIOLATED on the shift
+	by 32, mutant/ (the inet_prefix > 32 check removed) on the shift
+	and the mask.  CBMC evaluates the undefined shift as 0, the right
+	/0 mask by accident; amd64 gives all ones.  pf_init_threshold has
+	no body (its fields are not checked).  Native: CLEAN.

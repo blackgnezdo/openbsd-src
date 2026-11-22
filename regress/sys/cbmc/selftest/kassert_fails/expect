@@ -1,0 +1,3 @@
+VIOLATED
+assertion x != 0
+after KASSERT

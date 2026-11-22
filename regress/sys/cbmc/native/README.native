@@ -200,6 +200,8 @@ Limits and deviations from CBMC
 	  by every draw: nondet_* in the harness and the return value of
 	  every bodiless function (getuptime, rw_status behind
 	  NET_ASSERT_LOCKED, ...), each its type's size, little endian.
+	  An exact 32-bit equality (an ip_dst the code compares) is out of
+	  the fuzzer's reach in a short run: seed it (pf/pf_walk_header).
 	  NATIVE_TRACE=1 lists the stub calls in order; with NATIVE_WORKDIR
 	  kept, $W/fuzz FILE runs one candidate (it writes default.profraw
 	  into the current directory).  netinet/arp_rtrequest's seed is

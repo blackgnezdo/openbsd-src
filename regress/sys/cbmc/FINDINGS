@@ -73,6 +73,13 @@ sys/netinet6/icmp6.c, icmp6_redirect_input (read)
 	read beyond that.  Needs a packet of 65536 bytes or more; not
 	covered.
 
+sys/net/pf_ioctl.c, pf_statelim_add (read)
+	The sibling of pf_sourcelim_add without the masks; no target.
+
+sys/net/pf_table.c, pfr_attach_table/pfr_detach_table (read)
+	Table reference counting on the rule and DIOCADDTABLE paths is
+	modelled in pf/pf_sourcelim_add, not proven.
+
 Gaps in the targets themselves
 
 netinet/tcp_dooptions
@@ -92,5 +99,7 @@ netinet6/ip6_hopopts_input
 common/mbufcontract.h
 	The contract models are hand-written; nothing ties them
 	mechanically to the net/mbuf_* proofs of the real functions.
+pf/pf_walk_header
+	The embedded ICMP caller of pf_walk_header is not covered.
 no expect.native for most targets
 	The native suite pass (suite.sh -n) has not been recorded.
