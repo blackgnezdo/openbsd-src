@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.208 2026/11/17 15:23:08 claudio Exp $ */
+/*	$OpenBSD: parser.c,v 1.212 2026/11/20 19:37:12 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -343,7 +343,8 @@ proc_parser_mft_check(const char *fn, struct mft *mft)
 			continue;
 		}
 
-		if (m->type != RTYPE_INVALID)
+		/* invalid and CRL files do not add more work */
+		if (m->type != RTYPE_INVALID && m->type != RTYPE_CRL)
 			items++;
 	}
 
@@ -658,10 +659,9 @@ proc_enqueue_mft(struct entityq *mftq, const struct mft *mft, const char *file)
 		inserted++;
 	}
 
-	/* account for the one skipped RTYPE_CRL in the check below */
-	if (inserted + 1 != mft->work_items)
+	if (inserted != mft->work_items)
 		errx(1, "%s#%s: bad count of workitems, %zu vs %zu",
-		    file, mft->seqnum, inserted + 1, mft->work_items);
+		    file, mft->seqnum, inserted, mft->work_items);
 }
 
 /*
@@ -726,7 +726,8 @@ proc_parser_cert(char *file, const unsigned char *der, size_t len,
 		}
 
 		memcpy(cert->mfthash, ent->data, ent->datasz);
-		auth_insert(file, &auths, cert, a, crl);
+		if (auth_insert(file, &auths, cert, a, crl) == NULL)
+			goto out;
 	}
 
 	return cert;
@@ -746,12 +747,11 @@ proc_parser_ta_cmp(const struct cert *cert1, const struct cert *cert2)
 		return 1;
 
 	/*
-	 * The standards don't specify tiebreakers. While RFC 6487 and other
-	 * sources advise against backdating, it's explicitly allowed and some
-	 * TAs do. Some TAs have also re-issued with new dates and old
-	 * serialNumber.
-	 * Our tiebreaker logic: a more recent notBefore is taken to mean a
-	 * more recent issuance, and thus preferable. Given equal notBefore
+	 * While RFC 6487 and other sources advise against backdating, it's
+	 * explicitly allowed and some TAs do. Some TAs have also re-issued
+	 * with new dates and old serialNumber.
+	 * RFC 10097 tiebreaker logic: a more recent notBefore is taken to mean
+	 * a more recent issuance, and thus preferable. Given equal notBefore
 	 * values, prefer the TA cert with the narrower validity window. This
 	 * hopefully encourages TA operators to reduce egregiously long TA
 	 * validity periods.
@@ -1015,12 +1015,14 @@ parse_entity(struct entityq *q, struct ibufqueue *msgq, struct entityq *mftq,
 			if (cert != NULL) {
 				cert->repoid = ent->repoid;
 				cert_buffer(b, cert);
+
+				/*
+				 * The auth_tree owns TA and CA certs.
+				 * BGPsec certs need to be freed.
+				 */
+				if (cert->purpose == CERT_PURPOSE_BGPSEC_ROUTER)
+					cert_free(cert);
 			}
-			/*
-			 * The parsed certificate data "cert" is now
-			 * managed in the "auths" table, so don't free
-			 * it here.
-			 */
 			break;
 		case RTYPE_MFT:
 			file = proc_parser_mft(ent, &mft, &crlfile, &crlmtime,

@@ -1,4 +1,4 @@
-/*	$OpenBSD: shutdown.c,v 1.56 2024/04/28 16:43:42 florian Exp $	*/
+/*	$OpenBSD: shutdown.c,v 1.58 2026/11/19 21:21:15 deraadt Exp $	*/
 /*	$NetBSD: shutdown.c,v 1.9 1995/03/18 15:01:09 cgd Exp $	*/
 
 /*
@@ -293,8 +293,16 @@ loop(void)
 	die_you_gravy_sucking_pig_dog();
 }
 
-static char *restricted_environ[] = {
+static char *wall_environ[] = {
 	"PATH=" _PATH_STDPATH,
+	NULL
+};
+
+static char *bshell_environ[] = {
+	"PATH=" _PATH_STDPATH,
+	"LOGNAME=root",
+	"USER=root=",
+	"HOME=/",
 	NULL
 };
 
@@ -331,7 +339,7 @@ timewarn(time_t timeleft)
 		close(fd[1]);
 		/* wall(1)'s undocumented '-n' flag suppresses its banner. */
 		execle(_PATH_WALL, _PATH_WALL, "-n", (char *)NULL,
-		    restricted_environ);
+		    wall_environ);
 		syslog(LOG_ERR, "%s: %m", _PATH_WALL);
 		_exit(1);
 	default:
@@ -478,7 +486,8 @@ die_you_gravy_sucking_pig_dog(void)
 			t.c_oflag |= (ONLCR | OPOST);
 			tcsetattr(0, TCSANOW, &t);
 
-			execl(_PATH_BSHELL, "sh", _PATH_RC, "shutdown", (char *)NULL);
+			execle(_PATH_BSHELL, "sh", _PATH_RC, "shutdown",
+			    (char *)NULL, bshell_environ);
 			_exit(1);
 		default:
 			waitpid(pid, NULL, 0);

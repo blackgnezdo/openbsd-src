@@ -1,4 +1,4 @@
-/* $OpenBSD: format.c,v 1.437 2026/11/16 14:00:11 nicm Exp $ */
+/* $OpenBSD: format.c,v 1.439 2026/11/21 12:52:38 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -4760,6 +4760,7 @@ format_find(struct format_tree *ft, const char *key, uint64_t modifiers,
 	const char			*errstr;
 	time_t				 t = 0;
 	struct tm			 tm;
+	size_t				 n;
 
 	o = options_parse_get(global_options, key, &array_key, 0);
 	if (o == NULL && ft->wp != NULL)
@@ -4837,7 +4838,9 @@ found:
 			if (time_format != NULL) {
 				if (localtime_r(&t, &tm) == NULL)
 					return (NULL);
-				strftime(s, sizeof s, time_format, &tm);
+				n = strftime(s, sizeof s, time_format, &tm);
+				if (n == 0)
+					*s = '\0';
 			} else {
 				if (ctime_r(&t, s) == NULL)
 					return (NULL);
@@ -5429,6 +5432,7 @@ format_loop_sessions(struct format_expand_state *es, const char *fmt)
 	else
 		value = xstrdup("");
 	evbuffer_free(buffer);
+	free(l);
 	return (value);
 }
 
@@ -5566,6 +5570,7 @@ format_loop_windows(struct format_expand_state *es, const char *fmt)
 	else
 		value = xstrdup("");
 	evbuffer_free(buffer);
+	free(l);
 	return (value);
 }
 
@@ -5631,6 +5636,7 @@ format_loop_panes(struct format_expand_state *es, const char *fmt)
 	else
 		value = xstrdup("");
 	evbuffer_free(buffer);
+	free(l);
 	return (value);
 }
 
@@ -5942,6 +5948,7 @@ format_loop_clients(struct format_expand_state *es, const char *fmt)
 	else
 		value = xstrdup("");
 	evbuffer_free(buffer);
+	free(l);
 	return (value);
 }
 

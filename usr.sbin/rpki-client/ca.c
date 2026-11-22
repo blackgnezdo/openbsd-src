@@ -1,4 +1,4 @@
-/*	$OpenBSD: ca.c,v 1.17 2026/11/11 19:43:11 claudio Exp $ */
+/*	$OpenBSD: ca.c,v 1.19 2026/11/21 12:01:07 tb Exp $ */
 /*
  * Copyright (c) 2026 Job Snijders <job@bsd.nl>
  *
@@ -89,7 +89,7 @@ carepo_lookup_locked(const struct cert *cert)
 }
 
 /*
- * Increment and return per TAL per carepo counter.
+ * Increment per TAL per carepo counter.
  */
 void
 carepo_increment(const struct cert *cert)
@@ -549,8 +549,8 @@ nca_history_load(void)
 		if (RB_INSERT(nca_tree, &nca_tree, nca) != NULL) {
 			warnx("duplicate nca_tree entry for %s", nca->location);
 			ca_free(nca);
-			nca = NULL;
 		}
+		nca = NULL;
 	}
 
 	if (ferror(f))
@@ -823,8 +823,8 @@ ca_state_load(void)
 			warnx("duplicate entry for ca state tree at %s",
 			    ca->location);
 			ca_free(ca);
-			ca = NULL;
 		}
+		ca = NULL;
 	}
 
 	if (ferror(f))

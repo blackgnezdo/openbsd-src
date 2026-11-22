@@ -1,4 +1,4 @@
-/* $OpenBSD: utf8.c,v 1.78 2026/11/17 11:16:27 nicm Exp $ */
+/* $OpenBSD: utf8.c,v 1.80 2026/11/21 16:25:53 nicm Exp $ */
 
 /*
  * Copyright (c) 2008 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -84,8 +84,6 @@ static struct utf8_width_item utf8_default_width_cache[] = {
 	{ .wc = 0x1F3C4, .width = 2 },
 	{ .wc = 0x1F3C7, .width = 2 },
 	{ .wc = 0x1F3CA, .width = 2 },
-	{ .wc = 0x1F3CB, .width = 2 },
-	{ .wc = 0x1F3CC, .width = 2 },
 	{ .wc = 0x1F3FB, .width = 2 },
 	{ .wc = 0x1F3FC, .width = 2 },
 	{ .wc = 0x1F3FD, .width = 2 },
@@ -131,10 +129,7 @@ static struct utf8_width_item utf8_default_width_cache[] = {
 	{ .wc = 0x1F48F, .width = 2 },
 	{ .wc = 0x1F491, .width = 2 },
 	{ .wc = 0x1F4AA, .width = 2 },
-	{ .wc = 0x1F574, .width = 2 },
-	{ .wc = 0x1F575, .width = 2 },
 	{ .wc = 0x1F57A, .width = 2 },
-	{ .wc = 0x1F590, .width = 2 },
 	{ .wc = 0x1F595, .width = 2 },
 	{ .wc = 0x1F596, .width = 2 },
 	{ .wc = 0x1F645, .width = 2 },
@@ -522,6 +517,15 @@ u_int
 utf8_build_one(u_char ch)
 {
 	return (UTF8_SET_SIZE(1)|UTF8_SET_WIDTH(1)|ch);
+}
+
+/* Get a single-byte, single-width character, or -1. */
+int
+utf8_get_one(utf8_char uc)
+{
+	if (UTF8_GET_SIZE(uc) != 1 || UTF8_GET_WIDTH(uc) != 1)
+		return (-1);
+	return (uc & 0xff);
 }
 
 /* Set a single character. */

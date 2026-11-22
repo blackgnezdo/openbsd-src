@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.341 2026/11/12 19:34:54 claudio Exp $ */
+/*	$OpenBSD: main.c,v 1.344 2026/11/19 06:26:15 tb Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -748,6 +748,12 @@ entity_process(struct ibuf *b, struct validation_data *vd, struct stats *st)
 
 done:
 	free(file);
+	/*
+	 * CRLs are sent together with the MFT and not accounted for
+	 * since in case of a bad MFT a CRL may or may not be sent along.
+	 */
+	if (type == RTYPE_CRL)
+		return;
 	entity_queue--;
 }
 
@@ -1490,7 +1496,6 @@ main(int argc, char *argv[])
 		if ((pfd[3].revents & POLLIN)) {
 			switch (ibuf_read(pfd[3].fd, queues[3])) {
 			case -1:
-				abort();
 				err(1, "ibuf_read");
 			case 0:
 				errx(1, "ibuf_read: connection closed");
@@ -1591,10 +1596,11 @@ main(int argc, char *argv[])
 
 	logx("all files parsed: generating output");
 
-	if (!noop) {
+	if (!noop && rc == 0)
 		repo_cleanup(&fpt, cachefd);
+
+	if (!noop)
 		close(cachefd);
-	}
 
 	clock_gettime(CLOCK_MONOTONIC, &now_time);
 	timespecsub(&now_time, &start_time, &stats.elapsed_time);
