@@ -1373,15 +1373,25 @@ void
 rtm_setmetrics(u_long which, const struct rt_metrics *in,
     struct rt_kmetrics *out)
 {
-	int64_t expire;
+	int64_t expire, boot;
 
 	if (which & RTV_MTU)
 		atomic_store_int(&out->rmx_mtu, in->rmx_mtu);
 	if (which & RTV_EXPIRE) {
 		expire = in->rmx_expire;
 		if (expire != 0) {
-			expire -= gettime();
-			expire += getuptime();
+			/*
+			 * Wall clock to uptime without overflowing on
+			 * userland's value: an expiry at or before boot has
+			 * passed (0 would mean never).
+			 */
+			boot = gettime() - getuptime();
+			if (expire <= boot)
+				expire = 1;
+			else if (boot < 0 && expire > INT64_MAX + boot)
+				expire = INT64_MAX;
+			else
+				expire -= boot;
 		}
 
 		out->rmx_expire = expire;
@@ -1392,14 +1402,20 @@ void
 rtm_getmetrics(const struct rtentry *rt, struct rt_metrics *out)
 {
 	const struct rt_kmetrics *in = &rt->rt_rmx;
-	int64_t expire;
+	int64_t expire, boot;
 
 	expire = in->rmx_expire;
 	if (expire == 0)
 		expire = rt_timer_get_expire(rt);
 	if (expire != 0) {
-		expire -= getuptime();
-		expire += gettime();
+		/* uptime to wall clock, saturating */
+		boot = gettime() - getuptime();
+		if (boot > 0 && expire > INT64_MAX - boot)
+			expire = INT64_MAX;
+		else if (boot < 0 && expire < INT64_MIN - boot)
+			expire = INT64_MIN;
+		else
+			expire += boot;
 	}
 
 	bzero(out, sizeof(*out));
