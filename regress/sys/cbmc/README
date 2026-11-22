@@ -40,7 +40,9 @@ Environment
 				such as a sockaddr laid over a buffer, are only
 				in trace.out) and the violated property; the
 				trace is of the first failed property of the
-				check run
+				check run; trace.out goes on with traces of
+				no-body markers, so read its first "Trace for"
+				block
 	CBMC_KEEP=1		keep the temporary work directory also when the
 				result is VERIFIED; without CBMC_WORKDIR the
 				directory is removed on exit after a VERIFIED
@@ -1100,3 +1102,22 @@ netinet6/mld6_input
 	ip6_exthdr_get of the MLD header one byte short, mld6.c:189) is
 	VIOLATED on the group address reads.  Native: CLEAN.  Check phase
 	about 90 s, 2.3 million variables.
+
+netinet/udp_input
+	udp_input() of sys/netinet/udp_usrreq.c, with udp_sbappend(), on
+	one unicast UDP datagram, AF_INET (20 byte IP header) or AF_INET6
+	(40 byte header), and 0..16 UDP bytes of arbitrary content in one
+	or two mbufs, on the contract models; ip_len and ip6_plen as
+	ip_input.c:409-436 and ip6_input.c:702-715 leave them.  Real:
+	ip6_exthdr_get, the length checks and the m_adj trim, the checksum
+	decision, the sockaddr build, the delivery decision, udp_sbappend.
+	Models: in4_cksum and in6_cksum assert the bytes they read are in
+	the chain and return an arbitrary sum; the pcb lookups return NULL
+	or one inpcb with a counted reference; icmp_error and icmp6_error
+	check the chain and free it; sbappendaddr refuses the packet or
+	takes it.  VERIFIED: no out-of-bounds access, no leak or double
+	free, references balanced.  mutant/ (the UDP length check against
+	the data loosened by one: the m_adj trim then eats the IP header)
+	is VIOLATED.  Not covered: multicast and broadcast delivery, IPsec,
+	PIPEX, pf, inp_upcall encapsulation, jumbograms.  Native: CLEAN.
+	Check phase about 4-5 minutes, 1.5 million variables (timeout 600).

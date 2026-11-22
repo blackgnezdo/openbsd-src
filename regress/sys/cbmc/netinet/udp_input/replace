@@ -1,0 +1,16 @@
+in4_cksum:model_in4_cksum
+in6_cksum:model_in6_cksum
+in_pcblookup:model_in_pcblookup
+in_pcblookup_listen:model_in_pcblookup_listen
+in6_pcblookup:model_in6_pcblookup
+in6_pcblookup_listen:model_in6_pcblookup_listen
+in_pcbunref:model_in_pcbunref
+in6_recoverscope:model_in6_recoverscope
+icmp_error:model_icmp_error
+icmp6_error:model_icmp6_error
+sbappendaddr:model_sbappendaddr
+sbcreatecontrol:model_sbcreatecontrol
+ip_savecontrol:model_ip_savecontrol
+ip6_savecontrol:model_ip6_savecontrol
+mtx_enter:model_mtx_enter
+mtx_leave:model_mtx_leave

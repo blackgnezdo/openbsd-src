@@ -1,0 +1,13 @@
+udp_usrreq.c:uh = ip6_exthdr_get(mp, iphlen, sizeof(struct udphdr));
+udp_usrreq.c:if (m->m_pkthdr.len - iphlen != len) {
+udp_usrreq.c:if (len != m->m_pkthdr.len - iphlen) {
+udp_usrreq.c:uh->uh_sum = in4_cksum(m, IPPROTO_UDP,
+udp_usrreq.c:uh->uh_sum = in6_cksum(m, IPPROTO_UDP,
+udp_usrreq.c:inp = in_pcblookup(&udbtable, ip->ip_src,
+udp_usrreq.c:inp = in6_pcblookup(&udb6table, &ip6->ip6_src,
+udp_usrreq.c:icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_PORT,
+udp_usrreq.c:icmp6_error(m, ICMP6_DST_UNREACH,
+udp_usrreq.c:udp_sbappend(inp, m, ip, ip6, iphlen, uh, &srcsa.sa, ipsecflowinfo, ns);
+udp_usrreq.c:m_adj(m, hlen);
+udp_usrreq.c:if (sbappendaddr(&so->so_rcv, srcaddr, m, opts) == 0) {
+udp_usrreq.c:sorwakeup(so);
