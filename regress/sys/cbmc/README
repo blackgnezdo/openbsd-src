@@ -1213,3 +1213,16 @@ pf/pf_sourcelim_add
 	and the mask.  CBMC evaluates the undefined shift as 0, the right
 	/0 mask by accident; amd64 gives all ones.  pf_init_threshold has
 	no body (its fields are not checked).  Native: CLEAN.
+
+netinet6/route6_input
+	route6_input() of sys/netinet6/route6.c on a 40 byte IPv6 header
+	and a routing header of 8..32 bytes of arbitrary content (ip6r_len
+	arbitrary), in one or two mbufs with the IPv6 header in the first,
+	on the contract models; icmp6_error is a model that checks the
+	Parameter Problem pointer is the offset of ip6r_type and consumes
+	the mbuf.  VERIFIED: no out-of-bounds access, no leak, *offp
+	advanced by the header length.  mutant_prefix/ (before bc9869d9a)
+	subtracted pointers into two mbufs when m_pulldown moved the header
+	into the next one: VIOLATED; mutant/ (the fixed part fetched one
+	byte short) is VIOLATED on ip6r_segleft.  Native: CLEAN (it does
+	not see the pointer subtraction).  Check phase about 15 s.
