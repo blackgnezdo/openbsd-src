@@ -887,3 +887,20 @@ netinet/arp_consumers
 	are redundant under the invariant.  Not covered: the proxy paths,
 	arptfree, the real if_output_ml.  Native: CLEAN.  Check phase
 	about 4 s.
+
+netinet/arp_proxy
+	The proxy ARP lookups of sys/netinet/if_ether.c: arpproxy(), and
+	arplookup(..., SIN_PROXY, ...) followed by the ETHER_ADDR_LEN byte
+	copy from LLADDR that in_arpinput's proxy branch hands to arpreply.
+	First model of a route table here: two routes under one key
+	chained through rt_next, each with arbitrary flags and an
+	arbitrary gateway (as in netinet/arp_rtrequest) and put through
+	the real arp_rtrequest first, so only states the kernel can
+	produce are used.  rtalloc returns the head with a reference or
+	NULL; rtable_iterate and rtisvalid are the kernel's bodies; rtref
+	and rtfree count references.  VERIFIED: no out-of-bounds access,
+	no leak, and every reference taken is dropped.  mutant/ (the
+	proxy loop without the RTF_LLINFO and AF_LINK tests, as before
+	12a68fffb) and mutant_prefix/ (the source before 12a68fffb) are
+	VIOLATED on both reads.  Native: CLEAN; on mutant/ an ASan heap
+	over-read.  Check phase about 3 s.

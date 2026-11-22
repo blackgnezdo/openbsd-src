@@ -1,0 +1,12 @@
+pool_init:model_pool_init
+m_gethdr:model_m_gethdr
+m_freem:model_m_freem
+refcnt_init:model_refcnt_init
+refcnt_rele:model_refcnt_rele
+rtalloc:model_rtalloc
+rtable_iterate:model_rtable_iterate
+rtref:model_rtref
+rtfree:model_rtfree
+rtisvalid:model_rtisvalid
+if_get:model_if_get
+if_put:model_if_put

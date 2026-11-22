@@ -1,0 +1,4 @@
+if_ether.c:while ((rt = rtable_iterate(rt)) != NULL) {
+if_ether.c:if (!memcmp(LLADDR(sdl), LLADDR(ifp->if_sadl), sdl->sdl_alen))
+if_ether.c:rt->rt_llinfo = (caddr_t)la;
+if_ether.c:LIST_REMOVE(la, la_list);

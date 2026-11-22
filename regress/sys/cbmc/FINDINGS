@@ -71,8 +71,8 @@ netinet6/ip6_hopopts_input
 common/mbufcontract.h
 	The contract models are hand-written; nothing ties them
 	mechanically to the net/mbuf_* proofs of the real functions.
-netinet/arp_rtrequest, netinet6/nd6_rtrequest
-	The proxy lookups changed by 12a68fffb (arplookup) and 089ef3708
-	(nd6_ns_input) are not covered: route lookup is not modelled.
+netinet6/nd6_rtrequest
+	The proxy lookup changed by 089ef3708 (nd6_ns_input) is not
+	covered yet; netinet/arp_proxy shows how to model the route table.
 no expect.native for most targets
 	The native suite pass (suite.sh -n) has not been recorded.
