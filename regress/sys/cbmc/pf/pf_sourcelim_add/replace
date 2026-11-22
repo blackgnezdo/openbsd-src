@@ -1,0 +1,7 @@
+pool_get:pf_pool_get
+pool_put:pf_pool_put
+pfr_attach_table:model_pfr_attach_table
+pfr_detach_table:model_pfr_detach_table
+rb_n2e:model_rb_n2e
+rb_e2n:model_rb_e2n
+pc_lock_init:model_pc_lock_init

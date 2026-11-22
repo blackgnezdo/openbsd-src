@@ -1,0 +1,5 @@
+pool_get:pf_pool_get
+pool_put:pf_pool_put
+strlcpy:model_strlcpy
+strnlen:model_strnlen
+strcmp:model_strcmp

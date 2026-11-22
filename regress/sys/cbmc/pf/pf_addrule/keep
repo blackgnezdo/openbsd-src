@@ -1,0 +1,14 @@
+pf_rule_copyin
+pf_pool_copyin
+pf_validate_range
+pf_chk_limiter_action
+pf_rule_checkaf
+pf_rule_free
+tagname2tag
+tag_unref
+pf_tagname2tag
+pf_tag_unref
+pf_qname2qid
+pfi_kif_alloc
+pfi_kif_free
+pf_find_ruleset

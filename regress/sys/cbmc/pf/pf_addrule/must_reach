@@ -1,0 +1,6 @@
+pf_ioctl.c:pf_tagname2tag(to->tagname, 1)
+pf_ioctl.c:strlcpy(tag->name, tagname, sizeof(tag->name))
+pf_ioctl.c:pf_chk_limiter_action(to->statelim.limiter_action)
+pf_ioctl.c:pfi_kif_free(rule->kif)
+pf_ioctl.c:if ((r->rule_flag & PFRULE_AFTO) == 0 && r->naf != 0)
+pf_if.c:TAILQ_INIT(&kif->pfik_dynaddrs)

@@ -1,0 +1,6 @@
+pfsync.h NPFSYNC 0
+pflog.h NPFLOG 0
+kstat.h NKSTAT 0
+pf.h NPF 0
+carp.h NCARP 0
+pflow.h NPFLOW 0
