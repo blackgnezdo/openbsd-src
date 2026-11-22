@@ -441,7 +441,13 @@ if [ -n "${CBMC_TRACE:-}" ] && [ $rc -eq 10 ]; then
 	    sed -n 's/^ *\([0-9][0-9]*: [A-Za-z_][^ ]*=[^ {]*\)\( .*\)*$/  \1/p' |
 	    grep -v '__CPROVER\|tmp_\|return_value_\|=NULL$\|=0$\|=0[ul]*$\|=(\|goto_symex\|malloc_\|record_\|=&' |
 	    head -60 || true
-	sed -n '/^Violated property:/,/^$/p' "$W/trace.out" | head -4 || true
+	# The trace passes no-body markers, each printed as a "Violated
+	# property" of its own: show the first real one of the first trace.
+	awk '/^Trace for /{ n++ } n != 1 { next }
+	    /^Violated property:/{ b = $0; v = 1; next }
+	    v && /^$/ { if (b !~ /no body for callee/) { print b; exit }
+		v = 0; next }
+	    v { b = b "\n" $0 }' "$W/trace.out" || true
 fi
 if [ -z "$TMPW" ]; then
 	echo "output in $W"
