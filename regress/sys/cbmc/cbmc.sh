@@ -394,7 +394,7 @@ done < "$T/must_reach"
 
 # 2. Memory safety.
 t0=$(date +%s)
-run_cbmc "$W/check.out" "$W/model.gb" $OPTS --pointer-check \
+run_cbmc "$W/check.out" "$W/model.gb" $OPTS --pointer-check --bounds-check \
     --unwinding-assertions --slice-formula
 rc=$crc
 # CBMC 6 reports a call to a function without a body as a property
@@ -434,7 +434,7 @@ if [ -n "${CBMC_TRACE:-}" ] && [ $rc -eq 10 ]; then
 	tprop=$(sed -n 's/^\[\([^]]*\)\] .*: FAILURE$/\1/p' "$W/check.out" |
 	    head -1)
 	run_cbmc "$W/trace.out" "$W/model.gb" $OPTS --pointer-check \
-	    --unwinding-assertions --trace --compact-trace \
+	    --bounds-check --unwinding-assertions --trace --compact-trace \
 	    ${tprop:+--property "$tprop"}
 	echo "TRACE of ${tprop:-the first violation} in $W/trace.out; assignments:"
 	sed -n '/^Trace for /,$p' "$W/trace.out" | sed -n '/ main()$/,$p' |

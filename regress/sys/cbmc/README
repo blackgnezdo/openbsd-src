@@ -141,6 +141,10 @@ CBMC versions
 	  is reachable.  cbmc.sh moves the raw output to check.raw, builds
 	  the NOBODY line from these properties, and leaves them out of
 	  check.out, the failure list and the counts.
+	- --pointer-check does not check array indexing (a[i] on a local,
+	  global or member array); cbmc.sh adds --bounds-check.  Results
+	  before 2026-11-24 were obtained without it; with it the selftest
+	  and every target gave the same results.
 	CBMC 6's library has a vsnprintf body that writes up to size bytes
 	in a loop; cbmc.sh bounds it with --unwindset vsnprintf.1:17
 	(mbinit's 16 byte pool names) before the target's opts, so a
