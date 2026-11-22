@@ -1,0 +1,8 @@
+if_pfsync.c:if (m->m_pkthdr.len < sizeof(*ph)) {
+if_pfsync.c:if (ph->version != PFSYNC_VERSION) {
+if_pfsync.c:if (action >= PFSYNC_ACT_MAX ||
+if_pfsync.c:in = pfsync_in_skip;
+if_pfsync.c:if (len > m->m_pkthdr.len
+if_pfsync.c:m = m_pullup(m, len);
+if_pfsync.c:(*in)(sc, mtod(m, caddr_t), mlen, count);
+if_pfsync.c:m_adj(m, len);

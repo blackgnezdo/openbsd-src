@@ -1,0 +1,13 @@
+pfsync_in_clr:model_in_clr
+pfsync_in_iack:model_in_iack
+pfsync_in_upd_c:model_in_upd_c
+pfsync_in_ureq:model_in_ureq
+pfsync_in_del:model_in_del
+pfsync_in_del_c:model_in_del_c
+pfsync_in_bus:model_in_bus
+pfsync_in_tdb:model_in_tdb
+pfsync_in_ins:model_in_ins
+pfsync_in_upd:model_in_upd
+pfsync_in_skip:model_in_skip
+refcnt_take:model_refcnt_take
+refcnt_rele_wake:model_refcnt_rele_wake

@@ -1270,3 +1270,20 @@ netinet/carp_input
 	with the m_pullup after it.  Not covered: IPv6, several softcs or
 	vhost entries, carpctl_allow 0.  Native: CLEAN.  Check phase about
 	2 minutes, 2.2 million variables (timeout 600).
+
+net/pfsync_input
+	pfsync_input() of sys/net/if_pfsync.c, the framing of a pfsync
+	packet: 0..44 bytes of arbitrary content (the IP header already
+	stripped, hlen 0: the function only m_adj()s it away), one or two
+	mbufs, ttl arbitrary, at most six subheaders.  The handlers are
+	models that assert their buffer is readable for mlen * count bytes
+	and mlen is at least their message size; when the harness writes
+	the pfsync header (length 0..63), they also assert that what they
+	get lies within the declared length.  m_pullup is the harness's own
+	model (fresh bytes, no copies; the contract model's copies ran out
+	of memory), the softc reference is counted.  VERIFIED: no
+	out-of-bounds access, no leak, references balanced.  mutant_prefix/
+	(before d415e63fa: a header length below 20 drove m_pkthdr.len negative)
+	and mutant/ (the remaining-length test loosened by one) are VIOLATED
+	on the declared length, mutant_mlen/ on the message size.  Check
+	phase about 8 minutes, 1.3 million variables (timeout 1800).
