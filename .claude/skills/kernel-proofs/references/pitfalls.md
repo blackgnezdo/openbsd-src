@@ -77,8 +77,7 @@ both versions reject below sizeof(struct sockaddr_dl) = 32, and the
 nd6_rtrequest report repeated the same error (it is 32: sdl_data is
 24 bytes). Put struct sizes the inputs depend on in the brief. The
 result stood; the inputs did not. Check every reported input against
-each guard on the path, or reproduce it natively. A CBMC_TRACE
-option in cbmc.sh would remove this; not done yet.
+each guard on the path, or reproduce it natively. Run with CBMC_TRACE=1 for a counterexample.
 
 **VACUOUS where VIOLATED was expected, on a scratch or pinned copy.**
 The cover run stops at an out-of-bounds write, so anchors after it are
@@ -299,6 +298,15 @@ otherwise it carries the old defect and fails for that reason.
 **Fix shape.** Prefer the form the neighbouring code uses
 (`kcs_recvmsg` for `smic_recvmsg`). If the proof framework makes one
 form easier to test, that is not a reason to choose it.
+
+**"This check can never fire."** Look for every way into the code,
+`goto` labels included, before believing it: the rtm_output family
+check is dead for RTM_CHANGE and live for RTM_ADD's `goto change`.
+Read the commit that added it (SKILL.md, "Before changing a check").
+
+**A sweep report's claims.** The sibling sweep after e3dbf88825a
+listed a missing family check in nd6_na_input; nd6_lookup has it.
+Its other claims held. Verify each before building on it.
 
 **Same pattern elsewhere.** After a finding, have a subagent read
 sibling functions for the pattern (the IPCP and IPv6CP option

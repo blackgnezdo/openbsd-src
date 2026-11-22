@@ -23,6 +23,10 @@ packet parser target"][, "When a run exhausts time or memory"][,
 Then read the worked example(s) completely: [target dirs closest in
 shape], every file in them[, and common/mbufcontract.h].
 
+Facts (checked; sizes from a compile): [sizeof and offsetof of every
+struct whose size an input depends on, e.g. sizeof(struct sockaddr_dl)
+is 32, offsetof(struct sockaddr_dl, sdl_data) is 8].
+
 Target: [function](signature) in [file]. New directory: [dir].
 [What the callers guarantee, with file:line, or "read the callers and
 state what they guarantee in the harness comment".]
@@ -58,6 +62,18 @@ Rules:
   (the machine is shared). Never call cbmc directly.
 - `CBMC_DRY=1 sh cbmc.sh [dir]` after every edit, before a real run:
   it is free, lists loop ids and shows configuration errors.
+- Variables do not persist between your shell calls: put
+  CBMC_BUDGET_FILE and CBMC_BUDGET on every cbmc.sh or suite.sh
+  command line.
+- For a VIOLATED result, get the concrete input with
+  `CBMC_TRACE=1` (one extra run) and check it against every guard on
+  the path before reporting it.
+- must_reach anchors: text that every mutant keeps (an anchor a
+  mutant removes turns its VIOLATED into VACUOUS), on the first line
+  of a statement (a continuation line of a condition is never
+  reached), and unique enough to pin the branch.
+- Bound nondet times and counters (below 2^40) so the native engine's
+  UBSan does not report overflows in kernel arithmetic on them.
 - A run can take minutes. If your tool call is moved to the
   background, wait for it; do not start another run and do not kill
   it before its timeout.
@@ -87,6 +103,11 @@ tell you, and what you did instead).
 | Wait for background runs | Subagents started a second run or killed the first, then waited on nothing |
 | NOTES file | The container restarted mid-round four times; without notes the work was redone |
 | "Do not fix the kernel" | The orchestrator decides the form of a fix and whether it may be public |
+| Struct sizes in the brief | Two reports gave sizeof(struct sockaddr_dl) as 20 and inputs the code rejects |
+| Budget variables on every command | Six runs went unlogged |
+| `CBMC_TRACE=1` for inputs | Hand-derived inputs were wrong twice |
+| Anchor rules | A mutant came back VACUOUS; a condition's second line was never reached |
+| Bounded nondet times | Native runs reported UBSan overflow in kernel time arithmetic |
 
 ## Resuming a subagent after a restart
 

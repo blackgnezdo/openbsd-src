@@ -50,6 +50,11 @@ From the delegations in this tree so far:
 | A target that follows an existing worked example (flat-buffer parser, attach/detach, validator-then-consumer) | Haiku | Succeeds when the brief names the example and the README sections |
 | A target that needs a design choice (where to split, what the caller guarantees), finding-to-fix with mutants, scripting | Sonnet | Handles specified multi-step work and stateful targets |
 | A new technique, a change to `common/`, `cbmc.sh`, `native.sh`, a cost problem nobody has solved yet | You | Cheaper models stall when the obstacle is in shared models or solver cost; they shrink the problem until it passes instead |
+| A small validator on an ioctl buffer or flat struct (`net/bpe_add_addr`) | Haiku | Finished in one pass with a worked example |
+| Producer/consumer and lookup targets built on an existing one (`net/rtm_output_cached`, `netinet/arp_consumers`, `netinet6/nd6_consumers`, `netinet6/nd6_proxy`) | Sonnet | All four finished, including a full packet parser path; each found a caller guarantee or cost trick worth recording |
+| A read-only sweep for the same pattern in sibling code | Haiku (Explore) | Cheap and broad, but about half of its claims were wrong in detail (a family check it said was missing was in `nd6_lookup`); treat it as a candidate list |
+| History of a check, other BSDs, userland callers | Sonnet with the git mirror | Found the commit that explained a check we had misread (see "Before changing a check") |
+| The first model of a new kernel facility (the route table in `netinet/arp_proxy`) | You | Then hand later targets the worked example |
 
 A stalled cheap subagent is not a reason to relaunch it with a longer
 budget. Read its notes, find which rung of the cost ladder it is on
@@ -72,6 +77,20 @@ Good targets, in the order they have paid off here:
 Poor targets: large state machines, code dominated by function
 pointers, code whose interesting behaviour is concurrency or sleeping
 (not modelled).
+
+- An invariant over a shared object that one function establishes
+  and others rely on (the route gateway behind an ARP or ND entry).
+  Prove it in three kinds of target: the producer, after every path
+  that can set up the object, including those that return before
+  checking (`netinet/arp_rtrequest`); the consumers, assuming it
+  (`netinet/arp_consumers`); and lookups that might hand a consumer
+  an object outside it (`netinet/arp_proxy`). Each half found
+  something the other could not: the producer target found two
+  missing cases, the lookup target an unprotected proxy loop, the
+  consumer target a caller guarantee (`nd6_resolve` relies on
+  Ethernet's six-byte addresses).
+- After a fix, the same pattern in sibling code: a read-only sweep,
+  then each candidate checked by you before it becomes a target.
 
 Prefer a function whose callers' guarantees you can state in two
 lines. If you cannot, split: one target for the caller that proves the
@@ -108,6 +127,18 @@ they take a few minutes and each has caught a wrong report.
    false VERIFIED.
 7. A mutant must exist and be VIOLATED for the reason intended, on a
    mutant built from the current kernel source.
+8. Check every concrete input in the report against each guard on its
+   path, with the struct sizes from a compile, or get it from
+   `CBMC_TRACE=1`. Two reports in a row gave sizeof(struct
+   sockaddr_dl) as 20 (it is 32) and inputs the code rejects; one gave
+   an AF_LINK gateway of 7 bytes, which rtm_xaddrs never passes.
+9. Check each restriction the harness places on its input against the
+   caller that guarantees it, and cite file:line in the harness
+   comment (RTM_RESOLVE clears RTF_CLONING, route.c; nd6_resolve's
+   callers are Ethernet, if_ethersubr.c). A restriction no caller
+   guarantees hides a path; one a caller does guarantee removes a
+   false failure (the harness artifact in netinet/arp_rtrequest that
+   took a trace to see).
 
 ## Deciding what is a finding
 
@@ -135,6 +166,29 @@ before acting.
   the pre-fix source. Then stop and follow "Things only the user
   decides".
 
+**Before changing a check you believe is dead or wrong**, find out
+why it is there. List every entry to the code, including `goto`
+labels; get its history from the public mirror (git over https works
+through the proxy; cvsweb and GitHub web pages do not):
+
+	git init --bare <scratch>/obsd.git
+	git -C <scratch>/obsd.git fetch --filter=blob:none \
+	    https://github.com/openbsd/src master
+	git -C <scratch>/obsd.git log -L '/<text>/,+6:sys/net/rtsock.c'
+
+and read the commit that added it. The family check in rtm_output
+looked as if it could never fire; it fires on `goto change` from
+RTM_ADD, the case its 2017 commit names. A "fix" that disabled it was
+committed and had to be reverted (81bf8c4f0); net/rtm_output_cached
+now pins the behaviour. A change that narrows or reverses a check goes
+in as its own commit marked as a proposal, after the archaeology.
+
+**Observations from the native engine alone** (UBSan signed overflow
+in code the target passes through, such as rtm_setmetrics) are
+findings to record in FINDINGS, not to fix inside the target. Bound
+the harness's own nondet values (times, counters) so they do not
+cause such reports.
+
 A fix must be right for the kernel, not convenient for the harness.
 One subagent chose the form of a fix so that a `must_reach` anchor
 would still exist in the mutant. Review kernel diffs as kernel diffs.
@@ -150,12 +204,16 @@ the user for these, and only these:
   describes the defect. Tell the user, offer a private patch with a
   description, and wait. After they have reported it, the failing
   target may be committed with a neutral message and `expect` set to
-  its current result.
+  its current result. Say what the setup needs: the ARP and ND
+  gateway defects needed root to install a route, and a remote packet
+  to trigger; the user judged those low enough to fix in public.
 - **A fix that could reject input the kernel accepts today** (for
   example removing the early `break` in `rtm_xaddrs`).
 - **Policy**: whether a reachable `panic()` on corrupt input counts
   as a finding; whether to draft larger validation code
   (`ffs_mountfs` geometry checks).
+- **A change to a deliberate check**, after the archaeology above:
+  propose it, with the history in the commit message.
 - **Pull requests.** Never open one unasked.
 
 A stop hook will ask you to commit whenever the tree is dirty. Do not
@@ -185,6 +243,22 @@ fix to satisfy it; say why in one line and move on.
   `timeout` file in a target whose check phase exceeds 150 s quiet.
 - **You commit; subagents do not.** No model names in commits or
   files.
+- **The tools may be missing** in a fresh container. The framework
+  runs on CBMC 6.8.0 (Ubuntu 24.04 package from the diffblue/cbmc
+  GitHub releases; dpkg -i, then `apt-get --fix-broken install` for
+  bash-completion) and, for the native engine, `libclang-rt-18-dev`.
+  Installing needs the user's go-ahead; offer to put both in the
+  environment's setup script so the next session has them.
+- **Environment variables do not persist between tool calls.** A
+  brief's `CBMC_BUDGET_FILE=... CBMC_BUDGET=...` must prefix every
+  cbmc.sh command, or the runs go unlogged (one subagent lost six
+  runs from its log this way).
+- **The full `suite.sh -m` takes about 1.5 hours** (tcp_dooptions
+  alone about 20 minutes). Run it in the background with
+  `SUITE_LOGDIR`; after a restart, rerun only the targets with no
+  PASS/FAIL line (suite.sh takes target names).
+- **Ask for a counterexample** with `CBMC_TRACE=1` rather than letting
+  a subagent derive inputs by hand.
 
 ## When the checker runs out of time or memory
 

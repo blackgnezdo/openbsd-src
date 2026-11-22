@@ -33,6 +33,12 @@ Environment
 				the loops, stop; not counted in the budget
 	<target>/timeout	default CBMC_TIMEOUT of that target
 	CBMC_WORKDIR=<dir>	keep intermediate files and cbmc output there
+	CBMC_TRACE=1		on VIOLATED, one more cbmc run writes a compact
+				counterexample to <workdir>/trace.out and prints
+				the values assigned from main on (scalars and
+				fields; bytes written through a cast pointer,
+				such as a sockaddr laid over a buffer, are only
+				in trace.out) and the violated property
 	CBMC_KEEP=1		keep the temporary work directory also when the
 				result is VERIFIED; without CBMC_WORKDIR the
 				directory is removed on exit after a VERIFIED
@@ -302,6 +308,11 @@ Adding a target
 	   target is slow, check it first (HINT lines).
 	4. sources, keep: the files and the functions on the path.
 	5. must_reach: anchors on the path under test and in the teardown.
+	   An anchor is FILE:TEXT and is reached when any line containing
+	   TEXT (a fixed string) is.  Use text every mutant keeps: VACUOUS
+	   is decided before VIOLATED, so an anchor a mutant removes hides
+	   its failure.  Use the first line of a statement: coverage
+	   counts a multi-line condition on its first line only.
 	6. opts: every loop on the path needs a bound at least as large as
 	   its trip count; --unwinding-assertions reports one that is not.
 
@@ -329,6 +340,9 @@ Rules for a harness
 	- a VERIFIED result counts only together with must_reach anchors
 	  on the path under test
 	- sizes are small constants; say in the harness what they stand for
+	- environment variables do not persist between separate shell
+	  invocations: give CBMC_BUDGET_FILE and CBMC_BUDGET on every
+	  cbmc.sh and suite.sh command line
 	- run the solver through cbmc.sh only: no direct calls of cbmc,
 	  goto-cc or goto-instrument for checking, no private copy of the
 	  script.  The time, memory and run limits and the budget log exist

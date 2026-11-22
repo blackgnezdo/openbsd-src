@@ -40,7 +40,8 @@
 # memory or broken, 3 run budget used up.  The last line is always a RESULT
 # line, except when goto-cc or goto-instrument fail.
 # The work directory is removed on exit when the result is VERIFIED, unless
-# CBMC_WORKDIR or CBMC_KEEP=1 is set.
+# CBMC_WORKDIR or CBMC_KEEP=1 is set.  CBMC_TRACE=1 prints a counterexample
+# of a violation (an extra cbmc run).
 
 set -eu
 START=$(date +%s)
@@ -425,6 +426,19 @@ echo "NOBODY ${nobody_seen:--}" | awk '{ if (length($0) > 1000) {
 	n = 0; s = $1; for (i = 2; i <= NF; i++) { if (length(s) + length($i) > 960)
 	    break; s = s " " $i } printf "%s ... (%d more)\n", s, NF - i + 1 }
 	else print }'
+# CBMC_TRACE=1: on a violation, one more cbmc run prints a counterexample
+# (compact trace, in $W/trace.out); the value assignments are summarised
+# here so that a concrete input need not be derived by hand.
+if [ -n "${CBMC_TRACE:-}" ] && [ $rc -eq 10 ]; then
+	run_cbmc "$W/trace.out" "$W/model.gb" $OPTS --pointer-check \
+	    --unwinding-assertions --trace --compact-trace
+	echo "TRACE of the first violation in $W/trace.out; assignments:"
+	sed -n '/^Trace for /,$p' "$W/trace.out" | sed -n '/ main()$/,$p' |
+	    sed -n 's/^ *\([0-9][0-9]*: [A-Za-z_][^ ]*=[^ {]*\)\( .*\)*$/  \1/p' |
+	    grep -v '__CPROVER\|tmp_\|return_value_\|=NULL$\|=0$\|=0[ul]*$\|=(\|goto_symex\|malloc_\|record_\|=&' |
+	    head -60 || true
+	sed -n '/^Violated property:/,/^$/p' "$W/trace.out" | head -4 || true
+fi
 if [ -z "$TMPW" ]; then
 	echo "output in $W"
 elif [ -n "${CBMC_KEEP:-}" ]; then
