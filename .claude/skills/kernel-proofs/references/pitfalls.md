@@ -90,6 +90,8 @@ the failed properties, not only the RESULT word.
 VACUOUS before VIOLATED, so the mutant comes back VACUOUS. Anchor only
 text every mutant keeps, and cover the removed line with an exact
 postcondition (net/rtm_output_cached asserts the result code).
+An anchor on the continuation line of a multi-line condition is never
+reached either: coverage counts the condition's first line.
 
 ## 2. Results that look bad and are not
 

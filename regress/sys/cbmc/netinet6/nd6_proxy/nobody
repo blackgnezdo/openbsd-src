@@ -1,0 +1,10 @@
+kern_log_model
+timeout_set_flags
+timeout_add_sec
+getuptime
+mtx_enter
+mtx_leave
+counters_inc
+nd6_isneighbor
+nd6_cache_lladdr
+nd6_dad_ns_input

@@ -926,3 +926,24 @@ net/rtm_output_cached
 	result code covers it.  mutant/ is 9264ea9da's rtsock.c (accepts
 	gateway family 0, sa_len 8) and mutant_nocheck/ has the check
 	removed: VIOLATED.  Native: CLEAN.  Check phase about 30 s.
+
+netinet6/nd6_proxy
+	nd6_ns_input() of sys/netinet6/nd6_nbr.c on a Neighbor Solicitation
+	whose target is not one of our addresses, so that the proxy NDP
+	branch and nd6_na_output() run.  One route, built as in
+	netinet6/nd6_rtrequest (arbitrary flags and gateway, if_addrlen
+	0..255) and put through the real nd6_rtrequest first; route table
+	modelled as in netinet/arp_proxy, references balanced.  The packet
+	is an IPv6 header and an NS with 0..8 option bytes (64..72 bytes,
+	one or two mbufs, arbitrary content) on the mbufcontract.h models.
+	The checks before the proxy branch (hop limit, source address,
+	DAD, nd6_options) and nd6_na_output down to ip6_output run as the
+	kernel's; nd6_isneighbor, nd6_cache_lladdr and nd6_dad_ns_input
+	have no body, in6ifa_ifpwithaddr is NULL, the reply mbuf and
+	ip6_output are models.  VERIFIED: no out-of-bounds access, no
+	leak, references balanced.  mutant_prefix/ (before 089ef3708, no
+	rt_llinfo test) is VIOLATED on the read at LLADDR of a gateway
+	nd6_rtrequest rejected (for example AF_LINK, sa_len 32, sdl_nlen
+	24, sdl_alen = if_addrlen = 6).  Not covered: the route deleted
+	between rtalloc and the use of proxydl (FINDINGS).  Native: CLEAN;
+	on mutant_prefix an ASan heap over-read.  Check phase about 60 s.

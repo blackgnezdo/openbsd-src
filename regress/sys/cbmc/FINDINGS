@@ -59,6 +59,14 @@ sys/net/rtsock.c, rtm_setmetrics (native, from net/rtm_output_cached)
 	Root only, no memory effect.  Undecided: whether to bound or
 	saturate rmx_expire.
 
+sys/netinet6/nd6_nbr.c, nd6_ns_input (read, from netinet6/nd6_proxy)
+	proxydl = satosdl(rt->rt_gateway) is used by nd6_na_output after
+	rtfree(rt).  The table's reference keeps the gateway alive unless
+	the route is deleted in between; deletion needs the exclusive net
+	lock and nothing on the path sleeps, and nd6_cache_lladdr (no body
+	in the target) deletes only routes that fail the proxy tests.  No
+	path found; the target cannot exclude one.
+
 Gaps in the targets themselves
 
 netinet/tcp_dooptions
@@ -78,8 +86,5 @@ netinet6/ip6_hopopts_input
 common/mbufcontract.h
 	The contract models are hand-written; nothing ties them
 	mechanically to the net/mbuf_* proofs of the real functions.
-netinet6/nd6_rtrequest
-	The proxy lookup changed by 089ef3708 (nd6_ns_input) is not
-	covered yet; netinet/arp_proxy shows how to model the route table.
 no expect.native for most targets
 	The native suite pass (suite.sh -n) has not been recorded.

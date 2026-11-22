@@ -1,0 +1,7 @@
+nd6_nbr.c:rt = rtalloc(sin6tosa(&tsin6), 0, m->m_pkthdr.ph_rtableid);
+nd6_nbr.c:if (rt && (rt->rt_flags & RTF_ANNOUNCE) != 0 &&
+nd6_nbr.c:proxydl = satosdl(rt->rt_gateway);
+nd6_nbr.c:tlladdr, sdltosa(proxydl));
+nd6_nbr.c:mac = LLADDR(sdl);
+nd6_nbr.c:bcopy(mac, (caddr_t)(nd_opt + 1), ifp->if_addrlen);
+nd6.c:nd6_inuse--;
