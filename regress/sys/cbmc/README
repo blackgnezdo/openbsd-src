@@ -1246,3 +1246,23 @@ netinet/icmp_input
 	whole icmp_dun union; those types become ECHO in the harness), outer
 	IP options, pf, carp.  Native: CLEAN, but it does not reach the
 	mutants' cases.  Check phase about 20 s.
+
+netinet/carp_input
+	carp_proto_input_if() and carp_proto_input_c() of
+	sys/netinet/ip_carp.c on a 20 byte IP header and 0..48 CARP bytes
+	(struct carp_header is 36, packed) in one or two mbufs, on the
+	contract models.  ifp is an Ethernet parent with zero or one carp
+	softc (one vhost entry, arbitrary vhid, state, advbase, advskew,
+	flags, demote counts, replay cookie), a carp interface whose parent
+	lookup may fail, or another type.  Real: both input functions, the
+	vhid lookup, the replay check, carp_master_down, carp_setrun.
+	Models: in_cksum (bytes readable; zero or arbitrary),
+	carp_hmac_verify under CBMC (counter and digest readable, arbitrary
+	result; real SHA1 timed out; natively the kernel's body),
+	if_get/if_put, carp_set_state, carp_send_ad, carp_send_arp.
+	VERIFIED: no out-of-bounds access, no leak, references balanced.
+	mutant/ (the pulled-up and checksummed length one short) is VIOLATED
+	on the digest read; the len > m_pkthdr.len test alone is redundant
+	with the m_pullup after it.  Not covered: IPv6, several softcs or
+	vhost entries, carpctl_allow 0.  Native: CLEAN.  Check phase about
+	2 minutes, 2.2 million variables (timeout 600).

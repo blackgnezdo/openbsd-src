@@ -1,0 +1,14 @@
+ip_carp.c:iplen = ip->ip_hl << 2;
+ip_carp.c:CARP_LOG(LOG_INFO, sc, ("packet too short %d on %s",
+ip_carp.c:if ((m = *mp = m_pullup(m, len)) == NULL) {
+ip_carp.c:if (carp_cksum(m, len - iplen)) {
+ip_carp.c:carp_proto_input_c(ifp, m, ch, ismulti, AF_INET);
+ip_carp.c:if (vhe->vhid == ch->carp_vhid)
+ip_carp.c:carpstat_inc(carps_badvhid);
+ip_carp.c:getmicrotime(&sc->sc_if.if_lastchange);
+ip_carp.c:CARP_LOG(LOG_NOTICE, sc, ("invalid version %d != %d",
+ip_carp.c:if (carp_hmac_verify(vhe, ch->carp_counter, ch->carp_md)) {
+ip_carp.c:sc_tv.tv_sec = sc->sc_advbase;
+ip_carp.c:if (((timercmp(&sc_tv, &ch_tv, >) ||
+ip_carp.c:if (atomic_load_int(&carpctl_preempt) &&
+ip_carp.c:sc_tv.tv_sec = sc->sc_advbase * 3;

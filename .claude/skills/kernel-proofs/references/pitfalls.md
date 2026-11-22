@@ -176,6 +176,18 @@ aborts goto-cc; use a literal, or a macro.
 **The contract models are stricter than the kernel in places:**
 mbufcontract.h's m_free asserts non-NULL, the kernel's accepts NULL.
 
+**A model renamed around an include loses its prototype.** With
+#define m_pullup mc_m_pullup around #include "mbufcontract.h", the
+kernel's own prototype in sys/mbuf.h is read under the rename too, and
+the include guard keeps it from coming back: a kernel file included
+later calls m_pullup undeclared, as returning int, and the pointer is
+truncated to 0 (net/pfsync_input: a leak that was the harness's).
+Define the model before including the kernel file, or declare the
+real name again after the #undef.
+
+**A length check ahead of m_pullup is redundant with it** (igmp,
+carp): mutate the length passed to both, not the check alone.
+
 ## 3. Cost: time and memory
 
 Start from the `PHASE` line, not from the HINT text alone.

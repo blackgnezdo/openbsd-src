@@ -1,0 +1,8 @@
+counters_inc
+getmicrotime
+log
+addlog
+timeout_del
+timeout_add_usec
+rw_status
+splassert_fail
