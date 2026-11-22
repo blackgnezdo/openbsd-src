@@ -1121,3 +1121,16 @@ netinet/udp_input
 	is VIOLATED.  Not covered: multicast and broadcast delivery, IPsec,
 	PIPEX, pf, inp_upcall encapsulation, jumbograms.  Native: CLEAN.
 	Check phase about 4-5 minutes, 1.5 million variables (timeout 600).
+
+netinet6/dest6_input
+	dest6_input() of sys/netinet6/dest6.c on a 40 byte IPv6 header and
+	a destination options header of 8..32 bytes of arbitrary content
+	(ip6d_len arbitrary, so the header may claim more than the packet
+	holds), in one or two mbufs with the IPv6 header in the first, on
+	the contract models.  The option walk is unwound to 31 iterations
+	(a loop contract did not fit: m_pulldown reshapes the chain before
+	the loop) and runs the real ip6_unknown_opt; icmp6_error is a model
+	that consumes the mbuf.  VERIFIED: no out-of-bounds access, no
+	leak.  mutant/ (the IP6OPT_MINLEN test at dest6.c:71 one short) is
+	VIOLATED on opt[1].  Native: CLEAN.  Check phase about 7 minutes,
+	1.4 million variables, --sat-solver cadical (timeout 1500).

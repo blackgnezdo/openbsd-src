@@ -1,0 +1,5 @@
+dest6.c:dstoptlen = (dstopts->ip6d_len + 1) << 3;
+dest6.c:optlen = *(opt + 1) + 2;
+dest6.c:optlen = ip6_unknown_opt(mp, opt,
+dest6.c:*offp = off;
+ip6_input.c:return ((int)*(optp + 1));
