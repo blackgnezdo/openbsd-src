@@ -1,0 +1,14 @@
+{
+ "functions": [
+  {
+   "pf_walk_option": [
+    {
+     "loop_id": "8",
+     "invariants": "off >= 0 && off <= end && end <= 40",
+     "decreases": "end - off",
+     "assigns": "type, length, off, pd->badopts, __CPROVER_object_whole(reason), pf_status"
+    }
+   ]
+  }
+ ]
+}
