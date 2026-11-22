@@ -1468,8 +1468,12 @@ pf_sourcelim_add(const struct pfioc_sourcelim *ioc)
 		pfsrlim->pfsrlim_rate_bucket = bucket;
 	}
 
-	pfsrlim->pfsrlim_ipv4_mask.v4.s_addr =
-	    htonl(0xffffffff << (32 - pfsrlim->pfsrlim_ipv4_prefix));
+	if (pfsrlim->pfsrlim_ipv4_prefix != 0)
+		pfsrlim->pfsrlim_ipv4_mask.v4.s_addr =
+		    htonl(0xffffffff << (32 - pfsrlim->pfsrlim_ipv4_prefix));
+	/* prefix 0 keeps the zeroed mask: every address in one bucket.
+	 * A shift by 32 is undefined and on amd64 would leave every bit
+	 * set, a /32 mask with a bucket per address. */
 
 	prefix = pfsrlim->pfsrlim_ipv6_prefix;
 	for (i = 0; i < nitems(pfsrlim->pfsrlim_ipv6_mask.addr32); i++) {
