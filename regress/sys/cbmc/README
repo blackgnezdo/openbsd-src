@@ -38,7 +38,9 @@ Environment
 				the values assigned from main on (scalars and
 				fields; bytes written through a cast pointer,
 				such as a sockaddr laid over a buffer, are only
-				in trace.out) and the violated property
+				in trace.out) and the violated property; the
+				trace is of the first failed property of the
+				check run
 	CBMC_KEEP=1		keep the temporary work directory also when the
 				result is VERIFIED; without CBMC_WORKDIR the
 				directory is removed on exit after a VERIFIED
@@ -1023,3 +1025,18 @@ netinet6/icmp6_redirect
 	mutant_prefix/ (before 5d53f1e73) leaks the mbuf when if_get fails.
 	Not covered: jumbograms (ip6_plen 0), extension headers, the real
 	rtredirect.  Native: CLEAN.  Check phase about 40 s quiet.
+
+netinet/igmp_input
+	igmp_input_if() of sys/netinet/igmp.c on a 20 byte IP header and
+	0..16 IGMP bytes of arbitrary content in one or two mbufs, on the
+	contract models; ip_len equals the packet length (ip_input.c
+	409-436).  in_cksum is a model that asserts len bytes readable and
+	returns an arbitrary value (the real body timed out); rip_input
+	frees the packet; in_ifp2ia and in_lookupmulti are models over one
+	address and a multicast list of zero or one entry; mtx_enter and
+	mtx_leave track the owner, so MUTEX_ASSERT_LOCKED holds.
+	VERIFIED: no out-of-bounds access, no leak.  mutant_minlen/ pulls
+	up IGMP_MINLEN - 1 bytes: VIOLATED on the group field; mutant/
+	removes both length checks: VIOLATED.  The igmplen < IGMP_MINLEN
+	test alone is redundant with the m_pullup that follows.  Native:
+	CLEAN.  Check phase about 2 minutes, 1.5 million variables.

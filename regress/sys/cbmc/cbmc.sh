@@ -430,9 +430,13 @@ echo "NOBODY ${nobody_seen:--}" | awk '{ if (length($0) > 1000) {
 # (compact trace, in $W/trace.out); the value assignments are summarised
 # here so that a concrete input need not be derived by hand.
 if [ -n "${CBMC_TRACE:-}" ] && [ $rc -eq 10 ]; then
+	# The first real failure (check.out has no no-body properties).
+	tprop=$(sed -n 's/^\[\([^]]*\)\] .*: FAILURE$/\1/p' "$W/check.out" |
+	    head -1)
 	run_cbmc "$W/trace.out" "$W/model.gb" $OPTS --pointer-check \
-	    --unwinding-assertions --trace --compact-trace
-	echo "TRACE of the first violation in $W/trace.out; assignments:"
+	    --unwinding-assertions --trace --compact-trace \
+	    ${tprop:+--property "$tprop"}
+	echo "TRACE of ${tprop:-the first violation} in $W/trace.out; assignments:"
 	sed -n '/^Trace for /,$p' "$W/trace.out" | sed -n '/ main()$/,$p' |
 	    sed -n 's/^ *\([0-9][0-9]*: [A-Za-z_][^ ]*=[^ {]*\)\( .*\)*$/  \1/p' |
 	    grep -v '__CPROVER\|tmp_\|return_value_\|=NULL$\|=0$\|=0[ul]*$\|=(\|goto_symex\|malloc_\|record_\|=&' |

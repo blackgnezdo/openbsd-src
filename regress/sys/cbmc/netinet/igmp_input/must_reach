@@ -1,0 +1,6 @@
+igmp.c:minlen = iphlen + IGMP_MINLEN;
+igmp.c:m->m_len += iphlen;
+igmp.c:case IGMP_HOST_MEMBERSHIP_QUERY:
+igmp.c:error = rti_reset(ifp);
+igmp.c:inm = in_lookupmulti(&igmp->igmp_group, ifp);
+igmp.c:return rip_input(mp, offp, proto, af, ns);

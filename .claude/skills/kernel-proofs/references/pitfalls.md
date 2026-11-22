@@ -146,6 +146,19 @@ came back as nine. In the kernel the pointer leaves its object only
 when the data ends its buffer, so the class stays "no memory effect";
 do not count the extra failures as extra findings.
 
+**"panic reached" on a MUTEX_ASSERT_LOCKED.** mtx_enter without a
+body leaves the mutex looking unheld. Model mtx_enter/mtx_leave to set
+and clear mtx_owner (netinet/igmp_input).
+
+**A leak of the harness's own object.** Every CBMC_NEW object is
+leak-checked: free it on every exit path of main, early returns
+included.
+
+**A mutant that stays VERIFIED.** The removed check may be redundant
+with a later one (igmp's IGMP_MINLEN test and its m_pullup). Mutate the
+check that actually guards the access, preferably by one (minlen - 1),
+rather than deleting a block.
+
 ## 3. Cost: time and memory
 
 Start from the `PHASE` line, not from the HINT text alone.
