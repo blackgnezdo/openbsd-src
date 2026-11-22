@@ -862,3 +862,28 @@ netinet6/nd6_rtrequest
 	change of 089ef3708, and the consumers themselves.  Native: CLEAN;
 	each mutant a FINDING on the postcondition.  Check phase about
 	3 s.
+
+netinet/arp_consumers
+	The other half of netinet/arp_rtrequest (assume/guarantee):
+	arpresolve(), arpcache() and arpinvalidate() of sys/netinet/
+	if_ether.c, each optional and in that order, on one route whose
+	gateway satisfies the invariant arp_rtrequest proves (AF_LINK,
+	sa_len >= 32, sdl_alen 0 or 6, 8 + sdl_nlen + 6 <= sa_len, exactly
+	ROUNDUP(sa_len) bytes at the end of a 264 byte object), built by
+	clamping.  rt_flags arbitrary with RTF_LLINFO, rt_llinfo NULL or a
+	real llinfo_arp whose hold queue may hold a packet, rt_gwroute NULL
+	or a route without RTF_LLINFO and an arbitrary gateway (rt_getll
+	is the kernel's body).  if_output_mq, rtm_send, if_get/if_put,
+	if_isconnected and getuptime are models.  VERIFIED: no
+	out-of-bounds access, no leak or double free, the invariant holds
+	after each call.  Time fields are below 2^40 and la_asked 0..255
+	(the native engine's UBSan reports the overflows CBMC is not asked
+	to check).  mutant/ (arpresolve without its RTF_LLINFO test: the
+	gwroute's gateway is read) and mutant_nola/ (arpcache without the
+	la == NULL return) are VIOLATED.  With room for 8 + nlen + alen
+	only (the bound before 96dde7faa) arpcache's write at LLADDR
+	fails (sa_len 32, nlen 24, alen 0); checked on a scratch copy, not
+	kept.  The sdl_alen and family tests in arpresolve and arpcache
+	are redundant under the invariant.  Not covered: the proxy paths,
+	arptfree, the real if_output_ml.  Native: CLEAN.  Check phase
+	about 4 s.

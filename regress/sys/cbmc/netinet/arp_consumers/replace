@@ -1,0 +1,9 @@
+m_gethdr:model_m_gethdr
+m_freem:model_m_freem
+rt_getll:model_rt_getll
+if_isconnected:model_if_isconnected
+if_get:model_if_get
+if_put:model_if_put
+if_output_mq:model_if_output_mq
+rtm_send:model_rtm_send
+getuptime:model_getuptime

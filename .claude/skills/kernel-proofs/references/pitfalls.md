@@ -80,7 +80,24 @@ result stood; the inputs did not. Check every reported input against
 each guard on the path, or reproduce it natively. A CBMC_TRACE
 option in cbmc.sh would remove this; not done yet.
 
+**VACUOUS where VIOLATED was expected, on a scratch or pinned copy.**
+The cover run stops at an out-of-bounds write, so anchors after it are
+unreached. suite.sh runs mutants with CBMC_NO_COVER=1 and sees
+VIOLATED; a direct cbmc.sh run on the same copy can say VACUOUS. Read
+the failed properties, not only the RESULT word.
+
 ## 2. Results that look bad and are not
+
+**Native FINDING on signed overflow in a nondet time or counter.**
+cbmc.sh runs CBMC with --no-standard-checks; the native engine's UBSan
+still checks overflow, so an arbitrary time_t plus a constant fails
+there only. Bound such draws (arp_consumers: times below 2^40) and say
+so.
+
+**The m_freem model of netinet/arp_rtrequest in a target with a hold
+queue.** It asserts m_nextpkt is NULL and returns NULL; ml_purge calls
+m_freem on queued packets. Return m_nextpkt as the kernel does
+(netinet/arp_consumers).
 
 **`rw_status` and `splassert_fail` on the NOBODY line.** They come
 from NET_ASSERT_LOCKED under DIAGNOSTIC: no out-parameter, and

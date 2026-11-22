@@ -1,0 +1,6 @@
+if_ether.c:if (memcmp(ea->arp_sha, LLADDR(sdl), sdl->sdl_alen)) {
+if_ether.c:memcpy(LLADDR(sdl), ea->arp_sha, sizeof(ea->arp_sha));
+if_ether.c:memcpy(desten, LLADDR(sdl), sdl->sdl_alen);
+if_ether.c:if_output_mq(ifp, &la->la_mq, &la_hold_total, rt_key(rt), rt);
+if_ether.c:if (mq_push(&la->la_mq, m) != 0)
+if_ether.c:sdl->sdl_alen = 0;

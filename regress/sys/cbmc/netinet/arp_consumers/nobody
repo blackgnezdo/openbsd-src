@@ -1,0 +1,5 @@
+kern_log_model
+mtx_enter
+mtx_leave
+inet_ntop
+ether_sprintf
