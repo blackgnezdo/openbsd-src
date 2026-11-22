@@ -174,6 +174,12 @@ turned a timeout into a result.
 (`sc`) after the loop makes every later dereference a case split over
 all objects. Pin it in the invariant (`sc == 0`).
 
+**bcmp/bcopy of up to 255 bytes at a symbolic offset.** The byte
+loops took 2.8 million variables and timed out. A region-check model
+(replace __builtin_bcmp / __builtin_bcopy; assert r_ok/w_ok of all n
+bytes, guard n == 0, real loops natively) keeps the bounds property
+and drops contents (netinet6/nd6_consumers).
+
 **Two segments is the limit for the real mbuf code.** Three took
 `m_pullup` past 150 s. Do not ask for more; the contract models are
 also two-segment.

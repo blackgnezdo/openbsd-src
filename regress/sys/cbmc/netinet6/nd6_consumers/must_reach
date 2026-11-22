@@ -1,0 +1,11 @@
+nd6.c:if (bcmp(lladdr, LLADDR(sdl), ifp->if_addrlen))
+nd6.c:bcopy(lladdr, LLADDR(sdl), ifp->if_addrlen);
+nd6.c:bcopy(LLADDR(sdl), desten, sdl->sdl_alen);
+nd6.c:ndp info overwritten for %s by %s on %s
+nd6.c:if_output_mq(ifp, &ln->ln_mq, &ln_hold_total,
+nd6.c:if (mq_push(&ln->ln_mq, m) != 0)
+nd6.c:nd6_ns_output(ifp, NULL, &satosin6(dst)->sin6_addr, &saddr6, 0);
+nd6.c:ETHER_MAP_IPV6_MULTICAST(&satosin6(dst)
+nd6_nbr.c:rt = nd6_lookup(&taddr6, 1, ifp, ifp->if_rdomain);
+nd6_nbr.c:rtm_send(rt, RTM_RESOLVE, 0, ifp->if_rdomain);
+nd6_nbr.c:if (bcmp(lladdr, LLADDR(sdl), ifp->if_addrlen))

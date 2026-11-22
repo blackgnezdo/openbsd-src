@@ -947,3 +947,29 @@ netinet6/nd6_proxy
 	24, sdl_alen = if_addrlen = 6).  Not covered: the route deleted
 	between rtalloc and the use of proxydl (FINDINGS).  Native: CLEAN;
 	on mutant_prefix an ASan heap over-read.  Check phase about 60 s.
+
+netinet6/nd6_consumers
+	The other half of netinet6/nd6_rtrequest (assume/guarantee):
+	nd6_cache_lladdr() and nd6_resolve() of sys/netinet6/nd6.c and
+	nd6_na_input() of sys/netinet6/nd6_nbr.c on a route that satisfies
+	the invariant nd6_rtrequest proves (AF_LINK, sa_len >= 32, 8 +
+	sdl_nlen + if_addrlen <= sa_len, exactly ROUNDUP(sa_len) bytes at
+	the end of a 264 byte object, sdl_alen arbitrary), with a real
+	llinfo and if_addrlen 0..247 (larger admits no entry).  Per run
+	either two steps (nd6_cache_lladdr with lladdr NULL or of the
+	length its callers check, nd6_resolve, or nothing) or one
+	nd6_na_input on a packet of up to 72 bytes (mbufcontract.h models,
+	real nd6_options).  nd6_lookup returns NULL or the route with a
+	reference; nd6_free must not be reached (asserted).  bcmp and
+	bcopy are region-check models under CBMC (256-byte loops took 2.8
+	million variables and timed out); natively real loops.  Caller
+	guarantee: nd6_resolve runs only for if_addrlen == ETHER_ADDR_LEN
+	(its callers are in ether_resolve; ether_ifattach sets 6); it
+	reads 6 bytes at LLADDR whatever if_addrlen is.  VERIFIED: no
+	out-of-bounds access, no leak.  mutant/ (nd6_resolve's sdl_alen
+	test removed) is VIOLATED; with only sa_len >= 32 (the bound
+	before ad7fd44ef) nd6_cache_lladdr's bcmp and bcopy leave the
+	gateway (sa_len 32, sdl_nlen 24, if_addrlen 6), checked on a
+	scratch copy.  Not covered: icmp6_redirect_output, the proxy path
+	(netinet6/nd6_proxy), packets above 72 bytes.  Native: CLEAN.
+	Check phase about 4 minutes, 1.8 million variables (timeout 600).
