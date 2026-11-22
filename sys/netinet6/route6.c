@@ -51,11 +51,9 @@ int
 route6_input(struct mbuf **mp, int *offp, int proto, int af,
     struct netstack *ns)
 {
-	struct ip6_hdr *ip6;
 	struct ip6_rthdr *rh;
 	int off = *offp, rhlen;
 
-	ip6 = mtod(*mp, struct ip6_hdr *);
 	rh = ip6_exthdr_get(mp, off, sizeof(*rh));
 	if (rh == NULL) {
 		ip6stat_inc(ip6s_tooshort);
@@ -77,7 +75,7 @@ route6_input(struct mbuf **mp, int *offp, int proto, int af,
 		}
 		ip6stat_inc(ip6s_badoptions);
 		icmp6_error(*mp, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
-			    (caddr_t)&rh->ip6r_type - (caddr_t)ip6);
+			    off + offsetof(struct ip6_rthdr, ip6r_type));
 		return (IPPROTO_DONE);
 	}
 
