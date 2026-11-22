@@ -1,0 +1,16 @@
+--unwind 5
+--memory-leak-check
+--div-by-zero-check
+--undefined-shift-check
+--unwindset strnlen.0:33
+--unwindset strlcpy.0:33
+--unwindset strlcpy.1:33
+--unwindset strncmp.0:17
+--unwindset check_masks.0:33
+--unwindset check_masks.1:33
+--unwindset check_masks.2:5
+--unwindset _rb_insert.0:3
+--unwindset rbe_insert_color.0:2
+--unwindset rbe_remove.0:2
+--unwindset rbe_remove.1:2
+--unwindset rbe_remove_color.0:2

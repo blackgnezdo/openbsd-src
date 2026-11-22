@@ -1,0 +1,9 @@
+pf_ioctl.c:if ((ioc->rate.limit == 0) != (ioc->rate.seconds == 0))
+pf_ioctl.c:if (ioc->inet6_prefix > 128)
+pf_ioctl.c:pfsrlim = pool_get(&pf_sourcelim_pl
+pf_ioctl.c:if (ioc->ticket != pf_main_ruleset.rules.inactive.version) {
+pf_ioctl.c:pfsrlim->pfsrlim_overload.table = pfr_attach_table(
+pf_ioctl.c:if (RBT_INSERT(pf_sourcelim_id_tree,
+pf_ioctl.c:if (RBT_INSERT(pf_sourcelim_nm_tree,
+pf_ioctl.c:RBT_REMOVE(pf_sourcelim_id_tree,
+pf_ioctl.c:TAILQ_INSERT_HEAD(&pf_sourcelim_list_inactive
