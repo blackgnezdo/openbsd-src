@@ -345,6 +345,12 @@ pf_rule_free(struct pf_rule *rule)
 	if (rule == NULL)
 		return;
 
+	/* pf_rule_copyin() may have taken tag references before the
+	 * caller bailed out; drop them like pf_rm_rule() does for rules
+	 * that made it into a ruleset. */
+	pf_tag_unref(rule->tag);
+	pf_tag_unref(rule->match_tag);
+
 	pfi_kif_free(rule->kif);
 	pfi_kif_free(rule->rcv_kif);
 	pfi_kif_free(rule->rdr.kif);
