@@ -1,0 +1,6 @@
+if_get:model_if_get
+if_put:model_if_put
+rw_enter_write:model_rw_enter_write
+rw_exit_write:model_rw_exit_write
+in6_lookupmulti:model_in6_lookupmulti
+mld6_sendpkt:model_mld6_sendpkt

@@ -1,0 +1,6 @@
+mld6.c:if (!IN6_IS_ADDR_LINKLOCAL(&ip6->ip6_src)) {
+mld6.c:ifp = if_get(m->m_pkthdr.ph_ifidx);
+mld6.c:case MLD_LISTENER_REPORT:
+mld6.c:in6m = in6_lookupmulti(&mldh->mld_addr, ifp);
+mld6.c:mld6_sendpkt(pkt);
+mld6.c:if_put(ifp);
