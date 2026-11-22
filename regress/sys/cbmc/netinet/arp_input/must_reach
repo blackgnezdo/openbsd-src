@@ -1,0 +1,6 @@
+if_ether.c:len += 2 * (ar->ar_hln + ar->ar_pln);
+if_ether.c:memcpy(&itaddr, ea->arp_tpa, sizeof(itaddr));
+if_ether.c:if (proxy && !ISSET(rt->rt_flags, RTF_ANNOUNCE)) {
+if_ether.c:memcpy(LLADDR(sdl), ea->arp_sha, sizeof(ea->arp_sha));
+if_ether.c:eaddr = LLADDR(satosdl(rt->rt_gateway));
+if_ether.c:memcpy(eh->ether_dhost, ea->arp_tha, sizeof(eh->ether_dhost));

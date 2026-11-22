@@ -1040,3 +1040,17 @@ netinet/igmp_input
 	removes both length checks: VIOLATED.  The igmplen < IGMP_MINLEN
 	test alone is redundant with the m_pullup that follows.  Native:
 	CLEAN.  Check phase about 2 minutes, 1.5 million variables.
+
+netinet/arp_input
+	arpinput(), arppullup(), arpintr() and in_arpinput() of
+	sys/netinet/if_ether.c on an untrusted packet of 0..46 bytes (an
+	ARP packet padded to the Ethernet minimum) in one or two mbufs, on
+	the contract models.  Two routes under one key and one clone, each
+	put through the real arp_rtrequest, gateways of sa_len 0..63 (real:
+	255; 255 cost 283 s against 170 s at 32 bytes); real arplookup,
+	arpcache, arpreply and arprequest.  VERIFIED: no out-of-bounds
+	access, no leak, route references balanced, arpinq empty, and
+	netinet/arp_rtrequest's gateway invariant on every route at the
+	end.  mutant/ and mutant_hdr/ drop arppullup's pullup to 28 and to
+	8 bytes: VIOLATED.  Native: CLEAN.  Check phase about 5 minutes,
+	2.3 million variables (timeout 600).

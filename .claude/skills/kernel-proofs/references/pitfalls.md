@@ -159,6 +159,12 @@ with a later one (igmp's IGMP_MINLEN test and its m_pullup). Mutate the
 check that actually guards the access, preferably by one (minlen - 1),
 rather than deleting a block.
 
+**A pool model that the native build ignores.** native.sh links
+common/stubs_pool.c's pool_get, not a harness model named in replace
+(netinet/arp_input); name the model model_pool_get with a replace line
+for CBMC, and set pr_size so the native stub allocates enough. Raising
+MC_MAXLEN needs mc_copy.0 unwound to at least MC_MAXLEN + 1.
+
 ## 3. Cost: time and memory
 
 Start from the `PHASE` line, not from the HINT text alone.
