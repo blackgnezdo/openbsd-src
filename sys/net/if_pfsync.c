@@ -2669,7 +2669,7 @@ pfsync_input(struct mbuf *m, uint8_t ttl, unsigned int hlen)
 	}
 
 	len = ntohs(ph->len);
-	if (m->m_pkthdr.len < len) {
+	if (len < sizeof(*ph) || m->m_pkthdr.len < len) {
 		pfsyncstat_inc(pfsyncs_badlen);
 		goto leave;
 	}
