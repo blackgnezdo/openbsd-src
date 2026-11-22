@@ -1,0 +1,13 @@
+ip_icmp.c:if (icmplen < ICMP_MINLEN) {
+ip_icmp.c:if ((m = *mp = m_pullup(m, i)) == NULL) {
+ip_icmp.c:if (in4_cksum(m, 0, hlen, icmplen)) {
+ip_icmp.c:if (IN_MULTICAST(icp->icmp_ip.ip_dst.s_addr))
+ip_icmp.c:ctlfunc = inetsw[ip_protox[icp->icmp_ip.ip_p]].pr_ctlinput;
+ip_icmp.c:(*ctlfunc)(code, sintosa(&sin), m->m_pkthdr.ph_rtableid,
+ip_icmp.c:icp->icmp_type = ICMP_ECHOREPLY;
+ip_icmp.c:if (!icmp_reflect(m, &opts, NULL)) {
+ip_icmp.c:icp->icmp_rtime = iptime();
+ip_icmp.c:ia = ifatoia(ifaof_ifpforaddr(sintosa(&sin), ifp));
+ip_icmp.c:rtredirect(sintosa(&sdst), sintosa(&sgw),
+ip_icmp.c:pfctlinput(PRC_REDIRECT_HOST, sintosa(&sdst));
+ip_icmp.c:return rip_input(mp, offp, proto, af, ns);

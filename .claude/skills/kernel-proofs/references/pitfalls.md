@@ -165,6 +165,17 @@ common/stubs_pool.c's pool_get, not a harness model named in replace
 for CBMC, and set pr_size so the native stub allocates enough. Raising
 MC_MAXLEN needs mc_copy.0 unwound to at least MC_MAXLEN + 1.
 
+**cbmc crashes (exit 134, boolbv_map.cpp) with a loop-bounds HINT.**
+A table the harness defines after including the kernel file that
+declares it as an incomplete extern array (inetsw, ip_protox): define
+it before the include.  The error text is only in cover.out.
+
+**__CPROVER_assert with a non-literal message** (a helper's parameter)
+aborts goto-cc; use a literal, or a macro.
+
+**The contract models are stricter than the kernel in places:**
+mbufcontract.h's m_free asserts non-NULL, the kernel's accepts NULL.
+
 ## 3. Cost: time and memory
 
 Start from the `PHASE` line, not from the HINT text alone.

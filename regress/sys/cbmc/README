@@ -1226,3 +1226,23 @@ netinet6/route6_input
 	into the next one: VIOLATED; mutant/ (the fixed part fetched one
 	byte short) is VIOLATED on ip6r_segleft.  Native: CLEAN (it does
 	not see the pointer subtraction).  Check phase about 15 s.
+
+netinet/icmp_input
+	icmp_input_if() of sys/netinet/ip_icmp.c on a 20 byte IP header and
+	8..56 ICMP bytes of arbitrary content in one or two mbufs, ip_len as
+	ipv4_check leaves it, the sysctls arbitrary.  The real length
+	checks, pullup, type switch, error types, ECHO, TSTAMP, MASKREQ and
+	REDIRECT run.  in4_cksum, icmp_reflect and icmp_send (asserting what
+	netinet/icmp_reflect needs), rip_input, the route functions and
+	microtime are models; the protosw table has one entry without
+	ctlinput and one whose model asserts the embedded header and 8 bytes
+	readable with ip_hl >= 5.  m_pullup is the harness's own (the
+	contract model's quantified copies cost 3.6 million variables):
+	the IP header is carried across, the rest is fresh.  VERIFIED: no
+	out-of-bounds access, no leak, route references balanced.  Mutants,
+	VIOLATED: the embedded ip_hl test, the ICMP_ADVLEN test and the
+	pullup length each one short, the redirect length test disabled.
+	Not covered: TSTAMP and MASKREQ below 28 ICMP bytes (CBMC reads the
+	whole icmp_dun union; those types become ECHO in the harness), outer
+	IP options, pf, carp.  Native: CLEAN, but it does not reach the
+	mutants' cases.  Check phase about 20 s.
