@@ -1332,6 +1332,26 @@ netinet/tcp_update_sack_list
 	count test rcv_numsacks <= MAX_SACK_BLKS.  Native: CLEAN.  Check
 	phase about 10 s, 98,000 variables.
 
+netinet/tcp_sack_holes
+	tcp_del_sackholes() then tcp_sack_option() of sys/netinet/
+	tcp_input.c (the order of tcp_input.c 867, 878) on the sender's
+	SACK scoreboard: 0..3 holes built by arithmetic, arbitrary snd_una,
+	snd_max, th_ack and one SACK block.  VERIFIED, an invariant both
+	keep: holes ordered, disjoint, in [snd_una, snd_max]; start < end
+	except that the head may be empty; start <= rxmit <= end; last end
+	< rcv_lastsack <= snd_max; snd_numholes == length for a non-empty
+	list; no hole leaked or freed while listed (live count and
+	--memory-leak-check).  Several blocks are several applications
+	from a state the invariant allows; two blocks with 3 holes timed
+	out at 1500 s.  EMPTY_HEAD_OK 0 is VIOLATED (FINDINGS).  Not
+	covered: the TCP_SACKHOLE_LIMIT exits, t_maxseg other than 512,
+	dups.  Mutants VIOLATED: snd_numholes-- removed, the trim test
+	SEQ_LT, SEQ_MIN for SEQ_MAX on rxmit, the rxmit test inverted in
+	tcp_del_sackholes, rcv_lastsack not updated on append.  The live
+	count assertions are CBMC only: natively replace does not apply to
+	pool_get and pool_put.  Native: CLEAN.  Check phase about 700 s,
+	480,000 variables, --sat-solver cadical (timeout 1500).
+
 net/pfsync_input
 	pfsync_input() of sys/net/if_pfsync.c, the framing of a pfsync
 	packet: 0..44 bytes of arbitrary content (the IP header already

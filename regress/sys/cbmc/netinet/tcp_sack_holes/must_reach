@@ -1,0 +1,9 @@
+tcp_input.c:tcpstat_inc(tcps_sack_rcv_opts);
+tcp_input.c:cur->dups = min(tcprexmtthresh,
+tcp_input.c:p->next = cur->next;
+tcp_input.c:tp->snd_holes = p;
+tcp_input.c:cur->start = sack.end;
+tcp_input.c:temp->next = cur->next;
+tcp_input.c:p->next = temp;
+tcp_input.c:prev = cur;
+tcp_input.c:cur->start = lastack;

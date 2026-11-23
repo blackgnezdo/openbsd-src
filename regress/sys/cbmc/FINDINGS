@@ -35,10 +35,16 @@ sys/dev/ipmi.c (read)
 	kcs_recvmsg() and smic_recvmsg() accept an over-long reply as a
 	truncated success if the device then reports ready.
 
-sys/netinet/tcp_input.c, SACK handling (read, from netinet/tcp_sack_option)
-	A zero-length hole can be created; snd_numholes can go stale;
-	rcv_lastsack relies on an invariant stated nowhere.  None
-	verified beyond the reading.
+sys/netinet/tcp_input.c, tcp_sack_option (cbmc, from netinet/tcp_sack_holes)
+	The first-hole path makes the hole [th_ack, sack.start), empty for
+	a block that starts at th_ack (ACK A with SACK [A, B), after
+	tcp_del_sackholes emptied the list).  Only the head hole can be
+	empty; tcp_sack_output skips it.  The target allows it
+	(EMPTY_HEAD_OK 1; 0 is VIOLATED with that input).  snd_numholes is
+	stale only for an empty list (tcp_timer_freesack does not reset
+	it), and is not read there.  rcv_lastsack keeps last end <
+	rcv_lastsack <= snd_max (VERIFIED); by reading it is not always the
+	highest sacked number.  cur->dups can exceed tcprexmtthresh (read).
 
 sys/netinet/tcp_input.c, tcp_flush_queue (read, from netinet/tcp_reass)
 	The t_state == TCPS_SYN_RECEIVED test follows the return for
