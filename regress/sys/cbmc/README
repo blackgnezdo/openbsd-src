@@ -1271,6 +1271,25 @@ netinet/carp_input
 	vhost entries, carpctl_allow 0.  Native: CLEAN.  Check phase about
 	2 minutes, 2.2 million variables (timeout 600).
 
+netinet/tcp_pulloutofband
+	tcp_pulloutofband(so, urgent, m, off) of sys/netinet/tcp_input.c
+	on a chain of up to 2 mbufs (internal, cluster or read-only
+	cluster, any m_len), packets up to 24 bytes, off in 0..plen-1 and
+	urgent in 1..plen-off (the caller's guarantee, tcp_input.c 1878,
+	1925), followed by the caller's m_adj(m, off).  Real: the function,
+	m_adj and the mbuf code.  VERIFIED: no panic; t_iobc is the byte at
+	off + urgent - 1 and TCPOOB_HAVEDATA is set; bytes before it stay,
+	bytes after it move down by one (one arbitrary byte tracked); the
+	sum of m_len drops by exactly 1.  m_pkthdr.len is left unchanged
+	(asserted); after m_adj it exceeds the chain by exactly 1.  No later
+	reader of this chain depends on it: sbappendstream, tcp_reass and
+	tcp_flush_queue use m_len and tlen.  The socket, inpcb and tcpcb
+	are static: CBMC_NEW objects count as leaks under
+	--memory-leak-check.  Mutants VIOLATED: the memmove length one
+	short, m_len > cnt as >=, cnt without its -1 (panic reached).
+	Native: CLEAN.  Check phase about 220 s, 355,000 variables
+	(timeout 600).
+
 net/pfsync_input
 	pfsync_input() of sys/net/if_pfsync.c, the framing of a pfsync
 	packet: 0..44 bytes of arbitrary content (the IP header already
