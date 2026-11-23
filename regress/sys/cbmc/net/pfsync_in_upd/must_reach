@@ -1,0 +1,15 @@
+if_pfsync.c:id_key.id = sp->id;
+if_pfsync.c:error = pf_state_import(sp, PFSYNC_SI_PFSYNC);
+if_pfsync.c:pfsync_in_updates(sc, st, &sp->src, &sp->dst, sp->timeout);
+if_pfsync.c:sscrub = pf_state_scrub_get();
+if_pfsync.c:dscrub = pf_state_scrub_get();
+if_pfsync.c:pfsync_deferred(sc, st);
+if_pfsync.c:sync = pfsync_upd_tcp(st, src, dst);
+if_pfsync.c:pfsync_update_state(st);
+if_pfsync.c:pf_state_scrub_put(dscrub);
+if_pfsync.c:id_key.id = up->id;
+if_pfsync.c:pfsync_in_updates(sc, st, &up->src, &up->dst, up->timeout);
+if_pfsync.c:m = pfsync_upd_req_init(sc, count);
+if_pfsync.c:m = pfsync_encap(sc, m);
+if_pfsync.c:subh->count = htons(rcount);
+pf.c:d->seqlo = ntohl(s->seqlo);

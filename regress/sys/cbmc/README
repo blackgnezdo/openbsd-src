@@ -1302,3 +1302,24 @@ net/pfsync_in_del
 	NULL check after the lookup in pfsync_in_del disabled) is VIOLATED.
 	Native: VACUOUS without seeds (a 64-bit id match and the bus event
 	values are out of the fuzzer's reach).  Check phase 6 s.
+
+net/pfsync_in_upd
+	pfsync_in_upd() and pfsync_in_upd_c() of sys/net/if_pfsync.c on
+	what net/pfsync_input proves they get: 1 or 2 messages of the
+	struct's size (pfsync_state 264, pfsync_upd_c 84) or 4 more, of
+	arbitrary content, at the end of one object.  pfsync_in_updates,
+	pfsync_upd_tcp and pf_state_peer_ntoh run for real (pf.c is
+	included next to if_pfsync.c: in sources its header inlines got a
+	second, unnamed copy).  One state, found or not per message, valid
+	otherwise arbitrary.  pf_state_import is a model asserting the
+	indices it uses; the UPD_REQ packet, scrub allocation, references
+	and locks are models; entering st->mtx is where another CPU may
+	attach scrub memory.  VERIFIED: no out-of-bounds access, no leak,
+	references balanced, scrub memory attached or freed, timeout and
+	peer states valid after the update, a UPD_REQ counts its requests.
+	pfsync_in_upd checks neither direction nor the address families
+	before importing; pf_state_import rejects bad families, and no use
+	of a state's direction indexes anything (read, not proven).
+	mutant/ (the timeout check one loose) and mutant_peer/ (upd_c's
+	dst.state check one loose) are VIOLATED.  Native: CLEAN.  Check
+	phase about 50 s, 3 million variables.
