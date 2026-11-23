@@ -46,6 +46,14 @@ sys/netinet/tcp_input.c, tcp_flush_queue (read, from netinet/tcp_reass)
 	entry is dropped when a new segment covers that entry or is
 	dropped as its duplicate; the peer retransmits it.
 
+sys/netinet/tcp_input.c, tcp_update_sack_list (native, from
+netinet/tcp_update_sack_list with SEGMIN 0)
+	An out-of-order FIN without data (tlen 0, th_seq > rcv_nxt) is
+	passed as laststart == lastend and stored as an empty block 0,
+	which is then reported in the SACK option.  The sender's
+	tcp_sack_option drops it (SEQ_LEQ(end, start)), so it only takes an
+	option slot.  Not confirmed by CBMC.
+
 sys/netinet6/ip6_input.c, ip6_process_hopopts (read)
 	Returns -1 after icmp6_error() without clearing *mp, contrary to
 	its comment; the one caller does not read *mp after -1.

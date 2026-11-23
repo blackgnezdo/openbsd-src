@@ -1,0 +1,10 @@
+tcp_input.c:temp[j].start = tp->sackblks[i].start;
+tcp_input.c:tp->rcv_numsacks -= count;
+tcp_input.c:tp->rcv_numsacks = 1;
+tcp_input.c:return;     /* sack list remains unchanged */
+tcp_input.c:firstsack.start = rcv_laststart;
+tcp_input.c:temp[j++] = sack;
+tcp_input.c:tp->rcv_numsacks = j; /* including first blk (added later) */
+tcp_input.c:tp->rcv_numsacks++;
+tcp_input.c:tp->sackblks[i] = tp->sackblks[i-1];
+tcp_input.c:tp->sackblks[0] = firstsack;

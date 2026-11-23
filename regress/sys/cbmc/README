@@ -1313,6 +1313,25 @@ netinet/tcp_reass
 	nobody.  Native: CLEAN.  Check phase about 5 minutes, 740,000
 	variables, --sat-solver cadical (timeout 600).
 
+netinet/tcp_update_sack_list
+	tcp_update_sack_list() of sys/netinet/tcp_input.c on a list of 0..6
+	SACK blocks (live ones above rcv_nxt, stale ones at or below it) and
+	a segment of 1..64 numbers that is old (ends at or before rcv_nxt)
+	or new (starts above it), the two kinds the caller passes
+	(tcp_input.c 1945-1977).  VERIFIED: after the call 0..6 blocks,
+	each non-empty and above rcv_nxt, separated by gaps (touching
+	blocks are merged); block 0 is the hull of the segment and the
+	blocks it overlaps or touches; the other blocks are the untouched
+	old ones, unchanged and in order; no covered number is lost except
+	the oldest block of a full list.  rcv_nxt is the constant -16 (wrap
+	and zero inside the blocks) and the list is in sequence order: a
+	symbolic rcv_nxt or list order timed out.  Not covered: other
+	rcv_nxt, lists whose arrival order differs from sequence order, a
+	segment of length 0 (SEGMIN 0: natively block 0 is then empty, see
+	FINDINGS).  Mutants VIOLATED: the merge test with SEQ_LEQ, the
+	count test rcv_numsacks <= MAX_SACK_BLKS.  Native: CLEAN.  Check
+	phase about 10 s, 98,000 variables.
+
 net/pfsync_input
 	pfsync_input() of sys/net/if_pfsync.c, the framing of a pfsync
 	packet: 0..44 bytes of arbitrary content (the IP header already
