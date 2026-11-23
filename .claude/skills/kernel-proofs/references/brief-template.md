@@ -74,9 +74,20 @@ Rules:
   reached), and unique enough to pin the branch.
 - Bound nondet times and counters (below 2^40) so the native engine's
   UBSan does not report overflows in kernel arithmetic on them.
-- A run can take minutes. If your tool call is moved to the
-  background, wait for it; do not start another run and do not kill
-  it before its timeout.
+- A run can take minutes. Start a run that may exceed 2 minutes
+  with the tool's background option (never `&`) and give the call a
+  limit above the run's timeout (7200000 ms for `suite.sh -m`; the
+  default 30 minutes kills it). Wait for it; do not start another run,
+  do not kill it, never wrap cbmc.sh in `timeout`: a killed run counts.
+- With --memory-leak-check, every CBMC_NEW object the harness does
+  not free is a leak: make scaffolding static. CBMC_NEW memory is 0xbe
+  natively: set every field the code reads. `replace` does not apply
+  natively to pool_get/pool_put: guard counting asserts with
+  `#ifndef NATIVE_SHIM_H`.
+- Check the inputs the caller admits at their degenerate values
+  (length 0, equal endpoints, empty list) before narrowing them.
+- The harness comment must stand alone: no references to this brief
+  or your report.
 - Keep [scratch]/NOTES: append after every run what you tried, the
   result and the next step. If it exists when you start, you are
   resuming: read it first.
@@ -108,6 +119,10 @@ tell you, and what you did instead).
 | `CBMC_TRACE=1` for inputs | Hand-derived inputs were wrong twice |
 | Anchor rules | A mutant came back VACUOUS; a condition's second line was never reached |
 | Bounded nondet times | Native runs reported UBSan overflow in kernel time arithmetic |
+| Background option, no `&`, no `timeout` | A suite pass died at the 30-minute limit; a wrapped run was killed and counted |
+| Static scaffolding, 0xbe, native replace | Two false native FINDINGs and one false leak in one round |
+| Degenerate inputs | A brief said laststart < lastend; a FIN without data gives equality, and that was the finding |
+| Self-contained comments | Committed harnesses cited "the brief" |
 
 ## Resuming a subagent after a restart
 

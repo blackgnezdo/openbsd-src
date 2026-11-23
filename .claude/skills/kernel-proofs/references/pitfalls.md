@@ -126,7 +126,35 @@ See README "Known limits of the checker" (slack bytes).
 
 **Leak reported for a static or model object.** Models must use
 static objects or free what they allocate; the leak check sees
-`CBMC_NEW` objects since the fix in `cbmc_harness.h`.
+`CBMC_NEW` objects since the fix in `cbmc_harness.h`. The same holds
+for harness scaffolding the code never frees (socket, inpcb, tcpcb in
+netinet/tcp_pulloutofband): only "memory never freed" fails. Make it
+static.
+
+**Native FINDING from a counting model of pool_get or pool_put.**
+`replace` does not apply natively to functions `common/` defines; the
+common pool runs and the model's counter never moves. Guard the count
+assertions with `#ifndef NATIVE_SHIM_H`, or define `pool_get` as a
+macro for the model after `<sys/pool.h>`. Hit twice in one round.
+
+**Native FINDING on a field CBMC saw as zero.** `CBMC_NEW` memory is
+0xbe natively. Set every field the code reads (`m_next`,
+`m_nextpkt`).
+
+**VIOLATED in `counters_inc` although it is in `nobody`.** The file is
+in `sources`, so its copy of the header inline is `counters_inc$link1`,
+which `nobody` cannot name. `#include` the file instead (tcp_subr.c in
+netinet/tcp_reass).
+
+**CBMC_TRACE stops on the harness's own assertion.** The first failed
+property can be the check of the constructed entry state. Fix the
+construction and trace again; only a trace ending in kernel code or a
+postcondition is evidence.
+
+**A mutant UNQUALIFIED under `suite.sh -m`.** Nothing failed: the
+change is equivalent under the properties (tcp_reass SEQ_GEQ,
+tcp_sack_holes "lastack = th_ack"). Add a distinguishing property or
+drop the mutant and say so; it is not a framework fault.
 
 **`conflicting function declarations 'log'`.** The kernel's `log()`
 collides with CBMC's builtin `log(double)`. `#define log
@@ -225,6 +253,13 @@ and drops contents (netinet6/nd6_consumers).
 `m_pullup` past 150 s. Do not ask for more; the contract models are
 also two-segment.
 
+**Sequence-number lists time out with a symbolic base or order.**
+tcp_update_sack_list: symbolic rcv_nxt 250 s timeout, constant 11 s;
+every symbolic list order tried timed out. tcp_sack_holes: 3 holes
+and 2 blocks timed out (default solver at 600 s, cadical at 1500 s);
+1 block took 700 s with cadical. Use a constant base that puts the wrap inside the data, a fixed
+order, one loop step from any invariant state, and state the gaps.
+
 ## 4. Loop contracts
 
 README section "When a run exhausts time or memory", item 3, has the
@@ -292,6 +327,19 @@ VERIFIED.** Useful as evidence. The fix that goes in the tree is
 yours to write and review.
 
 **The report's table and the tree disagree.** The tree wins. Rerun.
+
+**Background runs started with `&`, or a cbmc.sh wrapped in
+`timeout`.** Both happened in one round despite the rules; the
+wrapped run was killed and counted. The brief now says how to wait.
+
+**Harness comments that cite "the brief" or "the report".** Rewrite
+before committing; the comment must stand alone.
+
+**The brief stated a caller guarantee wrongly** (call order of
+tcp_del_sackholes and tcp_sack_option; rcv_laststart < rcv_lastend,
+which a FIN without data breaks). The subagents followed the tree and
+said so, which is what the "tree is right" clause is for. Grep call
+order and degenerate values before writing a guarantee into a brief.
 
 **A cheaper model keeps failing on one target.** Count attempts: after
 two, the obstacle is the framework or the brief, not effort. Take the
@@ -379,6 +427,5 @@ So that a VERIFIED is not read as more than it is:
 - The models themselves: `common/mbufcontract.h` states what the mbuf
   functions promise, and nothing mechanically ties those statements
   to the `net/mbuf_*` proofs of the real functions.
-- Counterexample inputs: `cbmc.sh` prints failed properties, not
-  traces. To get concrete bytes, reproduce natively or derive them by
-  reading.
+- Counterexample inputs: only with `CBMC_TRACE=1` (one extra run);
+  otherwise `cbmc.sh` prints failed properties, not traces.

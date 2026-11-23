@@ -91,6 +91,15 @@ pointers, code whose interesting behaviour is concurrency or sleeping
   Ethernet's six-byte addresses).
 - After a fix, the same pattern in sibling code: a read-only sweep,
   then each candidate checked by you before it becomes a target.
+- Correctness, not only memory safety, for data-structure code: state
+  the invariant a function keeps and a reference result, build an
+  entry state that satisfies it by arithmetic, assert both after the
+  call (README "Techniques": invariant preservation, conservation).
+  The four TCP targets (reass, SACK list, SACK holes, urgent byte)
+  came back VERIFIED with mutants that only such properties catch,
+  settled three FINDINGS items, and found two degenerate-input
+  behaviours (empty SACK block, empty hole) that bounds checks never
+  would.
 
 Prefer a function whose callers' guarantees you can state in two
 lines. If you cannot, split: one target for the caller that proves the
@@ -139,6 +148,13 @@ they take a few minutes and each has caught a wrong report.
    guarantees hides a path; one a caller does guarantee removes a
    false failure (the harness artifact in netinet/arp_rtrequest that
    took a trace to see).
+10. Read the harness comment as a stranger would: it must stand
+   alone. Remove references to "the brief" or "the report"; for an
+   embargoed lead, nothing in it may hint at the lead.
+11. A mutant that comes back UNQUALIFIED under `suite.sh -m` is
+   equivalent under the properties. Accept dropping it only with the
+   reason in the README entry ("SEQ_GT -> SEQ_GEQ not detected:
+   changes only which of two equal entries survives").
 
 ## Deciding what is a finding
 
@@ -259,6 +275,16 @@ fix to satisfy it; say why in one line and move on.
   PASS/FAIL line (suite.sh takes target names).
 - **Ask for a counterexample** with `CBMC_TRACE=1` rather than letting
   a subagent derive inputs by hand.
+- **Long runs and the tool's limits.** Foreground calls go to the
+  background after about 2 minutes; background calls stop at 30
+  minutes unless given a longer limit. A `suite.sh -m` on a target
+  with a 10-minute check needs about an hour: give it an explicit
+  limit (7200000 ms). A run killed from outside is logged as ERROR and
+  counts against the budget; never wrap cbmc.sh in `timeout`.
+- **Four subagents at once fit the machine** when no full suite is
+  running; the four TCP targets used 6 to 25 of their 25 runs (the
+  cheapest check took 10 s and used all 25 on size tuning). Give them
+  25; the slowest took nearly four hours.
 
 ## When the checker runs out of time or memory
 
@@ -274,7 +300,14 @@ In brief, read the `PHASE` line and act on where the cost is:
    or the invariant would have to describe data not yet visited; then
    use a small bound and say so.
 4. Solver-bound with nothing above applying: split at an interface.
-   A different SAT solver bought 1.3 to 1.6 times, no more.
+   A different SAT solver bought 1.3 to 1.6 times, no more; but that
+   is enough to put a target under its limit: `--sat-solver cadical`
+   finished tcp_reass (default solver timed out at 300 s) and
+   tcp_dooptions (timed out at 1500 s), so try it before splitting.
+5. Sequence-number or order-symbolic state (TCP lists): make the base
+   a constant that puts the wrap inside the data, keep the list order
+   fixed, reduce a per-item loop to one item from any invariant state,
+   and list what that leaves out (README "Known limits").
 
 If none applies, that is new ground: work on it yourself, measure, and
 write the result into the README before delegating again.

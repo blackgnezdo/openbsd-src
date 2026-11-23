@@ -42,7 +42,13 @@ Environment
 				trace is of the first failed property of the
 				check run; trace.out goes on with traces of
 				no-body markers, so read its first "Trace for"
-				block
+				block.  Check that the traced property is in
+				kernel code or a postcondition, not an
+				assertion on the state the harness built (one
+				trace ended on the harness's own precondition).
+				The printed summary is cut at 60 lines; with a
+				large struct (tcpcb) grep trace.out for the
+				inputs.
 	CBMC_KEEP=1		keep the temporary work directory also when the
 				result is VERIFIED; without CBMC_WORKDIR the
 				directory is removed on exit after a VERIFIED
@@ -194,6 +200,15 @@ Run budget
 	20) or more it prints "RESULT: BUDGET EXHAUSTED (n runs used)" and
 	exits 3.  Otherwise it prints "run N of BUDGET".  Interrupted and
 	failed runs are logged too ("ERROR (no result, exit N)").
+	A run killed from outside (an outer timeout(1), a background job
+	limit) is such a run and counts: do not wrap cbmc.sh in timeout,
+	use CBMC_TIMEOUT or the target's timeout file.
+	A run longer than the agent tool's foreground limit (about 2
+	minutes) must be started with the tool's background option and
+	polled; starting it with & is against the rules.  Background
+	commands are stopped after 30 minutes unless the call gives a
+	longer limit: suite.sh -m on a target whose check takes 10
+	minutes needs about an hour (each mutant is a full check).
 	An orchestrator that gives a run budget to a harness author picks a
 	path for the file, passes CBMC_BUDGET_FILE and CBMC_BUDGET in the
 	task description (the author exports them for every cbmc.sh call)
@@ -225,6 +240,12 @@ What is modelled
 	  for objects made with CBMC_NEW.  pool(9) sits on top of that
 	  (common/stubs_pool.c); the harness sets pr_size, also when it
 	  replaces pool_get: natively the common pool_get runs regardless.
+	  replace does not apply natively to any function common/ defines
+	  (pool_get, pool_put): a model that counts calls must keep its
+	  count assertions under #ifndef NATIVE_SHIM_H (netinet/
+	  tcp_sack_holes), or the harness defines pool_get as a macro for
+	  its model after #include <sys/pool.h> (netinet/tcp_reass).
+	  Otherwise the native run reports a false FINDING.
 	- KASSERT (DIAGNOSTIC is defined): goto-cc turns its __assert call
 	  into an assertion, so a failing KASSERT is reported; unlike
 	  panic it does not end the path (selftest kassert_fails).
@@ -291,6 +312,19 @@ Known limits of the checker
 	  see "Adding a target", step 3, for what that costs and what to do.
 	- CBMC_NO_COVER=1 skips the reachability run to diagnose a slow
 	  target.  The result is then UNQUALIFIED, never VERIFIED.
+	- Sequence-number arithmetic (TCP): a symbolic base for the
+	  comparisons the property makes is cheap where the code
+	  compares against it a few times (tcp_sack_option: snd_una), and
+	  timed out where every block is compared with it and with every
+	  other block (tcp_update_sack_list: rcv_nxt, 250 s against 11 s
+	  for a constant).  A list in a symbolic order timed out in every
+	  form tried there (swap networks, rotations, one swap).  State
+	  properties on small offsets from the base, place the wrap and
+	  zero inside the data with a constant base, and list what that
+	  leaves out.
+	- Cover and check can differ by orders of magnitude (1 s against
+	  194 s with one variable made symbolic).  The cover run also
+	  obeys CBMC_TIMEOUT.
 
 What is not modelled
 	- interrupts, other threads, locks
@@ -301,7 +335,15 @@ Adding a target
 	2. harness.c: build the objects the entry point expects, call it,
 	   then call the function that tears the objects down.  To reach
 	   static functions, #include the kernel file and list it in
-	   "included" instead of "sources".
+	   "included" instead of "sources".  Include it also when the
+	   harness needs the file's macros or the headers it includes
+	   (sototcpcb in netinet/tcp_pulloutofband).  A file in "sources"
+	   is compiled separately and gets its own copies of header static
+	   inline functions (renamed name$link1); nobody cannot name those
+	   copies, so a statistics helper such as counters_inc keeps its
+	   body there and dereferences a per-CPU array nobody allocated.
+	   If such a function fails in a sources file, include the file
+	   instead (tcp_subr.c in netinet/tcp_reass).
 	3. Allocate objects the code reaches through tables, lists or any
 	   pointer that may refer to one of several objects with
 	   CBMC_NEW(type) and CBMC_NEW_ARRAY(type, n) from
@@ -318,6 +360,13 @@ Adding a target
 	   (pool items, handle placed behind the segment) and sysv/semop
 	   (tables, sets, undo structures).  Do this from the start; if a
 	   target is slow, check it first (HINT lines).
+	   CBMC_NEW objects are zero under CBMC and filled with 0xbe
+	   natively: set every field the code reads, not only the ones
+	   the code never sets (m_next, m_nextpkt).  --memory-leak-check
+	   is not a cbmc.sh default; a target that wants it lists it in
+	   opts, and then every CBMC_NEW object the harness does not free
+	   is a leak.  Make scaffolding the code never frees (a socket, an
+	   inpcb, a tcpcb) static, or free it at the end of main.
 	4. sources, keep: the files and the functions on the path.
 	5. must_reach: anchors on the path under test and in the teardown.
 	   An anchor is FILE:TEXT and is reached when any line containing
@@ -327,12 +376,29 @@ Adding a target
 	   counts a multi-line condition on its first line only.
 	6. opts: every loop on the path needs a bound at least as large as
 	   its trip count; --unwinding-assertions reports one that is not.
+	   Take loop ids from CBMC_DRY=1: they are not numbered in source
+	   order (tcp_sack_option.0 is the inner hole walk, .1 the outer
+	   block loop).
 	7. Mutants: mutant*/ directories next to the harness, each holding
 	   a copy of one kernel file under its own name with one check
 	   weakened (by one where possible: deleting a block can leave a
 	   redundant later check doing the work); mutant_prefix*/ hold the
 	   source before a fix.  suite.sh -m runs each with
 	   CBMC_OVERRIDE_DIR and CBMC_NO_COVER and expects VIOLATED.
+	   A mutant that fails nothing prints UNQUALIFIED (no cover run,
+	   no failure) and suite.sh reports FAIL: the change is
+	   equivalent under the harness's properties.  Either add the
+	   property that distinguishes it, or drop the mutant and name
+	   the change in the README entry as not detected (netinet/
+	   tcp_reass: SEQ_GT -> SEQ_GEQ).  To show that a panic is
+	   reachable only when a caller's guarantee is broken, use a
+	   mutant that moves the bound by one (netinet/tcp_pulloutofband,
+	   mutant_cnt: "panic reached").  A mutant of an included kernel
+	   file is a full copy of that file.
+	8. Check degenerate inputs the caller admits before narrowing the
+	   input: a length of 0, equal endpoints, an empty list.  tcp_input
+	   calls tcp_update_sack_list for a FIN without data, so the
+	   segment [s, s) is a real input (FINDINGS).
 	A function the code calls from a file the target does not
 	compile has no body and returns an arbitrary value: give it a
 	model when it returns a pointer or fills an out-parameter
@@ -358,6 +424,19 @@ Techniques used by the targets
 	  statements for it (sysv/semop removes the semaphore set)
 	- mutation check: run a target against a copy of the source with a
 	  validation removed (CBMC_OVERRIDE_DIR) and expect VIOLATED
+	- invariant preservation (netinet/tcp_reass, tcp_sack_holes,
+	  tcp_update_sack_list): build a state that satisfies a stated
+	  invariant by arithmetic (no __CPROVER_assume), assert the
+	  invariant on it (this checks the construction), call the
+	  function, assert the invariant and a reference result (count,
+	  hull, which elements survive unchanged).  A loop that applies
+	  the same step per item (SACK blocks) is covered by one step
+	  from any state the invariant allows, when the full loop costs
+	  too much; say so in the entry.
+	- conservation: one arbitrary position or byte is followed through
+	  the call (mbufkit_track): before the cut it stays, after it it
+	  moves by the cut's length, and a sequence number held before is
+	  held exactly once after (netinet/tcp_pulloutofband, tcp_reass)
 
 Rules for a harness
 	- no __CPROVER_assume; bound unconstrained values with arithmetic
@@ -1173,6 +1252,27 @@ netinet6/dest6_input
 	VIOLATED on opt[1].  Native: CLEAN.  Check phase about 7 minutes,
 	1.4 million variables, --sat-solver cadical (timeout 1500).
 
+net/rtm_xaddrs
+	rtm_xaddrs() of sys/net/rtsock.c (included, INET6 defined) on an
+	arbitrary buffer of 0..40 bytes and an arbitrary rti_addrs mask.
+	VERIFIED, with postconditions on success: rti_info set exactly for
+	the mask's bits, every sockaddr inside the buffer, and the minimum
+	sa_len and family each RTAX slot is checked for (P0-P7 in the
+	harness comment).  Addresses after a LABEL, STATIC or SEARCH
+	address are not checked by the code (FINDINGS) and not asserted.
+	STATIC and SEARCH (130 bytes) do not fit the buffer; 136 bytes ran
+	out of memory.  No mutant.  Check phase about 380 s (timeout
+	900).
+
+net/bpf_filter
+	bpf_validate() then _bpf_lfilter() (pc_len 0, the kernel's
+	_bpf_filter) of sys/net/bpf_filter.c on a program of 1..3
+	arbitrary instructions and a packet of 0..8 arbitrary bytes; the
+	packet accessors of net/bpf.c are a model with their contract on
+	one flat buffer.  VERIFIED: a validated program reads neither
+	array out of bounds and terminates within len instructions.  No
+	mutant.
+
 net/rtm_metrics
 	rtm_setmetrics() and rtm_getmetrics() of sys/net/rtsock.c on an
 	arbitrary rmx_expire from the routing message and arbitrary
@@ -1270,6 +1370,29 @@ netinet/carp_input
 	with the m_pullup after it.  Not covered: IPv6, several softcs or
 	vhost entries, carpctl_allow 0.  Native: CLEAN.  Check phase about
 	2 minutes, 2.2 million variables (timeout 600).
+
+netinet/tcp_dooptions
+	tcp_dooptions() of sys/netinet/tcp_input.c on an options area of
+	0..28 bytes (real maximum 40) directly behind the header and an
+	arbitrary connection state; TCP_SIGNATURE and INET6 defined.  The
+	walk half of an assume/guarantee split: tcp_sack_option is a model
+	asserting that the SACK option lies inside the area.  VERIFIED: no
+	read outside [cp, cp + cnt), the walk terminates for zero and short
+	optlen, requested_s_scale clamped.  The whole of tcp_input.c in
+	one target did not finish.  No mutant.  Check phase about 1100 s,
+	704,000 variables, --sat-solver cadical (timeout 1500).
+
+netinet/tcp_sack_option
+	tcp_sack_option() of sys/netinet/tcp_input.c, the SACK half of the
+	split with netinet/tcp_dooptions (its contract assumed here), after
+	tcp_del_sackholes() as tcp_input_solocked calls them; an option of
+	one block (MAXOPT 10) and 0..2 holes at fixed distances from an
+	arbitrary snd_una.  VERIFIED: no read outside the option, the hole
+	list followed only within its objects, no freed hole touched, the
+	loops terminate, the list afterwards ordered, non-overlapping,
+	inside [snd_una, snd_max], snd_numholes matching.  The functional
+	invariant over symbolic hole positions is netinet/tcp_sack_holes.
+	No mutant.
 
 netinet/tcp_pulloutofband
 	tcp_pulloutofband(so, urgent, m, off) of sys/netinet/tcp_input.c
