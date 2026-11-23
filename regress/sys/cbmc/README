@@ -1290,6 +1290,29 @@ netinet/tcp_pulloutofband
 	Native: CLEAN.  Check phase about 220 s, 355,000 variables
 	(timeout 600).
 
+netinet/tcp_reass
+	tcp_reass() and tcp_flush_queue() of sys/netinet/tcp_input.c on a
+	queue of 0..2 entries and one new segment (0..8 bytes each, one or
+	two mbufs, header in the first mbuf's buffer), arbitrary 32 bit
+	rcv_nxt, offsets 1..5 (entries) and 0..20 (new) above it, on the
+	mbuf contract models; pool_get fails arbitrarily, sbappendstream
+	is a model that checks what it is given.  VERIFIED: the queue
+	invariant before and after (order, no overlap, th_reseqlen ==
+	chain length, entries above rcv_nxt); delivery (chains contiguous
+	from the old rcv_nxt, rcv_nxt advances by the delivered length,
+	TH_FIN returned exactly when the last delivered chain had FIN, one
+	tracked byte); every stream position held before is held once
+	after; both pool_get failure paths; no leak or double free.  Not
+	covered: the byte of a position left in a queued entry, more than 2
+	entries, the window.  Mutants VIOLATED: the back-trim overlap one
+	too large, the front trim one short, the insertion comparison moved
+	by one.  SEQ_GT -> SEQ_GEQ in the insertion is not detected: it
+	changes only which of two entries at one sequence number survives.
+	tcp_subr.c is included, not in sources: as a separate source its
+	copies of header static inlines (counters_inc) cannot be named in
+	nobody.  Native: CLEAN.  Check phase about 5 minutes, 740,000
+	variables, --sat-solver cadical (timeout 600).
+
 net/pfsync_input
 	pfsync_input() of sys/net/if_pfsync.c, the framing of a pfsync
 	packet: 0..44 bytes of arbitrary content (the IP header already

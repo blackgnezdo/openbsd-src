@@ -40,6 +40,12 @@ sys/netinet/tcp_input.c, SACK handling (read, from netinet/tcp_sack_option)
 	rcv_lastsack relies on an invariant stated nowhere.  None
 	verified beyond the reading.
 
+sys/netinet/tcp_input.c, tcp_flush_queue (read, from netinet/tcp_reass)
+	The t_state == TCPS_SYN_RECEIVED test follows the return for
+	!TCPS_HAVEESTABLISHED, so it is never true.  A FIN on a queued
+	entry is dropped when a new segment covers that entry or is
+	dropped as its duplicate; the peer retransmits it.
+
 sys/netinet6/ip6_input.c, ip6_process_hopopts (read)
 	Returns -1 after icmp6_error() without clearing *mp, contrary to
 	its comment; the one caller does not read *mp after -1.
