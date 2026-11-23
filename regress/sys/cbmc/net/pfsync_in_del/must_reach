@@ -1,0 +1,10 @@
+if_pfsync.c:if (READ_ONCE(st->sync_defer) != NULL)
+if_pfsync.c:pfsync_deferred(sc, st);
+if_pfsync.c:if (id_key.id == 0 && id_key.creatorid == 0) {
+if_pfsync.c:pfsync_bulk_snd_start(sc);
+if_pfsync.c:pfsync_update_state_req(sc, st);
+if_pfsync.c:sp = (struct pfsync_state *)(buf + mlen * i);
+if_pfsync.c:sp = (struct pfsync_del_c *)(buf + mlen * i);
+if_pfsync.c:pf_remove_state(st);
+if_pfsync.c:pfsync_bulk_req_evt(sc, PFSYNC_BREQ_EVT_BUS_START);
+if_pfsync.c:pfsync_bulk_req_evt(sc, PFSYNC_BREQ_EVT_BUS_END);

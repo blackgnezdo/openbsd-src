@@ -1287,3 +1287,18 @@ net/pfsync_input
 	and mutant/ (the remaining-length test loosened by one) are VIOLATED
 	on the declared length, mutant_mlen/ on the message size.  Check
 	phase about 8 minutes, 1.3 million variables (timeout 1800).
+
+net/pfsync_in_del
+	The lookup-and-act handlers of sys/net/if_pfsync.c, pfsync_in_iack,
+	_ureq, _del, _del_c and _bus, called through pfsync_acts with an
+	arbitrary action (the other entries are models that must not be
+	called), on what net/pfsync_input proves they get: 1 or 2 messages
+	of the struct's size or 4 more, of arbitrary content, at the end of
+	one object.  Two states in a model of the state table (lookup by
+	id, removal, reference counts); PF_LOCK and the state lock are
+	modelled by owner (rw_enter/rw_exit/rw_status replaced), so the
+	lock assertions are checked.  VERIFIED: no out-of-bounds access,
+	references balanced, no state used after removal.  mutant/ (the
+	NULL check after the lookup in pfsync_in_del disabled) is VIOLATED.
+	Native: VACUOUS without seeds (a 64-bit id match and the bus event
+	values are out of the fuzzer's reach).  Check phase 6 s.
