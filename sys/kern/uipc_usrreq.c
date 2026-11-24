@@ -803,10 +803,11 @@ unp_detach(struct unpcb *unp)
 	while ((unp2 = SLIST_FIRST(&unp->unp_refs)) != NULL) {
 		struct socket *so2 = unp2->unp_socket;
 
+		/* Keep `so2' alive across sounlock(), see unp_disconnect(). */
+		unp_ref(unp2);
 		if (so < so2)
 			solock(so2);
 		else {
-			unp_ref(unp2);
 			sounlock(so);
 			solock(so2);
 			solock(so);
@@ -817,8 +818,6 @@ unp_detach(struct unpcb *unp)
 				unp_rele(unp2);
 				continue;
 			}
-
-			unp_rele(unp2);
 		}
 
 		unp2->unp_conn = NULL;
@@ -827,6 +826,7 @@ unp_detach(struct unpcb *unp)
 		so2->so_state &= ~SS_ISCONNECTED;
 
 		sounlock(so2);
+		unp_rele(unp2);
 	}
 
 	sounlock(so);
@@ -1002,6 +1002,14 @@ unp_disconnect(struct unpcb *unp)
 	unp2 = unp->unp_conn;
 	unp->unp_conn = NULL;
 
+	/*
+	 * Once disconnected, the peer may be closed and freed as soon as
+	 * `so2' is released, and rw_exit_write() still reads the lock
+	 * after releasing it.  The reference holds off the peer's
+	 * unp_detach() in refcnt_finalize() until we are done.
+	 */
+	unp_ref(unp2);
+
 	switch (unp->unp_socket->so_type) {
 
 	case SOCK_DGRAM:
@@ -1023,6 +1031,7 @@ unp_disconnect(struct unpcb *unp)
 
 	if (so2 != unp->unp_socket)
 		sounlock(so2);
+	unp_rele(unp2);
 }
 
 static struct unpcb *
