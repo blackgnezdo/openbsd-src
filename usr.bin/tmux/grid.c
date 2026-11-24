@@ -1,4 +1,4 @@
-/* $OpenBSD: grid.c,v 1.165 2026/11/21 16:49:01 nicm Exp $ */
+/* $OpenBSD: grid.c,v 1.168 2026/11/23 08:11:24 nicm Exp $ */
 
 /*
  * Copyright (c) 2008 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -103,9 +103,18 @@ static void
 grid_get_extended_cell(struct grid_line *gl, struct grid_cell_entry *gce,
     int flags)
 {
-	u_int at = gl->extdsize + 1;
+	u_int at;
 
-	gl->extddata = xreallocarray(gl->extddata, at, sizeof *gl->extddata);
+	if (gl->extdsize == UINT_MAX)
+		fatalx("too many extended cells");
+	at = gl->extdsize + 1;
+	if (at > gl->extdalloc) {
+		if (gl->extdalloc > UINT_MAX / 2)
+			fatalx("too many extended cells");
+		gl->extdalloc = gl->extdalloc == 0 ? 8 : gl->extdalloc * 2;
+		gl->extddata = xreallocarray(gl->extddata, gl->extdalloc,
+		    sizeof *gl->extddata);
+	}
 	gl->extdsize = at;
 
 	gce->offset = at - 1;
@@ -157,7 +166,7 @@ grid_extended_cell(struct grid_line *gl, struct grid_cell_entry *gce,
 static void
 grid_compact_line(struct grid_line *gl)
 {
-	int			 new_extdsize = 0;
+	u_int			 new_extdsize = 0;
 	struct grid_extd_entry	*new_extddata;
 	struct grid_cell_entry	*gce;
 	struct grid_extd_entry	*gee;
@@ -172,10 +181,13 @@ grid_compact_line(struct grid_line *gl)
 			new_extdsize++;
 	}
 
+	if (new_extdsize == gl->extdsize && gl->extdalloc == gl->extdsize)
+		return;
 	if (new_extdsize == 0) {
 		free(gl->extddata);
 		gl->extddata = NULL;
 		gl->extdsize = 0;
+		gl->extdalloc = 0;
 		return;
 	}
 	new_extddata = xreallocarray(NULL, new_extdsize, sizeof *gl->extddata);
@@ -193,6 +205,17 @@ grid_compact_line(struct grid_line *gl)
 	free(gl->extddata);
 	gl->extddata = new_extddata;
 	gl->extdsize = new_extdsize;
+	gl->extdalloc = new_extdsize;
+}
+
+/* Free up unused extended cells in a set of lines. */
+void
+grid_compact_lines(struct grid *gd, u_int py, u_int ny)
+{
+	u_int	yy;
+
+	for (yy = py; yy < py + ny; yy++)
+		grid_compact_line(&gd->linedata[yy]);
 }
 
 /* Get line data. */
@@ -504,6 +527,7 @@ grid_scroll_history_region(struct grid *gd, u_int upper, u_int lower, u_int bg)
 
 	/* Move the line into the history. */
 	memcpy(gl_history, gl_upper, sizeof *gl_history);
+	grid_compact_line(gl_history);
 	grid_line_set_time(gl_history);
 
 	/* Then move the region up and clear the bottom line. */
@@ -709,6 +733,8 @@ grid_clear(struct grid *gd, u_int px, u_int py, u_int nx, u_int ny, u_int bg)
 
 	for (yy = py; yy < py + ny; yy++) {
 		gl = &gd->linedata[yy];
+		if (px + nx >= gd->sx)
+			gl->flags &= ~GRID_LINE_WRAPPED;
 
 		sx = gd->sx;
 		if (sx > gl->cellsize)
@@ -1270,12 +1296,15 @@ grid_duplicate_lines(struct grid *dst, u_int dy, struct grid *src, u_int sy,
 			dstl->celldata = NULL;
 		if (srcl->extdsize != 0) {
 			dstl->extdsize = srcl->extdsize;
+			dstl->extdalloc = srcl->extdsize;
 			dstl->extddata = xreallocarray(NULL, dstl->extdsize,
 			    sizeof *dstl->extddata);
 			memcpy(dstl->extddata, srcl->extddata, dstl->extdsize *
 			    sizeof *dstl->extddata);
-		} else
+		} else {
 			dstl->extddata = NULL;
+			dstl->extdalloc = 0;
+		}
 
 		sy++;
 		dy++;
@@ -1464,7 +1493,7 @@ grid_reflow_join(struct grid *target, struct grid *gd, u_int sx, u_int yy,
 		grid_move_cells(gd, 0, want, yy + lines, left, 8);
 		from->cellsize = from->cellused = left;
 		lines--;
-	} else if (!wrapped)
+	} else if (~from->flags & GRID_LINE_WRAPPED)
 		gl->flags &= ~GRID_LINE_WRAPPED;
 
 	/* Remove the lines that were completely consumed. */
@@ -1637,6 +1666,7 @@ grid_reflow(struct grid *gd, u_int sx)
 	free(gd->linedata);
 	gd->linedata = target->linedata;
 	free(target);
+	grid_compact_lines(gd, 0, gd->hsize);
 	gd->scroll_generation++;
 }
 

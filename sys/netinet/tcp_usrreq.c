@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_usrreq.c,v 1.253 2025/10/24 15:09:56 bluhm Exp $	*/
+/*	$OpenBSD: tcp_usrreq.c,v 1.255 2026/11/23 21:14:53 jan Exp $	*/
 /*	$NetBSD: tcp_usrreq.c,v 1.20 1996/02/13 23:44:16 christos Exp $	*/
 
 /*
@@ -376,7 +376,7 @@ tcp_ctloutput(int op, struct socket *so, int level, int optname,
 			}
 
 			i = *mtod(m, int *);
-			if (i > 0 && i <= tp->t_maxseg)
+			if (i >= TCP_MINMSS && i <= tp->t_maxseg)
 				tp->t_maxseg = i;
 			else
 				error = EINVAL;
@@ -1310,6 +1310,7 @@ tcp_sysctl_tcpstat(void *oldp, size_t *oldlenp, void *newp)
 	ASSIGN(tcps_rcvbadsum);
 	ASSIGN(tcps_rcvbadoff);
 	ASSIGN(tcps_rcvmemdrop);
+	ASSIGN(tcps_rcvreassfull);
 	ASSIGN(tcps_rcvnosec);
 	ASSIGN(tcps_rcvshort);
 	ASSIGN(tcps_rcvduppack);

@@ -1,4 +1,4 @@
-/* $OpenBSD: server-client.c,v 1.537 2026/11/21 12:44:15 nicm Exp $ */
+/* $OpenBSD: server-client.c,v 1.541 2026/11/23 08:44:19 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1286,8 +1286,7 @@ have_event:
 	if (b & MOUSE_MASK_SHIFT)
 		key |= KEYC_SHIFT;
 
-	if (log_get_level() != 0)
-		log_debug("mouse key is %s", key_string_lookup_key (key, 1));
+	log_debug("mouse key is %s", key_string_lookup_key (key, 1));
 	return (key);
 }
 
@@ -2221,13 +2220,13 @@ server_client_prompt_cursor(struct client *c, struct window_pane *wp, int *mode,
 	*mode &= ~MODE_CURSOR;
 
 	tty_window_offset(tty, &ox, &oy, &sx, &sy);
-	if (status_at_line(c) == 0)
+	if (options_get_number(c->session->options, "status-position") == 0)
 		py = wp->yoff;
 	else
 		py = wp->yoff + wp->sy - 1;
 	px = wp->xoff + wp->prompt_cx;
 	if (px < (int)ox || px > (int)(ox + sx) ||
-	    py < (int)oy || py > (int)(oy + sy))
+	    py < (int)oy || py >= (int)(oy + sy))
 		return (1);
 
 	*cx = px - ox;
@@ -2261,7 +2260,7 @@ server_client_reset_state(struct client *c)
 	struct window_pane	*wp = w->active, *loop;
 	struct screen		*s = NULL, prompt_screen;
 	struct options		*oo = c->session->options;
-	int			 mode = 0, cursor, flags, pane_mode = 0;
+	int			 mode = 0, cursor, flags, pending = 0;
 	u_int			 cx = 0, cy = 0, ox, oy, sx, sy, prompt = 0;
 	u_int			 sb_w;
 	struct visible_ranges	*r;
@@ -2283,10 +2282,8 @@ server_client_reset_state(struct client *c)
 		s = c->status.active;
 	if (s != NULL)
 		mode = s->mode;
-	if (log_get_level() != 0) {
-		log_debug("%s: client %s mode %s", __func__, c->name,
-		    screen_mode_to_string(mode));
-	}
+	log_debug("%s: client %s mode %s", __func__, c->name,
+	    screen_mode_to_string(mode));
 
 	/* Reset region and margin. */
 	tty_region_off(tty);
@@ -2324,7 +2321,10 @@ server_client_reset_state(struct client *c)
 		}
 		if (!prompt) {
 			cursor = 0;
-			pane_mode = s->mode;
+			if ((s->mode & MODE_SYNC) ||
+			    s->write_start != s->write_end ||
+			    s->write_scrolled != 0)
+				pending = 1;
 
 			tty_window_offset(tty, &ox, &oy, &sx, &sy);
 			if (wp->xoff + (int)s->cx >= (int)ox &&
@@ -2364,7 +2364,7 @@ server_client_reset_state(struct client *c)
 		}
 	} else if (s == NULL)
 		mode &= ~MODE_CURSOR;
-	if (~pane_mode & MODE_SYNC) {
+	if (!pending) {
 		log_debug("%s: cursor to %u,%u", __func__, cx, cy);
 		tty_cursor(tty, cx, cy);
 	} else {
@@ -2688,6 +2688,7 @@ server_client_check_redraw(struct client *c)
 			server_client_set_path(c);
 		}
 		server_client_set_progress_bar(c);
+		server_client_set_program_status(c);
 		redraw_screen(c);
 		redraw_client_damage(c);
 	}
@@ -2767,6 +2768,32 @@ server_client_set_progress_bar(struct client *c)
 		return;
 	memcpy(&c->progress_bar, pane_pb, sizeof c->progress_bar);
 	tty_set_progress_bar(&c->tty, &c->progress_bar);
+}
+
+/* Set the outer terminal's program status from the active pane. */
+void
+server_client_set_program_status(struct client *c)
+{
+	struct session		*s = c->session;
+	struct window_pane	*wp = NULL;
+
+	if (s != NULL && s->curw != NULL)
+		wp = s->curw->window->active;
+	tty_set_program_status(&c->tty, wp);
+}
+
+/* Forward a status change to clients showing the pane as active. */
+void
+server_client_program_status_changed(struct window_pane *wp)
+{
+	struct client	*c;
+	struct session	*s;
+
+	TAILQ_FOREACH(c, &clients, entry) {
+		s = c->session;
+		if (s != NULL && s->curw != NULL && s->curw->window->active == wp)
+			tty_set_program_status(&c->tty, wp);
+	}
 }
 
 /* Dispatch message from client. */

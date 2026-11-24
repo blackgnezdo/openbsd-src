@@ -1,4 +1,4 @@
-/* $OpenBSD: format.c,v 1.439 2026/11/21 12:52:38 nicm Exp $ */
+/* $OpenBSD: format.c,v 1.442 2026/11/23 08:11:24 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1003,7 +1003,7 @@ format_cb_history_bytes(struct format_tree *ft)
 	for (i = 0; i < gd->hsize + gd->sy; i++) {
 		gl = grid_get_line(gd, i);
 		size += gl->cellsize * sizeof *gl->celldata;
-		size += gl->extdsize * sizeof *gl->extddata;
+		size += gl->extdalloc * sizeof *gl->extddata;
 	}
 	size += (gd->hsize + gd->sy) * sizeof *gl;
 
@@ -1029,7 +1029,7 @@ format_cb_history_all_bytes(struct format_tree *ft)
 	for (i = 0; i < lines; i++) {
 		gl = grid_get_line(gd, i);
 		cells += gl->cellsize;
-		extended_cells += gl->extdsize;
+		extended_cells += gl->extdalloc;
 	}
 
 	xasprintf(&value, "%u,%zu,%u,%zu,%u,%zu", lines,
@@ -1666,6 +1666,15 @@ format_cb_client_name(struct format_tree *ft)
 {
 	if (ft->c != NULL && ft->c->name != NULL)
 		return (xstrdup(ft->c->name));
+	return (NULL);
+}
+
+/* Callback for client_pending. */
+static void *
+format_cb_client_pending(struct format_tree *ft)
+{
+	if (ft->c != NULL && (ft->c->tty.flags & TTY_OPENED))
+		return (format_printf("%zu", EVBUFFER_LENGTH(ft->c->tty.out)));
 	return (NULL);
 }
 
@@ -3773,6 +3782,9 @@ static const struct format_table_entry format_table[] = {
 	{ "client_name", FORMAT_TABLE_STRING,
 	  format_cb_client_name
 	},
+	{ "client_pending", FORMAT_TABLE_STRING,
+	  format_cb_client_pending
+	},
 	{ "client_pid", FORMAT_TABLE_STRING,
 	  format_cb_client_pid
 	},
@@ -4656,7 +4668,7 @@ format_pretty_time(time_t t, int seconds)
 {
 	struct tm	now_tm, tm;
 	time_t		now, age;
-	char		s[9];
+	char		s[64];
 
 	time(&now);
 	if (now < t)
