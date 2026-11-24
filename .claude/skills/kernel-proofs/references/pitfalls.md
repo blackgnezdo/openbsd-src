@@ -355,6 +355,12 @@ again. PPPoE took three delegations because the first two obstacles
 mutants add to it; run it in the background with `SUITE_LOGDIR` on
 the scratchpad so a restart loses only the unfinished part).
 
+**Editing a script that a running suite executes.** sh reads a
+script as it runs it: an edit to `suite.sh` or `cbmc.sh` under a
+running suite makes the old process continue at its old byte offset
+in the new text. Keep the new version aside until the run ends, or
+stop the run first.
+
 **Container restart.** Background jobs and subagents die; the working
 tree and the scratchpad have survived every time so far, installed
 packages too. Check `git status`, the scratch NOTES files, and

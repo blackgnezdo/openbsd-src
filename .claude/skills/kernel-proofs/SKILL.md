@@ -269,10 +269,13 @@ fix to satisfy it; say why in one line and move on.
   brief's `CBMC_BUDGET_FILE=... CBMC_BUDGET=...` must prefix every
   cbmc.sh command, or the runs go unlogged (one subagent lost six
   runs from its log this way).
-- **The full `suite.sh -m` takes about 1.5 hours** (tcp_dooptions
-  alone about 20 minutes). Run it in the background with
-  `SUITE_LOGDIR`; after a restart, rerun only the targets with no
-  PASS/FAIL line (suite.sh takes target names).
+- **The full `suite.sh -m` takes 3.5 to 4 hours with -j 1**
+  (net/pfsync_input alone about 23 minutes). Use `-j 3` on this
+  4-core, 15 GB machine (N times about 4 GB must fit). Run it in the
+  background with `SUITE_LOGDIR` and stderr to a file: the report
+  comes at the end, the "done <name> <result>" lines as jobs finish.
+  After a restart, rerun only the targets with no "done" line
+  (suite.sh takes target names).
 - **Ask for a counterexample** with `CBMC_TRACE=1` rather than letting
   a subagent derive inputs by hand.
 - **Long runs and the tool's limits.** Foreground calls go to the

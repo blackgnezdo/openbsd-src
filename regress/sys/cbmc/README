@@ -164,11 +164,10 @@ CBMC versions
 	about as long as before.
 
 Running the suite
-	sh suite.sh [-n] [target-dir ...]
+	sh suite.sh [-j N] [-n | -m] [target-dir ...]
 
 	Runs every target (every directory with a harness.c, except
-	selftest/, which has its own runner) one after the other, or only
-	the named ones, and compares each RESULT word with the target's own
+	selftest/, which has its own runner), or only the named ones, and compares each RESULT word with the target's own
 	files:
 		expect		first line: the expected RESULT word of cbmc.sh
 				(VERIFIED, VIOLATED, ...).  A target without it
@@ -178,6 +177,18 @@ Running the suite
 				the check phase needs more than the default.
 		expect.native	optional: the expected RESULT word of native.sh
 				(CLEAN, FINDING, VACUOUS).
+	-j N runs N jobs at a time (default 1): each target run and each
+	mutant run is one job (xargs -P), targets with a timeout file first.
+	The report is printed at the end, in the order of -j 1; meanwhile
+	one "done <name> <result>" line per job goes to stderr.  The floor
+	is the longest single run (net/pfsync_input, about 23 minutes; the
+	tcp_sack_holes and tcp_dooptions runs 10 to 18).  Memory: each cbmc
+	run may use CBMC_MEMLIMIT_MB (6000); most use far less, but N
+	should not exceed the memory divided by about 4 GB.  Timings under
+	-j are 1.5 to 2 times the quiet ones; timeout files have that
+	margin.  CBMC is single-threaded, so -j is the only use of more
+	cores.  OpenBSD's make regress does not help: bsd.regress.mk and
+	bsd.subdir.mk run their targets in a shell loop even under make -j.
 	-m also runs every target on each of its mutant*/ directories
 	(kernel files with a defect put back) and expects VIOLATED: the
 	mutation checks are part of the suite.
