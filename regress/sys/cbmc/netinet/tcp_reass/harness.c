@@ -82,6 +82,16 @@
  * frees the segment and returns -1; the harness checks both, and that
  * a SACK report is cleaned (rcv_numsacks 0 when sack_enable).
  *
+ * Queue limit (tcp_reass top, upstream a57fe03c6): t_segqlen counts the
+ * entries; a segment not at rcv_nxt is dropped (m_freem, -1) when
+ * t_segqlen >= max(TCP_REASS_MAXQLEN, sb_hiwat / 1024).  A queue of 100
+ * entries is not built: t_segqlen is n + extra, extra 0 or arbitrary,
+ * standing for entries beyond the modelled ones (their walk is not
+ * covered).  Asserted: when the limit applies, the segment is dropped,
+ * -1 is returned and the queue, t_segqlen and rcv_nxt are unchanged
+ * and pool_get is not called; otherwise t_segqlen is the queue length
+ * plus extra after the call, 0 after a flush.  sb_hiwat is arbitrary.
+ *
  * Leaks: --memory-leak-check, free checks: the harness frees what is
  * left with tcp_freeq (real, from tcp_subr.c) and the tcpcb.
  *
@@ -133,6 +143,7 @@ static tcp_seq base;		/* rcv_nxt before the call */
 static int track;		/* the tracked stream position */
 static int cantrcvmore;
 static int pool_failed;
+static int qlen;		/* entries counted by check_queue */
 static u_int dl_len;		/* bytes given to the socket buffer */
 static int dl_n;		/* chains given to it */
 static int dl_fin;		/* FIN of the last chain */
@@ -215,8 +226,10 @@ check_queue(struct tcpcb *tp, int head_eq, int *found)
 	int n = 0, rel, j;
 
 	*found = 0;
+	qlen = 0;
 	for (q = TAILQ_FIRST(&tp->t_segq); q != NULL; q = nq) {
 		n++;
+		qlen = n;
 		__CPROVER_assert(n <= 3, "queue too long or cyclic");
 		th = q->tcpqe_tcp;
 		__CPROVER_assert(th == (struct tcphdr *)MC_BUF(q->tcpqe_m),
@@ -313,6 +326,8 @@ main(void)
 	struct tcphdr *th;
 	struct mbuf *m;
 	int n, o0, l0, o1, l1, no, nl, tlen, ret, found, delta, reuse, covb;
+	u_int extra, qlimit, hiwat;
+	struct tcpqent *e0, *e1;
 
 	tcpqe_pool.pr_size = sizeof(struct tcpqent);
 	model_inp.inp_socket = &model_so;
@@ -341,6 +356,16 @@ main(void)
 	if (n >= 2)
 		enqueue(tp, o1, l1);
 	check_queue(tp, 0, &found);
+	e0 = TAILQ_FIRST(&tp->t_segq);
+	e1 = e0 != NULL ? TAILQ_NEXT(e0, tcpqe_q) : NULL;
+
+	/* the counter and the limit: entries beyond the modelled ones */
+	hiwat = nondet_uint();
+	model_so.so_rcv.sb_hiwat = hiwat;
+	extra = nondet_bool() ? 0 : (nondet_uint() & 0x7fffffff);
+	tp->t_segqlen = n + extra;
+	qlimit = hiwat / 1024 > TCP_REASS_MAXQLEN ? hiwat / 1024 :
+	    TCP_REASS_MAXQLEN;
 
 	/* the new segment, as tcp_input_solocked() leaves it */
 	no = mc_upto(NMAX - 1);
@@ -351,6 +376,19 @@ main(void)
 
 	ret = tcp_reass(tp, th, m, &tlen);
 
+	if (n + extra >= qlimit && no != 0) {
+		__CPROVER_assert(ret == -1, "full queue: not -1");
+		__CPROVER_assert(!pool_failed, "full queue: pool_get called");
+		__CPROVER_assert(TAILQ_FIRST(&tp->t_segq) == e0 &&
+		    (e0 == NULL || TAILQ_NEXT(e0, tcpqe_q) == e1),
+		    "full queue: queue changed");
+		__CPROVER_assert(tp->t_segqlen == n + extra,
+		    "full queue: t_segqlen changed");
+		__CPROVER_assert(tp->rcv_nxt == base && dl_n == 0,
+		    "full queue: data delivered");
+		check_queue(tp, 0, &found);
+		goto done;
+	}
 	reuse = pool_failed && n > 0 && no == 0;
 	if (pool_failed && !reuse) {
 		__CPROVER_assert(ret == -1, "dropped segment: not -1");
@@ -358,6 +396,8 @@ main(void)
 		    "queue not flushed after pool_get failure");
 		__CPROVER_assert(tp->rcv_nxt == base, "rcv_nxt moved");
 		__CPROVER_assert(dl_n == 0, "data delivered after pool failure");
+		__CPROVER_assert(tp->t_segqlen == 0,
+		    "t_segqlen not 0 after the flush");
 	} else {
 		__CPROVER_assert(ret == 0 || ret == TH_FIN, "return value");
 		delta = (int)(tp->rcv_nxt - base);
@@ -372,6 +412,8 @@ main(void)
 			    "FIN returned for a chain without FIN or not at all");
 		}
 		check_queue(tp, ret == TH_FIN, &found);
+		__CPROVER_assert(tp->t_segqlen == qlen + extra,
+		    "t_segqlen is not the queue length");
 		/* the positions held are conserved */
 		covb = covers(no, nl) ||
 		    (n >= 1 && !(reuse && n == 1) && covers(o0, l0)) ||
@@ -382,6 +424,7 @@ main(void)
 		__CPROVER_assert(covb == (track < delta || found == 1),
 		    "position held before is lost, or invented");
 	}
+done:
 	if (pool_failed && tp->sack_enable)
 		__CPROVER_assert(tp->rcv_numsacks == 0,
 		    "SACK report not cleaned after pool failure");

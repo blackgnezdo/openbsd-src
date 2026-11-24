@@ -1427,15 +1427,21 @@ netinet/tcp_reass
 	from the old rcv_nxt, rcv_nxt advances by the delivered length,
 	TH_FIN returned exactly when the last delivered chain had FIN, one
 	tracked byte); every stream position held before is held once
-	after; both pool_get failure paths; no leak or double free.  Not
+	after; both pool_get failure paths; the queue limit of a57fe03c6
+	(t_segqlen >= max(TCP_REASS_MAXQLEN, sb_hiwat / 1024): a segment
+	not at rcv_nxt is dropped, the queue, t_segqlen and rcv_nxt
+	unchanged; otherwise t_segqlen is the queue length plus the
+	entries beyond the modelled ones, 0 after a flush); no leak or
+	double free.  Not
 	covered: the byte of a position left in a queued entry, more than 2
 	entries, the window.  Mutants VIOLATED: the back-trim overlap one
 	too large, the front trim one short, the insertion comparison moved
-	by one.  SEQ_GT -> SEQ_GEQ in the insertion is not detected: it
+	by one, the limit test as >, one t_segqlen-- removed.  SEQ_GT ->
+	SEQ_GEQ in the insertion is not detected: it
 	changes only which of two entries at one sequence number survives.
 	tcp_subr.c is included, not in sources: as a separate source its
 	copies of header static inlines (counters_inc) cannot be named in
-	nobody.  Native: CLEAN.  Check phase about 5 minutes, 740,000
+	nobody.  Native: CLEAN.  Check phase about 5 to 7 minutes, 810,000
 	variables, --sat-solver cadical (timeout 600).
 
 netinet/tcp_update_sack_list

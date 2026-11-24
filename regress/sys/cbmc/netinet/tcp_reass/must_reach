@@ -12,3 +12,4 @@ tcp_input.c:tp->rcv_nxt += q->tcpqe_tcp->th_reseqlen;
 tcp_input.c:sbappendstream(&so->so_rcv, q->tcpqe_m);
 tcp_input.c:sorwakeup(so);
 tcp_subr.c:m_freem(qe->tcpqe_m);
+tcp_input.c:tcpstat_inc(tcps_rcvreassfull);
