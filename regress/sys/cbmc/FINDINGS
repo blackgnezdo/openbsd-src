@@ -31,6 +31,10 @@ Fixed on this branch and not upstream
 	(icmp6_redirect_input, 5d53f1e73 here); in another form:
 	981d5bb7b (msg_copyout, ulmin; c36507b4f here), 77a3fab0d
 	(usbd_open_pipe_intr; 065cab7e9 here).
+	Upstream fixed, found by targets here: a422af587 (pppoe
+	MAX_PAYLOAD tag length, net/pppoe_disc), 113459e8e (sppp option
+	length below 4, net/sppp_lcp_rcr); both targets VERIFIED now,
+	mutant_prefix/ VIOLATED.
 
 Unfixed, with a failing target
 
@@ -135,6 +139,10 @@ netinet/tcp_dooptions
 netinet/ip_dooptions
 	Native run VACUOUS in the default time: the source-route forward
 	anchor is not reached.
+net/pppoe_disc
+	Native run VACUOUS (5 anchors unreached, also at 300 s and on
+	mutant_prefix/); the expect.native FINDING recorded when the
+	target was added did not reproduce at that commit either.
 net/mbuf_split
 	The cluster/reference path and its recursion are covered
 	natively only.

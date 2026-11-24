@@ -984,10 +984,16 @@ netinet/arp_rtrequest
 net/pppoe_disc
 	pppoe_dispatch_disc_pkt() of sys/net/if_pppoe.c on discovery
 	packets of up to 26 bytes, contract models, bounded unwinding.
+	VERIFIED.  mutant_prefix/ is the source before a422af587, which
+	pulled up a MAX_PAYLOAD tag of the wrong length (VIOLATED: the
+	pulled-up mbuf leaks).  Native: VACUOUS.
 
 net/sppp_lcp_rcr
 	sppp_lcp_RCR() of sys/net/if_spppsubr.c on configure requests of
 	up to 20 option bytes (flat buffer), bounded unwinding.
+	VERIFIED.  mutant_prefix/ is the source before 113459e8e, which
+	accepted option lengths below 4 (VIOLATED: reads past the option
+	and an unwinding failure).
 
 net/bpe_add_addr
 	bpe_add_addr() of sys/net/if_bpe.c on one SIOCBRDGSADDR request,
