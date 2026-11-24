@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.328 2026/11/13 06:35:47 tb Exp $ */
+/*	$OpenBSD: extern.h,v 1.331 2026/11/23 10:01:53 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -459,6 +459,7 @@ struct vsp {
 	time_t		 expires;
 	int		 talid;
 	unsigned int	 repoid;
+	int		 overflowed;
 };
 /*
  * Tree of VSP sorted by asid
@@ -658,6 +659,7 @@ enum stype {
 	STYPE_UNIQUE,
 	STYPE_DEC_UNIQUE,
 	STYPE_PROVIDERS,
+	STYPE_DEC_PROVIDERS,
 	STYPE_OVERFLOW,
 	STYPE_SEQNUM_GAP,
 };
@@ -826,7 +828,7 @@ void		 spl_buffer(struct ibuf *, const struct spl *);
 void		 spl_free(struct spl *);
 const struct signed_obj *spl_obj(void);
 struct spl	*spl_read(struct ibuf *);
-void		 spl_insert_vsps(struct vsp_tree *, struct spl *,
+void		 spl_insert_vsps(const char *, struct vsp_tree *, struct spl *,
 		    struct repo *);
 
 void		 rsc_free(struct rsc *);
@@ -931,7 +933,7 @@ void		 proc_filemode(int) __attribute__((noreturn));
 
 /* Rsync-specific. */
 
-int		 rsync_base_uri(const char *, char **);
+int		 rsync_base_uri(const char *, size_t, char **);
 void		 proc_rsync(char *, char *, int) __attribute__((noreturn));
 
 /* HTTP and RRDP processes. */

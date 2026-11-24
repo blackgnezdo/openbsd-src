@@ -1,4 +1,4 @@
-/*	$OpenBSD: rrdp_delta.c,v 1.17 2026/08/04 18:46:18 tb Exp $ */
+/*	$OpenBSD: rrdp_delta.c,v 1.19 2026/11/23 10:24:45 tb Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -127,7 +127,8 @@ start_publish_withdraw_elem(struct delta_xml *dxml, const char **attr,
 				continue;
 			}
 		}
-		if (strcmp("hash", attr[i]) == 0 && hasHash++ == 0) {
+		if (strcmp("hash", attr[i]) == 0 && hasHash++ == 0 &&
+		    strlen(attr[i + 1]) == 2 * SHA256_DIGEST_LENGTH) {
 			if (hex_decode(attr[i + 1], hash, sizeof(hash)) == 0)
 				continue;
 		}
@@ -163,9 +164,8 @@ end_publish_withdraw_elem(struct delta_xml *dxml, int withdraw)
 		PARSE_FAIL(p, "parse failed - exited publish/withdraw "
 		    "elem unexpectedly");
 
-	if (publish_done(dxml->rrdp, dxml->pxml) != 0)
+	if (publish_done(dxml->rrdp, &dxml->pxml) != 0)
 		PARSE_FAIL(p, "parse failed - bad publish/withdraw elem");
-	dxml->pxml = NULL;
 
 	dxml->scope = DELTA_SCOPE_DELTA;
 }

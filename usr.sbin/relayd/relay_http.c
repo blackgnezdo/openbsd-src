@@ -1,4 +1,4 @@
-/*	$OpenBSD: relay_http.c,v 1.109 2026/11/12 12:16:05 kirill Exp $	*/
+/*	$OpenBSD: relay_http.c,v 1.112 2026/11/23 06:47:57 rsadowski Exp $	*/
 
 /*
  * Copyright (c) 2006 - 2016 Reyk Floeter <reyk@openbsd.org>
@@ -83,6 +83,13 @@ char		*server_root_strip(char *, int);
 int		 relay_http_parse_startline(struct ctl_relay_event *, char *,
     enum httpmethod *);
 static int	 relay_url_log_match(const struct kv *, const char *);
+static void	 relay_log_rule(struct relay_rule *, struct http_descriptor *,
+    struct rsession *, struct ctl_relay_event *, u_int);
+static int	 relay_session_done(struct rsession *, const char *);
+static int	 relay_http_parse_startline_res(struct ctl_relay_event *,
+    char *, enum httpmethod *);
+static int	 relay_http_parse_startline_req(struct ctl_relay_event *,
+    char *);
 
 static struct relayd	*env = NULL;
 
@@ -617,10 +624,8 @@ relay_read_http(struct bufferevent *bev, void *arg)
 			}
 		}
 	}
-	if (con->se_done) {
-		relay_close(con, "last http read (done)", 0);
+	if (relay_session_done(con, "last http read (done)"))
 		return;
-	}
 	switch (relay_splice(cre)) {
 	case -1:
 		relay_close(con, strerror(errno), 1);
@@ -682,8 +687,8 @@ relay_read_httpcontent(struct bufferevent *bev, void *arg)
 		cre->toread = TOREAD_HTTP_HEADER;
 		bev->readcb = relay_read_http;
 	}
-	if (con->se_done)
-		goto done;
+	if (relay_session_done(con, "last http content read"))
+		return;
 	bufferevent_enable(bev, EV_READ);
 
 	if (cre->dst->bev && EVBUFFER_LENGTH(EVBUFFER_OUTPUT(cre->dst->bev)) >
@@ -693,9 +698,6 @@ relay_read_httpcontent(struct bufferevent *bev, void *arg)
 	if (bev->readcb != relay_read_httpcontent)
 		bev->readcb(bev, arg);
 	/* The callback readcb() might have freed the session. */
-	return;
- done:
-	relay_close(con, "last http content read", 0);
 	return;
  fail:
 	relay_close(con, strerror(errno), 1);
@@ -835,8 +837,8 @@ relay_read_httpchunks(struct bufferevent *bev, void *arg)
 	}
 
  next:
-	if (con->se_done)
-		goto done;
+	if (relay_session_done(con, "last http chunk read (done)"))
+		return;
 	bufferevent_enable(bev, EV_READ);
 
 	if (cre->dst->bev && EVBUFFER_LENGTH(EVBUFFER_OUTPUT(cre->dst->bev)) >
@@ -848,9 +850,6 @@ relay_read_httpchunks(struct bufferevent *bev, void *arg)
 	/* The callback readcb() might have freed the session. */
 	return;
 
- done:
-	relay_close(con, "last http chunk read (done)", 0);
-	return;
  fail:
 	relay_close(con, strerror(errno), 1);
 }
@@ -2047,6 +2046,8 @@ relay_test(struct protocol *proto, struct ctl_relay_event *cre)
 		action = RES_DROP;
 	}
 
+	relay_log_rule(rule, desc, con, cre, action);
+
 	log_debug("%s: session %d: action %d", __func__,
 	    con->se_id, action);
 
@@ -2120,10 +2121,24 @@ server_root_strip(char *path, int n)
 }
 
 /*
- * Handle the first line of an HTTP message (Request- or Status-Line).
+ * Handle the first line of an HTTP message
  */
 int
 relay_http_parse_startline(struct ctl_relay_event *cre, char *line,
+    enum httpmethod *method)
+{
+	if (cre->dir == RELAY_DIR_RESPONSE)
+		return (relay_http_parse_startline_res(cre, line, method));
+	else if (cre->dir == RELAY_DIR_REQUEST)
+		return (relay_http_parse_startline_req(cre, line));
+	return (-1);
+}
+
+/*
+ * Handle the first line of an HTTP message (Response- or Status-Line).
+ */
+static int
+relay_http_parse_startline_res(struct ctl_relay_event *cre, char *line,
     enum httpmethod *request_method)
 {
 	struct rsession		*con = cre->con;
@@ -2133,7 +2148,8 @@ relay_http_parse_startline(struct ctl_relay_event *cre, char *line,
 	char			*key, *value;
 	const char		*errstr;
 
-	log_debug("%s: session %d http_session %p", __func__, con->se_id, hs);
+	log_debug("%s: session %d http response session %p", __func__,
+	    con->se_id, hs);
 
 	key = line;
 	if ((value = strchr(key, ' ')) == NULL) {
@@ -2142,102 +2158,117 @@ relay_http_parse_startline(struct ctl_relay_event *cre, char *line,
 	}
 	*value++ = '\0';
 
-	if (cre->dir == RELAY_DIR_RESPONSE) {
-		desc->http_method = HTTP_METHOD_RESPONSE;
-		hmn = SIMPLEQ_FIRST(&hs->hs_methods);
+	desc->http_method = HTTP_METHOD_RESPONSE;
+	hmn = SIMPLEQ_FIRST(&hs->hs_methods);
 
-		/*
-		 * There is nothing preventing the relay from
-		 * sending an unbalanced response.  Be prepared.
-		 */
-		if (hmn == NULL) {
-			*request_method = HTTP_METHOD_NONE;
-			log_debug("%s: session %d unbalanced response",
-			    __func__, con->se_id);
-		} else {
-			*request_method = hmn->hmn_method;
-		}
-
-		/*
-		 * Decode response path and query
-		 */
-		desc->http_version = strdup(key);
-		if (desc->http_version == NULL)
-			goto fail;
-
-		desc->http_rescode = strdup(value);
-		if (desc->http_rescode == NULL)
-			goto fail;
-
-		desc->http_resmesg = strchr(desc->http_rescode, ' ');
-		if (desc->http_resmesg == NULL)
-			goto fail;
-
-		*desc->http_resmesg++ = '\0';
-		desc->http_resmesg = strdup(desc->http_resmesg);
-		if (desc->http_resmesg == NULL)
-			goto fail;
-
-		desc->http_status = strtonum(desc->http_rescode, 100, 599,
-		    &errstr);
-		if (errstr) {
-			log_debug(
-			    "%s: http_status %s: errno %d, %s",
-			    __func__, desc->http_rescode, errno,
-			    errstr);
-			goto fail;
-		}
-		log_debug("http_version %s http_rescode %s http_resmesg %s",
-		    desc->http_version, desc->http_rescode,
-		    desc->http_resmesg);
-		if (hmn != NULL &&
-		    (desc->http_status == 101 || desc->http_status >= 200)) {
-			SIMPLEQ_REMOVE_HEAD(&hs->hs_methods, hmn_entry);
-			log_debug("%s: session %d dequeuing %s",
-			    __func__, con->se_id,
-			    relay_httpmethod_byid(*request_method));
-			free(hmn);
-		}
-	} else if (cre->dir == RELAY_DIR_REQUEST) {
-		desc->http_method = relay_httpmethod_byname(key);
-
-		if (desc->http_method == HTTP_METHOD_NONE)
-			goto fail;
-
-		if ((hmn = calloc(1, sizeof *hmn)) == NULL)
-			goto fail;
-		hmn->hmn_method = desc->http_method;
-		log_debug("%s: session %d enqueuing %s", __func__, con->se_id,
-		    relay_httpmethod_byid(hmn->hmn_method));
-		SIMPLEQ_INSERT_TAIL(&hs->hs_methods, hmn, hmn_entry);
-		/*
-		 * Decode request path and query
-		 */
-		desc->http_path = strdup(value);
-		if (desc->http_path == NULL)
-			goto fail;
-
-		desc->http_version = strchr(desc->http_path, ' ');
-		if (desc->http_version == NULL)
-			goto fail;
-
-		*desc->http_version++ = '\0';
-		desc->http_query = strchr(desc->http_path, '?');
-		if (desc->http_query != NULL)
-			*desc->http_query++ = '\0';
-
-		/*
-		 * Have to allocate the strings because they
-		 * could be changed independently by the
-		 * filters later.
-		 */
-		if ((desc->http_version = strdup(desc->http_version)) == NULL)
-			goto fail;
-
-		if (desc->http_query != NULL && (desc->http_query =
-		    strdup(desc->http_query)) == NULL)
-			goto fail;
+	/*
+	 * There is nothing preventing the relay from
+	 * sending an unbalanced response.  Be prepared.
+	 */
+	if (hmn == NULL) {
+		*request_method = HTTP_METHOD_NONE;
+		log_debug("%s: session %d unbalanced response",
+		    __func__, con->se_id);
+	} else {
+		*request_method = hmn->hmn_method;
 	}
+
+	/*
+	 * Decode response path and query
+	 */
+	if ((desc->http_version = strdup(key)) == NULL)
+		goto fail;
+
+	if ((desc->http_rescode = strdup(value)) == NULL)
+		goto fail;
+
+	if ((desc->http_resmesg = strchr(desc->http_rescode, ' ')) == NULL)
+		goto fail;
+
+	*desc->http_resmesg++ = '\0';
+	if ((desc->http_resmesg = strdup(desc->http_resmesg)) == NULL)
+		goto fail;
+
+	desc->http_status = strtonum(desc->http_rescode, 100, 599, &errstr);
+	if (errstr) {
+		log_debug("%s: http_status %s: errno %d, %s",
+		    __func__, desc->http_rescode, errno, errstr);
+		goto fail;
+	}
+	log_debug("http_version %s http_rescode %s http_resmesg %s",
+	    desc->http_version, desc->http_rescode,
+	    desc->http_resmesg);
+	if (hmn != NULL &&
+	    (desc->http_status == 101 || desc->http_status >= 200)) {
+		SIMPLEQ_REMOVE_HEAD(&hs->hs_methods, hmn_entry);
+		log_debug("%s: session %d dequeuing %s", __func__, con->se_id,
+		    relay_httpmethod_byid(*request_method));
+		free(hmn);
+	}
+	return (0);
+fail:
+	relay_abort_http(con, 500, strerror(errno), 0);
+	return (-1);
+}
+
+/*
+ * Handle the first line of an HTTP message (Request- or Status-Line).
+ */
+static int
+relay_http_parse_startline_req(struct ctl_relay_event *cre, char *line)
+{
+	struct rsession		*con = cre->con;
+	struct http_descriptor	*desc = cre->desc;
+	struct http_session	*hs = con->se_priv;
+	struct http_method_node	*hmn;
+	char			*key, *value;
+
+	log_debug("%s: session %d http request session %p", __func__,
+	    con->se_id, hs);
+
+	key = line;
+	if ((value = strchr(key, ' ')) == NULL) {
+		relay_abort_http(con, 400, "malformed", 0);
+		return (-1);
+	}
+	*value++ = '\0';
+	desc->http_method = relay_httpmethod_byname(key);
+
+	if (desc->http_method == HTTP_METHOD_NONE)
+		goto fail;
+
+	if ((hmn = calloc(1, sizeof *hmn)) == NULL)
+		goto fail;
+	hmn->hmn_method = desc->http_method;
+	log_debug("%s: session %d enqueuing %s", __func__, con->se_id,
+	    relay_httpmethod_byid(hmn->hmn_method));
+	SIMPLEQ_INSERT_TAIL(&hs->hs_methods, hmn, hmn_entry);
+	/*
+	 * Decode request path and query
+	 */
+	if ((desc->http_path = strdup(value)) == NULL)
+		goto fail;
+
+	if ((desc->http_version = strchr(desc->http_path, ' ')) == NULL)
+		goto fail;
+
+	*desc->http_version++ = '\0';
+	desc->http_query = strchr(desc->http_path, '?');
+	if (desc->http_query != NULL)
+		*desc->http_query++ = '\0';
+
+	/*
+	 * Have to allocate the strings because they
+	 * could be changed independently by the
+	 * filters later.
+	 */
+	if ((desc->http_version = strdup(desc->http_version)) == NULL)
+		goto fail;
+
+	if (desc->http_query != NULL && (desc->http_query =
+	    strdup(desc->http_query)) == NULL)
+		goto fail;
+
 	return (0);
 fail:
 	relay_abort_http(con, 500, strerror(errno), 0);
@@ -2252,4 +2283,41 @@ relay_url_log_match(const struct kv *kv, const char *str)
 		return (kv_match_key(kv, str));
 	/* without a keyword, url log keys are case-insensitive glob(7) */
 	return (fnmatch(kv->kv_key, str, FNM_CASEFOLD) != FNM_NOMATCH);
+}
+
+static int
+relay_session_done(struct rsession *con, const char *msg)
+{
+	if (con->se_done) {
+		relay_close(con, msg, 0);
+		return (1);
+	}
+	return (0);
+}
+
+static void
+relay_log_rule(struct relay_rule *rule, struct http_descriptor *desc,
+    struct rsession *con, struct ctl_relay_event *cre, u_int action)
+{
+	struct kv		*host, key;
+	const char		*meth;
+	char			 hbuf[128];
+
+	if (rule == NULL || !(rule->rule_flags & RULE_FLAG_LOG))
+		return;
+
+	memset(&key, 0, sizeof(key));
+	key.kv_key = "Host";
+	host = kv_find(&desc->http_headers, &key);
+	meth = relay_httpmethod_byid(desc->http_method);
+
+	(void)print_host(&con->se_in.ss, hbuf, sizeof(hbuf));
+
+	log_info("relay %s, session %d, rule %d: %s %s from %s: %s %s%s",
+	    con->se_relay->rl_conf.name, con->se_id, rule->rule_id,
+	    action == RES_PASS ? "pass" : "block",
+	    cre->dir == RELAY_DIR_REQUEST ? "request" : "response",
+	    hbuf, meth == NULL ? "-" : meth,
+	    host == NULL || host->kv_value == NULL ? "" : host->kv_value,
+	    desc->http_path == NULL ? "" : desc->http_path);
 }

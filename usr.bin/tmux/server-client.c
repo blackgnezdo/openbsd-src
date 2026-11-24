@@ -1,4 +1,4 @@
-/* $OpenBSD: server-client.c,v 1.535 2026/11/12 11:26:25 nicm Exp $ */
+/* $OpenBSD: server-client.c,v 1.541 2026/11/23 08:44:19 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -546,7 +546,7 @@ server_client_suspend(struct client *c)
 {
 	struct session	*s = c->session;
 
-	if (s == NULL || (c->flags & CLIENT_UNATTACHEDFLAGS))
+	if (s == NULL || (c->flags & (CLIENT_UNATTACHEDFLAGS|CLIENT_CONTROL)))
 		return;
 
 	tty_stop_tty(&c->tty);
@@ -658,13 +658,14 @@ server_client_check_mouse_in_pane(struct window_pane *wp, int px, int py,
 {
 	struct window		*w = wp->window;
 	struct window_pane	*fwp;
-	int			 pane_status, sb_w, sb_pad;
+	int			 pane_status, sb_w, sb_pad, separate;
 	int			 pane_status_line, sl_top, sl_bottom;
 	int			 bdr_bottom, bdr_top, bdr_left, bdr_right;
 	int			 sb_start, sb_end, sb_overlay;
 
 	pane_status = window_pane_get_pane_status(wp);
 	sb_overlay = window_pane_scrollbar_overlay(wp);
+	separate = window_border_type_is_separate(w);
 
 	if (window_pane_scrollbar_visible(wp)) {
 		sb_w = wp->scrollbar_style.width;
@@ -717,8 +718,10 @@ server_client_check_mouse_in_pane(struct window_pane *wp, int px, int py,
 	    (wp->yoff == 0 && py < (int)wp->sy) ||
 	    (py >= wp->yoff && py < wp->yoff + (int)wp->sy)) &&
 	    ((w->sb_pos == PANE_SCROLLBARS_RIGHT &&
+	    px >= wp->xoff &&
 	    px < wp->xoff + (int)wp->sx + sb_pad + sb_w) ||
 	    (w->sb_pos == PANE_SCROLLBARS_LEFT &&
+	    px >= wp->xoff - sb_pad - sb_w &&
 	    px < wp->xoff + (int)wp->sx - sb_pad - sb_w))) {
 		/* Check if in the scrollbar. */
 		if ((w->sb_pos == PANE_SCROLLBARS_RIGHT &&
@@ -738,12 +741,12 @@ server_client_check_mouse_in_pane(struct window_pane *wp, int px, int py,
 				return (KEYC_MOUSE_LOCATION_SCROLLBAR_SLIDER);
 			} else /* py > sl_bottom */
 				return (KEYC_MOUSE_LOCATION_SCROLLBAR_DOWN);
-		} else if (window_pane_is_floating(wp) &&
-		    window_pane_get_pane_lines(wp) != PANE_LINES_NONE &&
+		} else if ((separate || (window_pane_is_floating(wp) &&
+		    window_pane_get_pane_lines(wp) != PANE_LINES_NONE)) &&
 		    (px == bdr_left ||
 		    py == wp->yoff - 1 ||
 		    py == wp->yoff + (int)wp->sy)) {
-			/* Floating pane left, bottom or top border. */
+			/* Floating or separate left, bottom or top border. */
 			return (KEYC_MOUSE_LOCATION_BORDER);
 		} else {
 			/* Must be inside the pane. */
@@ -778,8 +781,8 @@ server_client_check_mouse_in_pane(struct window_pane *wp, int px, int py,
 			    py <= fwp->yoff + (int)fwp->sy) {
 				if (px == bdr_right)
 					break;
-				if (window_pane_is_floating(wp)) {
-					/* Floating pane, check left border. */
+				if (window_pane_is_floating(wp) || separate) {
+					/* Also check left border. */
 					if (px == bdr_left)
 						break;
 				}
@@ -1283,8 +1286,7 @@ have_event:
 	if (b & MOUSE_MASK_SHIFT)
 		key |= KEYC_SHIFT;
 
-	if (log_get_level() != 0)
-		log_debug("mouse key is %s", key_string_lookup_key (key, 1));
+	log_debug("mouse key is %s", key_string_lookup_key (key, 1));
 	return (key);
 }
 
@@ -2218,13 +2220,13 @@ server_client_prompt_cursor(struct client *c, struct window_pane *wp, int *mode,
 	*mode &= ~MODE_CURSOR;
 
 	tty_window_offset(tty, &ox, &oy, &sx, &sy);
-	if (status_at_line(c) == 0)
+	if (options_get_number(c->session->options, "status-position") == 0)
 		py = wp->yoff;
 	else
 		py = wp->yoff + wp->sy - 1;
 	px = wp->xoff + wp->prompt_cx;
 	if (px < (int)ox || px > (int)(ox + sx) ||
-	    py < (int)oy || py > (int)(oy + sy))
+	    py < (int)oy || py >= (int)(oy + sy))
 		return (1);
 
 	*cx = px - ox;
@@ -2258,7 +2260,7 @@ server_client_reset_state(struct client *c)
 	struct window_pane	*wp = w->active, *loop;
 	struct screen		*s = NULL, prompt_screen;
 	struct options		*oo = c->session->options;
-	int			 mode = 0, cursor, flags, pane_mode = 0;
+	int			 mode = 0, cursor, flags, pending = 0;
 	u_int			 cx = 0, cy = 0, ox, oy, sx, sy, prompt = 0;
 	u_int			 sb_w;
 	struct visible_ranges	*r;
@@ -2280,10 +2282,8 @@ server_client_reset_state(struct client *c)
 		s = c->status.active;
 	if (s != NULL)
 		mode = s->mode;
-	if (log_get_level() != 0) {
-		log_debug("%s: client %s mode %s", __func__, c->name,
-		    screen_mode_to_string(mode));
-	}
+	log_debug("%s: client %s mode %s", __func__, c->name,
+	    screen_mode_to_string(mode));
 
 	/* Reset region and margin. */
 	tty_region_off(tty);
@@ -2321,7 +2321,10 @@ server_client_reset_state(struct client *c)
 		}
 		if (!prompt) {
 			cursor = 0;
-			pane_mode = s->mode;
+			if ((s->mode & MODE_SYNC) ||
+			    s->write_start != s->write_end ||
+			    s->write_scrolled != 0)
+				pending = 1;
 
 			tty_window_offset(tty, &ox, &oy, &sx, &sy);
 			if (wp->xoff + (int)s->cx >= (int)ox &&
@@ -2361,7 +2364,7 @@ server_client_reset_state(struct client *c)
 		}
 	} else if (s == NULL)
 		mode &= ~MODE_CURSOR;
-	if (~pane_mode & MODE_SYNC) {
+	if (!pending) {
 		log_debug("%s: cursor to %u,%u", __func__, cx, cy);
 		tty_cursor(tty, cx, cy);
 	} else {
@@ -2685,6 +2688,7 @@ server_client_check_redraw(struct client *c)
 			server_client_set_path(c);
 		}
 		server_client_set_progress_bar(c);
+		server_client_set_program_status(c);
 		redraw_screen(c);
 		redraw_client_damage(c);
 	}
@@ -2764,6 +2768,32 @@ server_client_set_progress_bar(struct client *c)
 		return;
 	memcpy(&c->progress_bar, pane_pb, sizeof c->progress_bar);
 	tty_set_progress_bar(&c->tty, &c->progress_bar);
+}
+
+/* Set the outer terminal's program status from the active pane. */
+void
+server_client_set_program_status(struct client *c)
+{
+	struct session		*s = c->session;
+	struct window_pane	*wp = NULL;
+
+	if (s != NULL && s->curw != NULL)
+		wp = s->curw->window->active;
+	tty_set_program_status(&c->tty, wp);
+}
+
+/* Forward a status change to clients showing the pane as active. */
+void
+server_client_program_status_changed(struct window_pane *wp)
+{
+	struct client	*c;
+	struct session	*s;
+
+	TAILQ_FOREACH(c, &clients, entry) {
+		s = c->session;
+		if (s != NULL && s->curw != NULL && s->curw->window->active == wp)
+			tty_set_program_status(&c->tty, wp);
+	}
 }
 
 /* Dispatch message from client. */

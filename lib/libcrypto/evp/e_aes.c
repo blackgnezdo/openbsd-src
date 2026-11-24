@@ -1,4 +1,4 @@
-/* $OpenBSD: e_aes.c,v 1.83 2025/07/22 09:31:09 jsing Exp $ */
+/* $OpenBSD: e_aes.c,v 1.86 2026/11/17 04:27:20 tb Exp $ */
 /* ====================================================================
  * Copyright (c) 2001-2011 The OpenSSL Project.  All rights reserved.
  *
@@ -970,7 +970,7 @@ static const EVP_CIPHER aes_128_gcm = {
 	.block_size = 1,
 	.key_len = 16,
 	.iv_len = 12,
-	.flags = EVP_CIPH_FLAG_AEAD_CIPHER|CUSTOM_FLAGS | EVP_CIPH_GCM_MODE,
+	.flags = EVP_CIPH_FLAG_AEAD_CIPHER | CUSTOM_FLAGS | EVP_CIPH_GCM_MODE,
 	.init = aes_gcm_init_key,
 	.do_cipher = aes_gcm_cipher,
 	.cleanup = aes_gcm_cleanup,
@@ -990,7 +990,7 @@ static const EVP_CIPHER aes_192_gcm = {
 	.block_size = 1,
 	.key_len = 24,
 	.iv_len = 12,
-	.flags = EVP_CIPH_FLAG_AEAD_CIPHER|CUSTOM_FLAGS | EVP_CIPH_GCM_MODE,
+	.flags = EVP_CIPH_FLAG_AEAD_CIPHER | CUSTOM_FLAGS | EVP_CIPH_GCM_MODE,
 	.init = aes_gcm_init_key,
 	.do_cipher = aes_gcm_cipher,
 	.cleanup = aes_gcm_cleanup,
@@ -1010,7 +1010,7 @@ static const EVP_CIPHER aes_256_gcm = {
 	.block_size = 1,
 	.key_len = 32,
 	.iv_len = 12,
-	.flags = EVP_CIPH_FLAG_AEAD_CIPHER|CUSTOM_FLAGS | EVP_CIPH_GCM_MODE,
+	.flags = EVP_CIPH_FLAG_AEAD_CIPHER | CUSTOM_FLAGS | EVP_CIPH_GCM_MODE,
 	.init = aes_gcm_init_key,
 	.do_cipher = aes_gcm_cipher,
 	.cleanup = aes_gcm_cleanup,
@@ -1181,7 +1181,7 @@ aes_ccm_ctrl(EVP_CIPHER_CTX *c, int type, int arg, void *ptr)
 	case EVP_CTRL_CCM_SET_TAG:
 		if ((arg & 1) || arg < 4 || arg > 16)
 			return 0;
-		if ((c->encrypt && ptr) || (!c->encrypt && !ptr))
+		if (c->encrypt && ptr)
 			return 0;
 		if (ptr) {
 			cctx->tag_set = 1;
@@ -1256,8 +1256,6 @@ aes_ccm_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
 
 	if (!cctx->iv_set)
 		return -1;
-	if (!ctx->encrypt && !cctx->tag_set)
-		return -1;
 
 	if (!out) {
 		if (!in) {
@@ -1273,6 +1271,10 @@ aes_ccm_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
 		CRYPTO_ccm128_aad(ccm, in, len);
 		return len;
 	}
+
+	/* Can't decrypt data without a tag being set */
+	if (!ctx->encrypt && !cctx->tag_set)
+		return -1;
 
 	/* If not set length yet do it */
 	if (!cctx->len_set) {
@@ -1310,7 +1312,7 @@ static const EVP_CIPHER aes_128_ccm = {
 	.block_size = 1,
 	.key_len = 16,
 	.iv_len = 12,
-	.flags = CUSTOM_FLAGS | EVP_CIPH_CCM_MODE,
+	.flags = EVP_CIPH_FLAG_AEAD_CIPHER | CUSTOM_FLAGS | EVP_CIPH_CCM_MODE,
 	.init = aes_ccm_init_key,
 	.do_cipher = aes_ccm_cipher,
 	.cleanup = NULL,
@@ -1330,7 +1332,7 @@ static const EVP_CIPHER aes_192_ccm = {
 	.block_size = 1,
 	.key_len = 24,
 	.iv_len = 12,
-	.flags = CUSTOM_FLAGS | EVP_CIPH_CCM_MODE,
+	.flags = EVP_CIPH_FLAG_AEAD_CIPHER | CUSTOM_FLAGS | EVP_CIPH_CCM_MODE,
 	.init = aes_ccm_init_key,
 	.do_cipher = aes_ccm_cipher,
 	.cleanup = NULL,
@@ -1350,7 +1352,7 @@ static const EVP_CIPHER aes_256_ccm = {
 	.block_size = 1,
 	.key_len = 32,
 	.iv_len = 12,
-	.flags = CUSTOM_FLAGS | EVP_CIPH_CCM_MODE,
+	.flags = EVP_CIPH_FLAG_AEAD_CIPHER | CUSTOM_FLAGS | EVP_CIPH_CCM_MODE,
 	.init = aes_ccm_init_key,
 	.do_cipher = aes_ccm_cipher,
 	.cleanup = NULL,

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ccr.c,v 1.48 2026/11/11 14:30:07 tb Exp $ */
+/*	$OpenBSD: ccr.c,v 1.51 2026/11/18 21:22:38 tb Exp $ */
 /*
  * Copyright (c) 2025 Job Snijders <job@openbsd.org>
  *
@@ -1312,6 +1312,12 @@ parse_aspa_providers(const char *fn, struct ccr *ccr, uint32_t asid,
 			goto out;
 		}
 
+		if (asid == provider) {
+			warnx("%s: CustomerASID %u MUST NOT be provider",
+			    fn, asid);
+			goto out;
+		}
+
 		if (i > 0) {
 			if (provider <= prev) {
 				warnx("%s: AS %u misordered providers", fn,
@@ -1322,6 +1328,11 @@ parse_aspa_providers(const char *fn, struct ccr *ccr, uint32_t asid,
 
 		vap->providers[i] = provider;
 		prev = provider;
+	}
+	if (p_num > 1 && vap->providers[0] == 0) {
+		warnx("%s: AS %u malformed ASPA payload: AS 0 alongside others",
+		    fn, asid);
+		goto out;
 	}
 
 	if ((RB_INSERT(vap_tree, &ccr->vaps, vap)) != NULL) {
@@ -1353,6 +1364,10 @@ parse_aspa_payloads(const char *fn, struct ccr *ccr,
 
 		if (!as_id_parse(a->asID, &asid)) {
 			warnx("%s: malformed asID in ASPAPayloadSet", fn);
+			goto out;
+		}
+		if (asid == 0) {
+			warnx("%s: CustomerASID 0 not allowed", fn);
 			goto out;
 		}
 

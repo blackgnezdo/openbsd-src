@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp.h,v 1.24 2023/05/19 01:04:39 guenther Exp $	*/
+/*	$OpenBSD: tcp.h,v 1.26 2026/11/23 21:14:53 jan Exp $	*/
 /*	$NetBSD: tcp.h,v 1.8 1995/04/17 05:32:58 cgd Exp $	*/
 
 /*
@@ -104,6 +104,7 @@ struct tcphdr {
 #define	MAX_SACK_BLKS	6	/* Max # SACK blocks stored at sender side */
 #define	TCP_MAX_SACK	3	/* Max # SACKs sent in any segment */
 #define	TCP_SACKHOLE_LIMIT 128	/* Max # SACK holes per connection */
+#define	TCP_REASS_MAXQLEN 100	/* Max # segments per reassembly queue */
 
 /*
  * Default maximum segment size for TCP.
@@ -112,6 +113,7 @@ struct tcphdr {
  * This should be defined as min(512, IP_MSS - sizeof (struct tcpiphdr)).
  */
 #define	TCP_MSS		512
+#define	TCP_MINMSS	216
 
 #define	TCP_MAXWIN	65535	/* largest value for (unscaled) window */
 

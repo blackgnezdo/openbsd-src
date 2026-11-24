@@ -1,4 +1,4 @@
-/*	$OpenBSD: validate.c,v 1.94 2026/11/12 16:15:29 tb Exp $ */
+/*	$OpenBSD: validate.c,v 1.97 2026/11/23 14:09:28 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -98,6 +98,7 @@ valid_resources(const char *fn, struct auth *a, const struct cert *cert)
 			 * Many MFTs are issued by a CA without AS resources.
 			 * Accept this non-compliance with RFC 3779, 3.3.
 			 * Apart from MFTs, this affects only TAKs and GBRs.
+			 * https://errata.rfc-editor.org/eid9314/
 			 */
 			if (cert->purpose == CERT_PURPOSE_EE)
 				continue;
@@ -130,6 +131,7 @@ valid_resources(const char *fn, struct auth *a, const struct cert *cert)
 			 * Many MFT are issued by a CA without IP resources.
 			 * Accept this non-compliance with RFC 3779, 2.3.
 			 * Apart from MFTs, this affects only TAKs and GBRs.
+			 * https://errata.rfc-editor.org/eid9314/
 			 */
 			if (cert->purpose == CERT_PURPOSE_EE)
 				continue;
@@ -301,6 +303,9 @@ valid_uri(const char *uri, size_t usz, const char *proto)
 		len = usz;
 	}
 
+	if (len == 0 || *p == '.')
+		return 0;
+
 	/* do not allow "//" */
 	if (memmem(p, len, "//", strlen("//")) != NULL)
 		return 0;
@@ -309,8 +314,9 @@ valid_uri(const char *uri, size_t usz, const char *proto)
 	if (memmem(p, len, "/.", strlen("/.")) != NULL)
 		return 0;
 
-	if (strncasecmp(uri, RSYNC_PROTO, RSYNC_PROTO_LEN) == 0) {
-		if (!rsync_base_uri(uri, NULL))
+	if (len > RSYNC_PROTO_LEN &&
+	    strncasecmp(uri, RSYNC_PROTO, RSYNC_PROTO_LEN) == 0) {
+		if (!rsync_base_uri(uri, usz, NULL))
 			return 0;
 	}
 

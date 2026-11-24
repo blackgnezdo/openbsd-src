@@ -1,4 +1,4 @@
-/* $OpenBSD: window.c,v 1.390 2026/11/12 09:39:30 nicm Exp $ */
+/* $OpenBSD: window.c,v 1.398 2026/11/23 11:58:10 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -858,10 +858,11 @@ struct window_pane *
 window_get_active_at(struct window *w, u_int x, u_int y)
 {
 	struct window_pane	*wp;
-	int			 pane_status, xoff, yoff;
+	int			 pane_status, xoff, yoff, separate;
 	u_int			 sx, sy;
 
 	pane_status = window_get_pane_status(w);
+	separate = window_border_type_is_separate(w);
 
 	if (w->modal != NULL) {
 		if (window_pane_contains(w->modal, x, y))
@@ -905,16 +906,25 @@ window_get_active_at(struct window *w, u_int x, u_int y)
 		if (!window_pane_is_floating(wp)) {
 			/*
 			 * Tiled - to and including the right border, excluding
-			 * the bottom border.
+			 * the bottom border. pane-border-type separate draws a
+			 * full border around each pane, so include the left and
+			 * top borders as well.
 			 */
-			if ((int)x < xoff || x > xoff + sx)
-				continue;
-			if (pane_status == PANE_STATUS_TOP) {
+			if (separate) {
+				if ((int)x < xoff - 1 || x > xoff + sx)
+					continue;
 				if ((int)y < yoff - 1 || y > yoff + sy)
 					continue;
 			} else {
-				if ((int)y < yoff || y > yoff + sy)
+				if ((int)x < xoff || x > xoff + sx)
 					continue;
+				if (pane_status == PANE_STATUS_TOP) {
+					if ((int)y < yoff - 1 || y > yoff + sy)
+						continue;
+				} else {
+					if ((int)y < yoff || y > yoff + sy)
+						continue;
+				}
 			}
 		} else {
 			if (window_pane_get_pane_lines(wp) == PANE_LINES_NONE) {
@@ -972,6 +982,17 @@ window_find_string(struct window *w, const char *s)
 		y = bottom;
 	} else
 		return (NULL);
+
+	if (window_border_type_is_separate(w)) {
+		if (x == 0)
+			x = 1;
+		else if (x == w->sx - 1 && w->sx > 1)
+			x = w->sx - 2;
+		if (y == top)
+			y = top + 1;
+		else if (y == bottom && bottom > top)
+			y = bottom - 1;
+	}
 
 	return (window_get_active_at(w, x, y));
 }
@@ -1595,7 +1616,7 @@ window_pane_destroy(struct window_pane *wp)
 	window_pane_clear_prompt(wp);
 
 	window_pane_free_modes(wp);
-	screen_write_sync_clear_dirty(wp);
+	screen_write_clear_pending(wp);
 
 	if (wp->event != NULL) {
 		bufferevent_free(wp->event);
@@ -1621,6 +1642,8 @@ window_pane_destroy(struct window_pane *wp)
 		event_del(&wp->resize_timer);
 	if (event_initialized(&wp->sync_timer))
 		event_del(&wp->sync_timer);
+	if (event_initialized(&wp->write_timer))
+		event_del(&wp->write_timer);
 	if (event_initialized(&wp->sb_auto_timer))
 		event_del(&wp->sb_auto_timer);
 	window_pane_clear_resizes(wp, NULL);
@@ -1728,6 +1751,7 @@ window_pane_resize(struct window_pane *wp, u_int sx, u_int sy)
 	if (sx == wp->sx && sy == wp->sy)
 		return;
 
+	screen_write_flush_batch(wp);
 	screen_write_stop_sync(wp);
 
 	r = xmalloc(sizeof *r);
@@ -1935,21 +1959,32 @@ window_pane_set_prompt(struct window_pane *wp, struct client *c,
 	window_fire_pane_prompt("pane-prompt-opened", wp, type);
 }
 
+/* Replace program status. */
+void
+window_pane_set_program_status(struct window_pane *wp, char *state, char *name,
+    char *message)
+{
+	free(wp->program_state);
+	free(wp->program_name);
+	free(wp->program_message);
+	wp->program_state = state;
+	wp->program_name = name;
+	wp->program_message = message;
+	if (~wp->flags & PANE_DESTROYED)
+		server_client_program_status_changed(wp);
+}
+
 /* Clear program status. */
 void
 window_pane_clear_program_status(struct window_pane *wp, int all)
 {
-	if (!all && wp->program_state != NULL) {
-		if (strcmp(wp->program_state, "done") == 0 ||
-		    strcmp(wp->program_state, "error") == 0)
-			return;
-	}
-	free(wp->program_state);
-	free(wp->program_name);
-	free(wp->program_message);
-	wp->program_state = NULL;
-	wp->program_name = NULL;
-	wp->program_message = NULL;
+	const char	*ps = wp->program_state;
+
+	if (ps == NULL)
+		return;
+	if (!all && (strcmp(ps, "done") == 0 || strcmp(ps, "error") == 0))
+		return;
+	window_pane_set_program_status(wp, NULL, NULL, NULL);
 }
 
 /* Close a pane prompt. */
@@ -1999,6 +2034,7 @@ enum prompt_key_result
 window_pane_prompt_key(struct window_pane *wp, struct client *c, key_code key,
     struct mouse_event *m)
 {
+	struct options			*oo = c->session->options;
 	struct prompt			*prompt = wp->prompt;
 	struct window_pane_prompt	*wpp = wp->prompt_data;
 	enum prompt_key_result		 result;
@@ -2018,7 +2054,7 @@ window_pane_prompt_key(struct window_pane *wp, struct client *c, key_code key,
 		    cmd_mouse_at(wp, m, &x, &y, 0) != 0)
 			result = PROMPT_KEY_NOT_HANDLED;
 		else {
-			if (c != NULL && status_at_line(c) == 0)
+			if (options_get_number(oo, "status-position") == 0)
 				py = 0;
 			else
 				py = wp->sy - 1;
@@ -2257,7 +2293,7 @@ window_pane_find_up(struct window_pane *wp)
 {
 	struct window		*w;
 	struct window_pane	*next, *best, **list;
-	int			 edge, left, right, end, status, found;
+	int			 edge, left, right, end, status, found, gap;
 	int			 xoff, yoff;
 	u_int			 size, sx, sy;
 
@@ -2265,6 +2301,9 @@ window_pane_find_up(struct window_pane *wp)
 		return (NULL);
 	w = wp->window;
 	status = window_get_pane_status(w);
+	gap = 1;
+	if (window_border_type_is_separate(w))
+	        gap = 2;
 
 	list = NULL;
 	size = 0;
@@ -2276,10 +2315,10 @@ window_pane_find_up(struct window_pane *wp)
 		if (edge == 1)
 			edge = (int)w->sy + 1;
 	} else if (status == PANE_STATUS_BOTTOM) {
-		if (edge == 0)
-			edge = (int)w->sy;
+		if (edge == gap - 1)
+			edge = (int)w->sy + gap - 1;
 	} else {
-		if (edge == 0)
+		if (edge == gap - 1)
 			edge = (int)w->sy + 1;
 	}
 
@@ -2290,7 +2329,7 @@ window_pane_find_up(struct window_pane *wp)
 		window_pane_full_size_offset(next, &xoff, &yoff, &sx, &sy);
 		if (next == wp)
 			continue;
-		if (yoff + (int)sy + 1 != edge)
+		if (yoff + (int)sy + gap != edge)
 			continue;
 		end = xoff + (int)sx - 1;
 
@@ -2318,7 +2357,7 @@ window_pane_find_down(struct window_pane *wp)
 {
 	struct window		*w;
 	struct window_pane	*next, *best, **list;
-	int			 edge, left, right, end, status, found;
+	int			 edge, left, right, end, status, found, gap;
 	int			 xoff, yoff;
 	u_int			 size, sx, sy;
 
@@ -2326,22 +2365,25 @@ window_pane_find_down(struct window_pane *wp)
 		return (NULL);
 	w = wp->window;
 	status = window_get_pane_status(w);
+	gap = 1;
+	if (window_border_type_is_separate(w))
+		gap = 2;
 
 	list = NULL;
 	size = 0;
 
 	window_pane_full_size_offset(wp, &xoff, &yoff, &sx, &sy);
 
-	edge = yoff + (int)sy + 1;
+	edge = yoff + (int)sy + gap;
 	if (status == PANE_STATUS_TOP) {
 		if (edge >= (int)w->sy)
 			edge = 1;
 	} else if (status == PANE_STATUS_BOTTOM) {
-		if (edge >= (int)w->sy - 1)
-			edge = 0;
+		if (edge >= (int)w->sy + gap - 2)
+			edge = gap - 1;
 	} else {
 		if (edge >= (int)w->sy)
-			edge = 0;
+			edge = gap - 1;
 	}
 
 	left = wp->xoff;
@@ -2379,13 +2421,16 @@ window_pane_find_left(struct window_pane *wp)
 {
 	struct window		*w;
 	struct window_pane	*next, *best, **list;
-	int			 edge, top, bottom, end, found;
+	int			 edge, top, bottom, end, found, gap;
 	int			 xoff, yoff;
 	u_int			 size, sx, sy;
 
 	if (wp == NULL)
 		return (NULL);
 	w = wp->window;
+	gap = 1;
+	if (window_border_type_is_separate(w))
+		gap = 2;
 
 	list = NULL;
 	size = 0;
@@ -2393,7 +2438,7 @@ window_pane_find_left(struct window_pane *wp)
 	window_pane_full_size_offset(wp, &xoff, &yoff, &sx, &sy);
 
 	edge = xoff;
-	if (edge == 0)
+	if (edge == gap - 1)
 		edge = (int)w->sx + 1;
 
 	top = yoff;
@@ -2403,7 +2448,7 @@ window_pane_find_left(struct window_pane *wp)
 		window_pane_full_size_offset(next, &xoff, &yoff, &sx, &sy);
 		if (next == wp)
 			continue;
-		if (xoff + (int)sx + 1 != edge)
+		if (xoff + (int)sx + gap != edge)
 			continue;
 		end = yoff + (int)sy - 1;
 
@@ -2431,22 +2476,25 @@ window_pane_find_right(struct window_pane *wp)
 {
 	struct window		*w;
 	struct window_pane	*next, *best, **list;
-	int			 edge, top, bottom, end, found;
+	int			 edge, top, bottom, end, found, gap;
 	int			 xoff, yoff;
 	u_int			 size, sx, sy;
 
 	if (wp == NULL)
 		return (NULL);
 	w = wp->window;
+	gap = 1;
+	if (window_border_type_is_separate(w))
+		gap = 2;
 
 	list = NULL;
 	size = 0;
 
 	window_pane_full_size_offset(wp, &xoff, &yoff, &sx, &sy);
 
-	edge = xoff + (int)sx + 1;
+	edge = xoff + (int)sx + gap;
 	if (edge >= (int)w->sx)
-		edge = 0;
+		edge = gap - 1;
 
 	top = wp->yoff;
 	bottom = wp->yoff + (int)wp->sy;
@@ -2555,17 +2603,17 @@ window_pane_input_callback(struct client *c, __unused const char *path,
 	size_t				 len = EVBUFFER_LENGTH(buffer);
 
 	wp = window_pane_find_by_id(cdata->wp);
-	if (cdata->file != NULL && (wp == NULL || c->flags & CLIENT_DEAD)) {
-		if (wp == NULL) {
-			c->retval = 1;
-			c->flags |= CLIENT_EXIT;
-		}
-		file_cancel(cdata->file);
-	} else if (cdata->file == NULL || closed || error != 0) {
+	if (cdata->file != NULL && wp == NULL) {
+		c->retval = 1;
+		c->flags |= CLIENT_EXIT;
+	}
+	if (cdata->file == NULL || closed || error != 0) {
 		cmdq_continue(cdata->item);
 		server_client_unref(c);
 		free(cdata);
-	} else
+	} else if (wp == NULL)
+		file_cancel(cdata->file);
+	else
 		input_parse_buffer(wp, buf, len);
 	evbuffer_drain(buffer, len);
 }
@@ -2581,7 +2629,7 @@ window_pane_start_input(struct window_pane *wp, struct cmdq_item *item,
 		*cause = xstrdup("pane is not empty");
 		return (-1);
 	}
-	if (c->flags & (CLIENT_DEAD|CLIENT_EXITED))
+	if (c == NULL || (c->flags & (CLIENT_DEAD|CLIENT_EXITED)))
 		return (1);
 	if (c->session != NULL)
 		return (1);
@@ -2959,6 +3007,14 @@ window_get_pane_status(struct window *w)
 	    status == PANE_STATUS_BOTTOM_FLOATING)
 		return (PANE_STATUS_OFF);
 	return (status);
+}
+
+int
+window_border_type_is_separate(struct window *w)
+{
+	int	type = options_get_number(w->options, "pane-border-type");
+
+	return (type != PANE_BORDER_TYPE_JOINED);
 }
 
 int

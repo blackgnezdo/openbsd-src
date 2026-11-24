@@ -1,4 +1,4 @@
-/*	$OpenBSD: http.c,v 1.111 2026/11/03 08:34:28 claudio Exp $ */
+/*	$OpenBSD: http.c,v 1.113 2026/11/23 09:55:57 tb Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -1488,6 +1488,7 @@ http_parse_header(struct http_connection *conn, char *buf)
 			free(redirurl);
 			return -1;
 		}
+		free(conn->redir_uri);
 		conn->redir_uri = redirurl;
 	} else if (strncasecmp(cp, TRANSFER_ENCODING,
 	    sizeof(TRANSFER_ENCODING) - 1) == 0) {
@@ -2024,7 +2025,8 @@ data_inflate_write(struct http_connection *conn)
 
 	conn->totalsz += s;
 	if (conn->totalsz > MAX_CONTENTLEN) {
-		warn("%s: too much decompressed data offered", conn_info(conn));
+		warnx("%s: too much decompressed data offered",
+		    conn_info(conn));
 		return http_failed(conn);
 	}
 

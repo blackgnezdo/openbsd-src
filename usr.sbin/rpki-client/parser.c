@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.207 2026/11/13 00:18:08 tb Exp $ */
+/*	$OpenBSD: parser.c,v 1.214 2026/11/23 11:26:36 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -343,7 +343,8 @@ proc_parser_mft_check(const char *fn, struct mft *mft)
 			continue;
 		}
 
-		if (m->type != RTYPE_INVALID)
+		/* invalid and CRL files do not add more work */
+		if (m->type != RTYPE_INVALID && m->type != RTYPE_CRL)
 			items++;
 	}
 
@@ -363,8 +364,6 @@ parse_load_crl_from_mft(struct mft *mft, enum location loc, char **crlfile)
 	unsigned char	*f = NULL;
 	char		*fn = NULL;
 	size_t		 flen;
-
-	*crlfile = NULL;
 
 	fn = mft_filepath(mft, mft->crl, loc);
 	if (fn == NULL)
@@ -426,10 +425,6 @@ proc_parser_mft_pre(struct entity *ent, char *file, struct crl **crl,
 	size_t		 len;
 	time_t		 now;
 	int		 issued_cmp, seqnum_cmp;
-
-	*crl = NULL;
-	*crlfile = NULL;
-	*errstr = NULL;
 
 	if (file == NULL)
 		return NULL;
@@ -560,6 +555,7 @@ proc_parser_mft(struct entity *ent, struct mft **mp, char **crlfile,
 	const char	*err1 = NULL, *err2 = NULL;
 
 	*mp = NULL;
+	*crlfile = NULL;
 	*crlmtime = 0;
 
 	file2 = parse_filepath(ent->repoid, ent->file, DIR_VALID);
@@ -663,10 +659,9 @@ proc_enqueue_mft(struct entityq *mftq, const struct mft *mft, const char *file)
 		inserted++;
 	}
 
-	/* account for the one skipped RTYPE_CRL in the check below */
-	if (inserted + 1 != mft->work_items)
+	if (inserted != mft->work_items)
 		errx(1, "%s#%s: bad count of workitems, %zu vs %zu",
-		    file, mft->seqnum, inserted + 1, mft->work_items);
+		    file, mft->seqnum, inserted, mft->work_items);
 }
 
 /*
@@ -731,7 +726,8 @@ proc_parser_cert(char *file, const unsigned char *der, size_t len,
 		}
 
 		memcpy(cert->mfthash, ent->data, ent->datasz);
-		auth_insert(file, &auths, cert, a, crl);
+		if (auth_insert(file, &auths, cert, a, crl) == NULL)
+			goto out;
 	}
 
 	return cert;
@@ -751,12 +747,11 @@ proc_parser_ta_cmp(const struct cert *cert1, const struct cert *cert2)
 		return 1;
 
 	/*
-	 * The standards don't specify tiebreakers. While RFC 6487 and other
-	 * sources advise against backdating, it's explicitly allowed and some
-	 * TAs do. Some TAs have also re-issued with new dates and old
-	 * serialNumber.
-	 * Our tiebreaker logic: a more recent notBefore is taken to mean a
-	 * more recent issuance, and thus preferable. Given equal notBefore
+	 * While RFC 6487 and other sources advise against backdating, it's
+	 * explicitly allowed and some TAs do. Some TAs have also re-issued
+	 * with new dates and old serialNumber.
+	 * RFC 10097 tiebreaker logic: a more recent notBefore is taken to mean
+	 * a more recent issuance, and thus preferable. Given equal notBefore
 	 * values, prefer the TA cert with the narrower validity window. This
 	 * hopefully encourages TA operators to reduce egregiously long TA
 	 * validity periods.
@@ -820,7 +815,11 @@ proc_parser_root_cert(struct entity *ent, struct cert **out_cert)
 
 		cert1->talid = ent->talid;
 		cert1->issuerid = ent->talid;
-		auth_insert(file1, &auths, cert1, NULL, NULL);
+		if (auth_insert(file1, &auths, cert1, NULL, NULL) == NULL) {
+			warnx("%s: insertion into auth tree failed", ent->file);
+			cert_free(cert1);
+			cert1 = NULL;
+		}
 
 		*out_cert = cert1;
 		return file1;
@@ -835,7 +834,13 @@ proc_parser_root_cert(struct entity *ent, struct cert **out_cert)
 			cert2->issuerid = ent->talid;
 			if ((cert2->path = strdup(file2)) == NULL)
 				err(1, NULL);
-			auth_insert(file2, &auths, cert2, NULL, NULL);
+			if (auth_insert(file2, &auths, cert2, NULL,
+			    NULL) == NULL) {
+				warnx("%s: insertion into auth tree failed",
+				    ent->file);
+				cert_free(cert2);
+				cert2 = NULL;
+			}
 		}
 
 		*out_cert = cert2;
@@ -1020,12 +1025,14 @@ parse_entity(struct entityq *q, struct ibufqueue *msgq, struct entityq *mftq,
 			if (cert != NULL) {
 				cert->repoid = ent->repoid;
 				cert_buffer(b, cert);
+
+				/*
+				 * The auth_tree owns TA and CA certs.
+				 * BGPsec certs need to be freed.
+				 */
+				if (cert->purpose == CERT_PURPOSE_BGPSEC_ROUTER)
+					cert_free(cert);
 			}
-			/*
-			 * The parsed certificate data "cert" is now
-			 * managed in the "auths" table, so don't free
-			 * it here.
-			 */
 			break;
 		case RTYPE_MFT:
 			file = proc_parser_mft(ent, &mft, &crlfile, &crlmtime,
