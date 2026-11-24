@@ -1,0 +1,14 @@
+pf_state_import
+pf_alloc_state_key
+pf_state_alloc_scrub_memory
+pf_state_peer_ntoh
+pf_state_key_ref
+pf_state_key_unref
+pf_state_key_isvalid
+pfi_kif_get
+pfi_kif_find
+pfi_kif_free
+pfi_kif_ref
+pfi_kif_unref
+pf_normalize_tcp_alloc
+pf_state_scrub_get

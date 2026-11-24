@@ -1,0 +1,7 @@
+refcnt_take:model_refcnt_take
+refcnt_rele:model_refcnt_rele
+tdb_hash:model_tdb_hash
+tdb_free:model_tdb_free
+mtx_enter:model_mtx_enter
+mtx_leave:model_mtx_leave
+rw_status:model_rw_status

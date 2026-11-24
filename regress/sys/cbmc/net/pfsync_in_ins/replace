@@ -1,0 +1,16 @@
+pool_get:model_pool_get
+pool_put:model_pool_put
+refcnt_init:model_refcnt_init
+refcnt_take:model_refcnt_take
+refcnt_rele:model_refcnt_rele
+rw_enter_write:model_rw_enter_write
+rw_exit_write:model_rw_exit_write
+rw_status:model_rw_status
+splassert_fail:model_splassert_fail
+pf_state_insert:model_state_insert
+pf_pkt_hash:model_pkt_hash
+pfi_ifhead_RB_FIND:model_kif_find
+pfi_ifhead_RB_INSERT:model_kif_insert
+getuptime:model_getuptime
+pfi_kif_alloc:model_kif_alloc
+pfi_ifhead_RB_REMOVE:model_kif_remove

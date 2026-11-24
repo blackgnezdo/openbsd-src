@@ -1,0 +1,7 @@
+if_pfsync.c:tdb = gettdb(ntohs(pt->rdomain), pt->spi,
+if_pfsync.c:pfsyncstat_inc(pfsyncs_badstate);
+if_pfsync.c:uint64_t rpl = betoh64(pt->rpl);
+if_pfsync.c:tdb->tdb_rpl = rpl;
+if_pfsync.c:tdb_unref(tdb);
+ip_ipsp.c:hashval = tdb_hash(spi, dst, proto);
+ip_ipsp.c:tdb_ref(tdbp);

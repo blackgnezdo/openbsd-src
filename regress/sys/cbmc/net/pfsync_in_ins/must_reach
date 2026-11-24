@@ -1,0 +1,19 @@
+if_pfsync.c:if (sp->timeout >= PFTM_MAX
+if_pfsync.c:pfsyncstat_inc(pfsyncs_badval);
+if_pfsync.c:if (pf_state_import(sp, PFSYNC_SI_PFSYNC) == ENOMEM) {
+pf.c:if ((kif = pfi_kif_get(sp->ifname, NULL)) == NULL) {
+pf.c:if (sp->af == 0)
+pf.c:if ((r->max_states && r->states_cur >= r->max_states))
+pf.c:if ((st = pool_get(&pf_state_pl, pool_flags)) == NULL)
+pf.c:if ((skw = pf_alloc_state_key(pool_flags)) == NULL)
+pf.c:if ((sks = pf_alloc_state_key(pool_flags)) == NULL)
+pf.c:sks = pf_state_key_ref(skw);
+pf.c:if (pf_state_alloc_scrub_memory(&sp->src, &st->src) ||
+pf.c:timeout = r->timeout[sp->timeout];
+pf.c:pf_state_peer_ntoh(&sp->src, &st->src);
+pf.c:if (pf_state_insert(kif, &skw, &sks, st) != 0) {
+pf.c:error = EEXIST;
+pf.c:if (skw != NULL)
+pf.c:pool_put(&pf_state_scrub_pl, st->dst.scrub);
+pf_if.c:strlcpy(s.pfik_name, kif_name, sizeof(s.pfik_name));
+pf_if.c:kif = pfi_kif_alloc(kif_name, M_NOWAIT);

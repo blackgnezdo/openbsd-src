@@ -1303,8 +1303,10 @@ pf/pf_addrule
 	seeded with two entries.  Property: the tag tree is as before
 	(references balanced, no new entry).  String functions are
 	loop-free region models under CBMC, the real ones natively.
-	VERIFIED; mutant_prefix/ (before 34d59093f) and mutant/ (the
-	two unrefs removed) are VIOLATED on both tag properties.  Native: CLEAN with seeds.
+	VERIFIED; mutant_prefix/ (the two unrefs of 01fea79e8 removed;
+	upstream committed the fix without the comment of 34d59093f, so
+	the former mutant/ became identical to it and was dropped) is
+	VIOLATED on both tag properties.  Native: CLEAN with seeds.
 
 pf/pf_sourcelim_add
 	pf_sourcelim_add() (DIOCADDSOURCELIM) on an arbitrary request with
@@ -1491,6 +1493,44 @@ net/pfsync_input
 	and mutant/ (the remaining-length test loosened by one) are VIOLATED
 	on the declared length, mutant_mlen/ on the message size.  Check
 	phase about 8 minutes, 1.3 million variables (timeout 1800).
+
+net/pfsync_in_clr
+	pfsync_in_clr() of sys/net/if_pfsync.c with the real pfi_kif_find
+	and strlcpy, on 1 or 2 messages of 20 or 24 bytes of arbitrary
+	content at the end of one object (what net/pfsync_input proves the
+	handler gets); 0..2 states, the kif tree a model returning NULL or
+	one kif.  VERIFIED: no read in or past the buffer out of bounds, no
+	leak, removed states were listed.  mutant_prefix/ (before
+	0c58720fc) is VIOLATED: strlcpy reads an unterminated ifname past
+	the last message.  Native: CLEAN.  Check phase about 10 s.
+
+net/pfsync_in_ins
+	pfsync_in_ins() of sys/net/if_pfsync.c and pf_state_import() of
+	sys/net/pf.c for PFSYNC_SI_PFSYNC, on 1 or 2 messages of 264 or 268
+	bytes of arbitrary content; real kif code with strlcpy, real state
+	key and scrub allocation, pf_state_insert a model asserting what the
+	handler validated.  VERIFIED: no out-of-bounds access, pool items,
+	key references, scrub buffers and kifs released, states_cur and
+	states_tot grow by the states inserted, indexes from the message in
+	range, locks released.  mutant_prefix/ (pf.c before 0c58720fc) is
+	VIOLATED on the strlcpy over-read of an unterminated ifname;
+	mutant_timeout and mutant_direction (a validation one too weak),
+	mutant_keyref and mutant_states_cur (an error path's release
+	removed) are VIOLATED.  Native: CLEAN.  Check phase about 60 s,
+	6.5 million variables.
+
+net/pfsync_in_tdb
+	pfsync_in_tdb() and pfsync_update_net_tdb() of sys/net/if_pfsync.c
+	with IPSEC, on 1 or 2 messages of 52 or 56 bytes of arbitrary
+	content, with the real gettdb_dir, tdb_ref and tdb_unref of
+	sys/netinet/ip_ipsp.c; tdb_hash a model asserting that dst is
+	readable for sa_len bytes within its message.  VERIFIED: no
+	out-of-bounds access, lookup only with a valid SPI and family, the
+	tdb reference dropped, tdb_rpl and tdb_cur_bytes never decrease.
+	mutant_prefix/ (before 0c58720fc) and mutant_salen (the AF_INET6
+	sa_len test as <) are VIOLATED on the read past the message;
+	mutant_spi, mutant_rpl, mutant_bytes on their properties.  Native:
+	CLEAN.  Check phase about 140 s, 2.8 million variables.
 
 net/pfsync_in_del
 	The lookup-and-act handlers of sys/net/if_pfsync.c, pfsync_in_iack,
