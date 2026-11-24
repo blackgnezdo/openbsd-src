@@ -1,0 +1,5 @@
+if_pfsync.c:kif = pfi_kif_find(clr->ifname);
+if_pfsync.c:SET(st->state_flags, PFSTATE_NOSYNC);
+if_pfsync.c:if (kif != NULL && kif != st->kif)
+pf_if.c:strlcpy(s.pfik_name, kif_name, sizeof(s.pfik_name));
+pf_if.c:return (RB_FIND(pfi_ifhead, &pfi_ifs

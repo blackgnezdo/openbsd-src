@@ -5,6 +5,33 @@ undecided.  Remove an entry when the fix is committed and its target
 has a mutant_prefix/.  "read" = established by reading the source
 only; "cbmc" / "native" = reproduced by that engine.
 
+Fixed on this branch and not upstream
+	As of the merge of origin/master (0805a0844, upstream tip
+	8845c060b), these kernel commits of this branch are not in
+	upstream (checked by applying each in reverse to upstream).
+	e3dbf8882, 96dde7faa, 569b20305	arp_rtrequest gateway checks
+	12a68fffb	arplookup proxy entries need RTF_LLINFO, AF_LINK
+	ad7fd44ef	nd6_rtrequest gateway check
+	089ef3708	nd6_ns_input proxy entries need rt_llinfo
+	6ca40947c	nd6_options length before the pointer
+	c96dfb7c1	ip6_process_hopopts pointer outside the option area
+	bc9869d9a	route6_input Parameter Problem pointer
+	919b4452a	bpe_add_addr endpoint inside the request
+	d415e63fa	pfsync_input header length below the header's size
+	584889ed7	rtm_setmetrics/rtm_getmetrics expiry overflow
+	284374d1b	rtm_xaddrs pointers past the message
+	f3ca3aa5c	ieee80211_parse_rsn_body pointer formation
+	bb2c37b4a	m_dup1 packet header mbuf
+	76f5dd290, 916018f12	ipmi SMIC loop bound, BMC reply length
+	1eb9b557e	acpimadt_validate entry header
+	3eb637104	udf_getfid fragment lengths
+	Upstream has, in the same form: 0c58720fc (pfsync peer reads,
+	targets net/pfsync_in_clr, _ins, _tdb), 01fea79e8 and 0615bc1fb
+	(pf tags, /0 mask; 34d59093f, 5260cd972 here), 2f6d8ba00
+	(icmp6_redirect_input, 5d53f1e73 here); in another form:
+	981d5bb7b (msg_copyout, ulmin; c36507b4f here), 77a3fab0d
+	(usbd_open_pipe_intr; 065cab7e9 here).
+
 Unfixed, with a failing target
 
 ffs/mountfs (cbmc)
