@@ -764,10 +764,22 @@ nd6_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 			rt->rt_expire = 0;
 		/* FALLTHROUGH */
 	case RTM_RESOLVE:
+		/*
+		 * nd6_cache_lladdr() and nd6_na_input() later store
+		 * if_addrlen bytes at LLADDR: there must be room.
+		 */
 		if (gate->sa_family != AF_LINK ||
-		    gate->sa_len < sizeof(struct sockaddr_dl)) {
+		    gate->sa_len < sizeof(struct sockaddr_dl) ||
+		    gate->sa_len < offsetof(struct sockaddr_dl, sdl_data) +
+		    satosdl(gate)->sdl_nlen + ifp->if_addrlen) {
 			log(LOG_DEBUG, "%s: bad gateway value: %s\n",
 			    __func__, ifp->if_xname);
+			/*
+			 * RTM_CHANGE may have replaced the gateway of an
+			 * entry with neighbor information: drop it.
+			 */
+			if (rt->rt_llinfo != NULL)
+				nd6_rtrequest(ifp, RTM_DELETE, rt);
 			break;
 		}
 		satosdl(gate)->sdl_type = ifp->if_type;

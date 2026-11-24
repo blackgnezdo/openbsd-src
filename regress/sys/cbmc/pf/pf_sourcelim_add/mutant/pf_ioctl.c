@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_ioctl.c,v 1.438 2026/11/08 08:42:55 miod Exp $ */
+/*	$OpenBSD: pf_ioctl.c,v 1.440 2026/11/23 16:04:46 gnezdo Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -345,7 +345,6 @@ pf_rule_free(struct pf_rule *rule)
 	if (rule == NULL)
 		return;
 
-	/* tag references pf_rule_copyin() took, as pf_rm_rule() drops */
 	pf_tag_unref(rule->tag);
 	pf_tag_unref(rule->match_tag);
 
@@ -1464,8 +1463,7 @@ pf_sourcelim_add(const struct pfioc_sourcelim *ioc)
 		pfsrlim->pfsrlim_rate_bucket = bucket;
 	}
 
-	/* prefix 0 keeps the zeroed mask; a shift by 32 is undefined */
-	if (pfsrlim->pfsrlim_ipv4_prefix != 0)
+	if (pfsrlim->pfsrlim_ipv4_prefix > 0)
 		pfsrlim->pfsrlim_ipv4_mask.v4.s_addr =
 		    htonl(0xffffffff << (32 - pfsrlim->pfsrlim_ipv4_prefix));
 
