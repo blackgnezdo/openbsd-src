@@ -181,7 +181,8 @@ Running the suite
 	mutant run is one job (xargs -P), targets with a timeout file first.
 	The report is printed at the end, in the order of -j 1; meanwhile
 	one "done <name> <result>" line per job goes to stderr.  The floor
-	is the longest single run (net/pfsync_input, about 23 minutes; the
+	is the longest single run (net/pfsync_input: cover and check about
+	8 minutes each quiet, 23 minutes together under load; the
 	tcp_sack_holes and tcp_dooptions runs 10 to 18).  Memory: each cbmc
 	run may use CBMC_MEMLIMIT_MB (6000); most use far less, but N
 	should not exceed the memory divided by about 4 GB.  Timings under
@@ -1508,8 +1509,9 @@ net/pfsync_input
 	out-of-bounds access, no leak, references balanced.  mutant_prefix/
 	(before d415e63fa: a header length below 20 drove m_pkthdr.len negative)
 	and mutant/ (the remaining-length test loosened by one) are VIOLATED
-	on the declared length, mutant_mlen/ on the message size.  Check
-	phase about 8 minutes, 1.3 million variables (timeout 1800).
+	on the declared length, mutant_mlen/ on the message size.  Cover
+	and check phase about 8 minutes each, 1.3 million variables, half
+	of it symbolic execution (timeout 1800).
 
 net/pfsync_in_clr
 	pfsync_in_clr() of sys/net/if_pfsync.c with the real pfi_kif_find
