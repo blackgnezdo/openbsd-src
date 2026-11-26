@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-keygen.c,v 1.500 2026/10/30 08:23:58 djm Exp $ */
+/* $OpenBSD: ssh-keygen.c,v 1.504 2026/11/26 06:24:26 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1994 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -1290,10 +1290,11 @@ do_known_hosts(struct passwd *pw, const char *name, int find_host,
     int delete_host, int hash_hosts)
 {
 	char *cp, tmp[PATH_MAX], old[PATH_MAX];
-	int r, fd, oerrno, inplace = 0;
+	int r, fd = -1, infd, oerrno, inplace;
 	struct known_hosts_ctx ctx;
 	u_int foreach_options;
 	struct stat sb;
+	FILE *in;
 
 	if (!have_identity) {
 		cp = tilde_expand_filename(_PATH_SSH_USER_HOSTFILE, pw->pw_uid);
@@ -1303,8 +1304,26 @@ do_known_hosts(struct passwd *pw, const char *name, int find_host,
 		free(cp);
 		have_identity = 1;
 	}
-	if (stat(identity_file, &sb) != 0)
+
+	/*
+	 * Find hosts goes to stdout, hash and deletions happen in-place
+	 * A corner case is ssh-keygen -HF foo, which should go to stdout
+	 */
+	inplace = !find_host && (hash_hosts || delete_host);
+
+	/*
+	 * Open the file once and take both its mode and its contents from
+	 * that descriptor, so the permissions applied to the copy are those
+	 * of the file actually read.
+	 */
+	if ((infd = open(identity_file, O_RDONLY)) == -1)
+		fatal("Cannot open %s: %s", identity_file, strerror(errno));
+	if (fstat(infd, &sb) != 0)
 		fatal("Cannot stat %s: %s", identity_file, strerror(errno));
+	if (inplace && !S_ISREG(sb.st_mode))
+		fatal("%s is not a regular file", identity_file);
+	if ((in = fdopen(infd, "r")) == NULL)
+		fatal("fdopen: %s", strerror(errno));
 
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.out = stdout;
@@ -1313,11 +1332,7 @@ do_known_hosts(struct passwd *pw, const char *name, int find_host,
 	ctx.find_host = find_host;
 	ctx.delete_host = delete_host;
 
-	/*
-	 * Find hosts goes to stdout, hash and deletions happen in-place
-	 * A corner case is ssh-keygen -HF foo, which should go to stdout
-	 */
-	if (!find_host && (hash_hosts || delete_host)) {
+	if (inplace) {
 		if (strlcpy(tmp, identity_file, sizeof(tmp)) >= sizeof(tmp) ||
 		    strlcat(tmp, ".XXXXXXXXXX", sizeof(tmp)) >= sizeof(tmp) ||
 		    strlcpy(old, identity_file, sizeof(old)) >= sizeof(old) ||
@@ -1331,25 +1346,33 @@ do_known_hosts(struct passwd *pw, const char *name, int find_host,
 			unlink(tmp);
 			fatal("fdopen: %s", strerror(oerrno));
 		}
-		(void)fchmod(fd, sb.st_mode & 0644);
-		inplace = 1;
 	}
 	/* XXX support identity_file == "-" for stdin */
 	foreach_options = find_host ? HKF_WANT_MATCH : 0;
 	foreach_options |= print_fingerprint ? HKF_WANT_PARSE_KEY : 0;
-	if ((r = hostkeys_foreach(identity_file, (find_host || !hash_hosts) ?
+	if ((r = hostkeys_foreach_file(identity_file, in,
+	    (find_host || !hash_hosts) ?
 	    known_hosts_find_delete : known_hosts_hash, &ctx, name, NULL,
 	    foreach_options, 0)) != 0) {
 		if (inplace)
 			unlink(tmp);
 		fatal_fr(r, "hostkeys_foreach");
 	}
+	fclose(in);
 
 	/* Don't replace the original with an incompletely-written copy */
-	if (inplace && (ferror(ctx.out) || fclose(ctx.out) != 0)) {
-		oerrno = errno;
-		unlink(tmp);
-		fatal("write %s: %s", tmp, strerror(oerrno));
+	if (inplace) {
+		/*
+		 * Keep the copy private unless it is about to replace the
+		 * original, in which case it inherits the original's mode.
+		 */
+		if (!ctx.invalid && (!delete_host || ctx.found_key) && fd != -1)
+			(void)fchmod(fd, sb.st_mode & 0644);
+		if (ferror(ctx.out) || fclose(ctx.out) != 0) {
+			oerrno = errno;
+			unlink(tmp);
+			fatal("write %s: %s", tmp, strerror(oerrno));
+		}
 	}
 
 	if (ctx.invalid) {
@@ -2092,10 +2115,26 @@ add_cert_option(char *opt)
 		fatal("Unsupported certificate option \"%s\"", opt);
 }
 
+/*
+ * Prepare a string taken from a certificate or key file for display.
+ * Escapes control characters, including newlines, so they can't mess up
+ * the output. Caller must free the result.
+ */
+static char *
+escape_string(const char *s)
+{
+	char *ret;
+	int width = INT_MAX;
+
+	if (asmprintf(&ret, INT_MAX, &width, "%s", s) == -1)
+		fatal_f("asmprintf failed");
+	return ret;
+}
+
 static void
 show_options(struct sshbuf *optbuf, int in_critical)
 {
-	char *name, *arg, *hex;
+	char *name, *arg, *hex, *esc;
 	struct sshbuf *options, *option = NULL;
 	int r;
 
@@ -2107,7 +2146,9 @@ show_options(struct sshbuf *optbuf, int in_critical)
 		if ((r = sshbuf_get_cstring(options, &name, NULL)) != 0 ||
 		    (r = sshbuf_froms(options, &option)) != 0)
 			fatal_fr(r, "parse option");
-		printf("                %s", name);
+		esc = escape_string(name);
+		printf("                %s", esc);
+		free(esc);
 		if (!in_critical &&
 		    (strcmp(name, "permit-X11-forwarding") == 0 ||
 		    strcmp(name, "permit-agent-forwarding") == 0 ||
@@ -2121,7 +2162,9 @@ show_options(struct sshbuf *optbuf, int in_critical)
 		    strcmp(name, "source-address") == 0)) {
 			if ((r = sshbuf_get_cstring(option, &arg, NULL)) != 0)
 				fatal_fr(r, "parse critical");
-			printf(" %s\n", arg);
+			esc = escape_string(arg);
+			printf(" %s\n", esc);
+			free(esc);
 			free(arg);
 		} else if (in_critical &&
 		    strcmp(name, "verify-required") == 0) {
@@ -2145,7 +2188,7 @@ show_options(struct sshbuf *optbuf, int in_critical)
 static void
 print_cert(struct sshkey *key)
 {
-	char valid[64], *key_fp, *ca_fp;
+	char valid[64], *key_fp, *ca_fp, *esc;
 	u_int i;
 
 	key_fp = sshkey_fingerprint(key, fingerprint_hash, SSH_FP_DEFAULT);
@@ -2161,16 +2204,20 @@ print_cert(struct sshkey *key)
 	printf("        Signing CA: %s %s (using %s)\n",
 	    sshkey_type(key->cert->signature_key), ca_fp,
 	    key->cert->signature_type);
-	printf("        Key ID: \"%s\"\n", key->cert->key_id);
+	esc = escape_string(key->cert->key_id);
+	printf("        Key ID: \"%s\"\n", esc);
+	free(esc);
 	printf("        Serial: %llu\n", (unsigned long long)key->cert->serial);
 	printf("        Valid: %s\n", valid);
 	printf("        Principals: ");
 	if (key->cert->nprincipals == 0)
 		printf("(none)\n");
 	else {
-		for (i = 0; i < key->cert->nprincipals; i++)
-			printf("\n                %s",
-			    key->cert->principals[i]);
+		for (i = 0; i < key->cert->nprincipals; i++) {
+			esc = escape_string(key->cert->principals[i]);
+			printf("\n                %s", esc);
+			free(esc);
+		}
 		printf("\n");
 	}
 	printf("        Critical Options: ");
@@ -2516,11 +2563,14 @@ check_krl_key(struct ssh_krl *krl, const struct sshkey *k,
     const char *path, const char *comment)
 {
 	int r;
+	char *esc;
 
 	r = ssh_krl_check_key(krl, k);
+	esc = escape_string(comment);
 	printf("%s%s%s%s: %s\n", path,
-	    *comment ? " (" : "", comment, *comment ? ")" : "",
+	    *esc ? " (" : "", esc, *esc ? ")" : "",
 	    r == 0 ? "ok" : "REVOKED");
+	free(esc);
 	return r != 0;
 }
 
@@ -2923,7 +2973,8 @@ sig_verify(const char *signature, const char *sig_namespace,
 	}
 
 	if (allowed_keys != NULL && (r = sshsig_check_allowed_keys(allowed_keys,
-	    sign_key, principal, sig_namespace, verify_time)) != 0) {
+	    sign_key, principal, sig_namespace, verify_time,
+	    sig_details)) != 0) {
 		debug3_fr(r, "sshsig_check_allowed_keys");
 		goto done;
 	}

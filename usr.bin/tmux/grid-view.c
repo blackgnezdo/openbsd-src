@@ -1,4 +1,4 @@
-/* $OpenBSD: grid-view.c,v 1.40 2026/10/20 12:47:57 nicm Exp $ */
+/* $OpenBSD: grid-view.c,v 1.42 2026/11/26 12:35:47 nicm Exp $ */
 
 /*
  * Copyright (c) 2008 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -53,12 +53,11 @@ grid_view_set_padding(struct grid *gd, u_int px, u_int py, int bg)
 }
 
 /* Set cells. */
-void
-grid_view_set_cells(struct grid *gd, u_int px, u_int py,
-    const struct grid_cell *gc, const char *s, size_t slen)
+int
+grid_view_set_cells(struct grid *gd, u_int *px, u_int py,
+    const struct grid_cell *gc, const char *s, u_int *nx, int check)
 {
-	grid_set_cells(gd, grid_view_x(gd, px), grid_view_y(gd, py), gc, s,
-	    slen);
+	return (grid_set_cells(gd, px, grid_view_y(gd, py), gc, s, nx, check));
 }
 
 /* Clear into history. */
@@ -101,11 +100,23 @@ grid_view_clear(struct grid *gd, u_int px, u_int py, u_int nx, u_int ny,
 	grid_clear(gd, px, py, nx, ny, bg);
 }
 
+/* Discard a line and its image spans. */
+static void
+grid_view_discard_line(struct grid *gd, u_int py, u_int bg)
+{
+	grid_free_lines(gd, py, 1);
+	grid_empty_line(gd, py, bg);
+	if (py != 0)
+		gd->linedata[py - 1].flags &= ~GRID_LINE_WRAPPED;
+}
+
 /* Scroll region up. */
 void
 grid_view_scroll_region_up(struct grid *gd, u_int rupper, u_int rlower,
     u_int bg)
 {
+	u_int	n = rlower - rupper;
+
 	if (gd->flags & GRID_HISTORY) {
 		grid_collect_history(gd, 0);
 		if (rupper == 0 && rlower == gd->sy - 1)
@@ -117,8 +128,11 @@ grid_view_scroll_region_up(struct grid *gd, u_int rupper, u_int rlower,
 		}
 	} else {
 		rupper = grid_view_y(gd, rupper);
-		rlower = grid_view_y(gd, rlower);
-		grid_move_lines(gd, rupper, rupper + 1, rlower - rupper, bg);
+		if (n == 0) {
+			grid_view_discard_line(gd, rupper, bg);
+			return;
+		}
+		grid_move_lines(gd, rupper, rupper + 1, n, bg);
 	}
 }
 
@@ -127,10 +141,15 @@ void
 grid_view_scroll_region_down(struct grid *gd, u_int rupper, u_int rlower,
     u_int bg)
 {
-	rupper = grid_view_y(gd, rupper);
-	rlower = grid_view_y(gd, rlower);
+	u_int	n = rlower - rupper;
 
-	grid_move_lines(gd, rupper + 1, rupper, rlower - rupper, bg);
+	rupper = grid_view_y(gd, rupper);
+
+	if (n == 0) {
+		grid_view_discard_line(gd, rupper, bg);
+		return;
+	}
+	grid_move_lines(gd, rupper + 1, rupper, n, bg);
 }
 
 /* Insert lines. */

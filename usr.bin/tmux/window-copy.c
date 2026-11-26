@@ -1,4 +1,4 @@
-/* $OpenBSD: window-copy.c,v 1.448 2026/11/22 14:17:18 nicm Exp $ */
+/* $OpenBSD: window-copy.c,v 1.452 2026/11/26 08:00:21 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -291,6 +291,7 @@ struct window_copy_mode_data {
 	u_int		 sync_added;	/* snapshot of backing grid counters */
 	u_int		 sync_collected;
 	u_int		 sync_generation;
+	u_int		 sync_resize_generation;
 
 	int		 viewmode;	/* view mode entered */
 
@@ -480,6 +481,7 @@ window_copy_sync_snapshot(struct window_copy_mode_data *data, struct grid *src)
 	data->sync_added = src->scroll_added;
 	data->sync_collected = src->scroll_collected;
 	data->sync_generation = src->scroll_generation;
+	data->sync_resize_generation = src->resize_generation;
 }
 
 /*
@@ -513,9 +515,10 @@ window_copy_sync_backing(struct window_mode_entry *wme)
 	if (data->viewmode || wme->swp != wme->wp)
 		return (0);
 
-	/* Indices only line up at the same size and generation. */
+	/* A resize can expose history for editing. */
 	if (sg->sx != dg->sx || sg->sy != dg->sy ||
-	    sg->scroll_generation != data->sync_generation)
+	    sg->scroll_generation != data->sync_generation ||
+	    sg->resize_generation != data->sync_resize_generation)
 		return (0);
 
 	added = sg->scroll_added - data->sync_added;
@@ -531,12 +534,14 @@ window_copy_sync_backing(struct window_mode_entry *wme)
 	    old_hsize + added - collected != new_hsize)
 		return (0);
 
+	/* Clearing the top row can unwrap the last history row. */
 	kept = old_hsize - collected;
+	if (kept != 0 && (~sg->linedata[kept - 1].flags & GRID_LINE_WRAPPED))
+		dg->linedata[old_hsize - 1].flags &= ~GRID_LINE_WRAPPED;
 
-	if (added == 0 && collected == 0) {
-		/* History is unchanged; only the viewport can have mutated. */
+	if (added == 0 && collected == 0)
 		grid_duplicate_lines(dg, dg->hsize, sg, sg->hsize, sy);
-	} else {
+	else {
 		/* Drop the oldest lines and shift the rest down. */
 		if (collected > 0) {
 			grid_free_lines(dg, 0, collected);
@@ -588,8 +593,10 @@ window_copy_common_init(struct window_mode_entry *wme)
 	struct window_copy_mode_data	*data;
 	struct options			*oo = wp->window->options;
 	struct screen			*base = &wp->base;
+	struct screen			*s;
 
 	wme->data = data = xcalloc(1, sizeof *data);
+	s = &data->screen;
 
 	data->cursordrag = CURSORDRAG_NONE;
 	data->lineflag = LINE_SEL_NONE;
@@ -605,7 +612,9 @@ window_copy_common_init(struct window_mode_entry *wme)
 		data->searchregex = 0;
 		data->searchstr = NULL;
 	}
-	data->searchx = data->searchy = data->searcho = -1;
+	data->searchx = -1;
+	data->searchy = -1;
+	data->searcho = -1;
 	data->searchcount = -1;
 	data->searchindex = -1;
 	data->searchall = 1;
@@ -614,8 +623,8 @@ window_copy_common_init(struct window_mode_entry *wme)
 	data->jumpchar = NULL;
 	data->line_numbers = 1;
 
-	screen_init(&data->screen, screen_size_x(base), screen_size_y(base), 0);
-	screen_set_default_cursor(&data->screen, global_w_options);
+	screen_init(s, screen_size_x(base), screen_size_y(base), 0);
+	screen_set_copy_cursor(s, oo);
 	data->modekeys = options_get_number(oo, "mode-keys");
 
 	evtimer_set(&data->dragtimer, window_copy_scroll_timer, wme);
@@ -1103,10 +1112,12 @@ window_copy_cursor_hyperlink_cb(struct format_tree *ft)
 	struct window_pane		*wp = format_get_pane(ft);
 	struct window_mode_entry	*wme = TAILQ_FIRST(&wp->modes);
 	struct window_copy_mode_data	*data = wme->data;
-	struct grid			*gd = data->screen.grid;
+	struct screen			*s = &data->screen;
+	struct grid			*gd = s->grid;
+	u_int				 x;
 
-	return (format_grid_hyperlink(gd, data->cx, gd->hsize + data->cy,
-	    &data->screen));
+	x = window_copy_cursor_offset(wme, data->cx, screen_size_x(s));
+	return (format_grid_hyperlink(gd, x, gd->hsize + data->cy, s));
 }
 
 static void *
@@ -3204,6 +3215,16 @@ window_copy_cmd_search_forward_text(struct window_copy_cmd_state *cs)
 }
 
 static enum window_copy_cmd_action
+window_copy_cmd_search_reset(struct window_copy_cmd_state *cs)
+{
+	struct window_copy_mode_data	*data = cs->wme->data;
+
+	data->searchx = -1;
+	data->searchy = -1;
+	return (WINDOW_COPY_CMD_NOTHING);
+}
+
+static enum window_copy_cmd_action
 window_copy_cmd_search_incremental(struct window_copy_cmd_state *cs,
     int direction, int regex)
 {
@@ -3211,12 +3232,21 @@ window_copy_cmd_search_incremental(struct window_copy_cmd_state *cs,
 	struct window_copy_mode_data	*data = wme->data;
 	const char			*arg0 = args_string(cs->wargs, 0);
 	const char			*ss = data->searchstr;
+	u_int				 saved_cx, saved_cy, saved_oy, limit;
+	int				 found, keys;
 	char				 prefix;
 	enum window_copy_cmd_action	 action = WINDOW_COPY_CMD_MOVE;
 
 	data->timeout = 0;
 
 	log_debug("%s: %s", __func__, arg0);
+
+	keys = options_get_number(wme->wp->window->options, "mode-keys");
+	if (keys == MODEKEY_EMACS) {
+		saved_cx = data->cx;
+		saved_cy = data->cy;
+		saved_oy = data->oy;
+	}
 
 	prefix = *arg0++;
 	if (data->searchx == -1 || data->searchy == -1) {
@@ -3227,8 +3257,10 @@ window_copy_cmd_search_incremental(struct window_copy_cmd_state *cs,
 		data->cx = data->searchx;
 		data->cy = data->searchy;
 		data->oy = data->searcho;
-		data->cx = window_copy_cursor_limit(wme,
+		limit = window_copy_cursor_limit(wme,
 		    screen_hsize(data->backing) + data->cy - data->oy, 0);
+		if (data->cx > limit)
+			data->cx = limit;
 		action = WINDOW_COPY_CMD_REDRAW;
 	}
 	if (*arg0 == '\0') {
@@ -3251,12 +3283,20 @@ window_copy_cmd_search_incremental(struct window_copy_cmd_state *cs,
 	data->searchregex = regex;
 	free(data->searchstr);
 	data->searchstr = xstrdup(arg0);
-	if (data->searchtype == WINDOW_COPY_SEARCHUP) {
-		if (!window_copy_search_up(wme, regex))
-			return (WINDOW_COPY_CMD_REDRAW);
-	} else {
-		if (!window_copy_search_down(wme, regex))
-			return (WINDOW_COPY_CMD_REDRAW);
+	if (data->searchtype == WINDOW_COPY_SEARCHUP)
+		found = window_copy_search_up(wme, regex);
+	else
+		found = window_copy_search_down(wme, regex);
+	if (!found) {
+		if (keys == MODEKEY_EMACS) {
+			data->cx = saved_cx;
+			data->cy = saved_cy;
+			if (data->oy != saved_oy) {
+				data->oy = saved_oy;
+				window_copy_search_marks(wme, NULL, regex, 1);
+			}
+		}
+		return (WINDOW_COPY_CMD_REDRAW);
 	}
 	return (action);
 }
@@ -4171,6 +4211,12 @@ static const struct {
 	  .clear = WINDOW_COPY_CMD_CLEAR_ALWAYS,
 	  .f = window_copy_cmd_search_forward_incremental_regex
 	},
+	{ .command = "search-reset",
+	  .args = { "", 0, 0, NULL },
+	  .flags = 0,
+	  .clear = WINDOW_COPY_CMD_CLEAR_NEVER,
+	  .f = window_copy_cmd_search_reset
+	},
 	{ .command = "search-reverse",
 	  .args = { "", 0, 0, NULL },
 	  .flags = 0,
@@ -4301,7 +4347,8 @@ window_copy_command(struct window_mode_entry *wme, struct client *c,
 			clear = WINDOW_COPY_CMD_CLEAR_NEVER;
 		if (clear != WINDOW_COPY_CMD_CLEAR_NEVER) {
 			window_copy_clear_marks(wme);
-			data->searchx = data->searchy = -1;
+			data->searchx = -1;
+			data->searchy = -1;
 		}
 		if (action == WINDOW_COPY_CMD_MOVE)
 			action = WINDOW_COPY_CMD_REDRAW;

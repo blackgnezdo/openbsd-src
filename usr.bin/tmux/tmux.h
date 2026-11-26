@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1497 2026/11/23 11:58:10 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1506 2026/11/26 15:59:01 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -530,6 +530,7 @@ enum tty_code_code {
 	TTYC_ENESC,
 	TTYC_ENFCS,
 	TTYC_ENMG,
+	TTYC_ESGR,
 	TTYC_FSL,
 	TTYC_HLS,
 	TTYC_HOME,
@@ -685,6 +686,7 @@ enum tty_code_code {
 	TTYC_OL,
 	TTYC_OP,
 	TTYC_RECT,
+	TTYC_REP,
 	TTYC_REV,
 	TTYC_RGB,
 	TTYC_RI,
@@ -846,11 +848,22 @@ struct colour_palette {
 
 /* All underscore attributes. */
 #define GRID_ATTR_ALL_UNDERSCORE \
-	(GRID_ATTR_UNDERSCORE|	 \
+	(GRID_ATTR_UNDERSCORE| \
 	 GRID_ATTR_UNDERSCORE_2| \
 	 GRID_ATTR_UNDERSCORE_3| \
 	 GRID_ATTR_UNDERSCORE_4| \
 	 GRID_ATTR_UNDERSCORE_5)
+
+/* Grid attributes with separate resets. */
+#define GRID_ATTR_SEPARATE_RESET \
+	(GRID_ATTR_BRIGHT| \
+	 GRID_ATTR_DIM| \
+	 GRID_ATTR_ALL_UNDERSCORE| \
+	 GRID_ATTR_BLINK| \
+	 GRID_ATTR_REVERSE| \
+	 GRID_ATTR_HIDDEN| \
+	 GRID_ATTR_ITALICS| \
+	 GRID_ATTR_STRIKETHROUGH)
 
 /* Grid flags. */
 #define GRID_FLAG_FG256 0x1
@@ -872,6 +885,7 @@ struct colour_palette {
 #define GRID_LINE_START_OUTPUT 0x40
 #define GRID_LINE_END_OUTPUT 0x80
 #define GRID_LINE_HYPERLINK 0x100
+#define GRID_LINE_END_OUTPUT_STATUS 0x200
 
 /* All OSC 133 flags. */
 #define GRID_LINE_OSC133_FLAGS	  \
@@ -879,7 +893,8 @@ struct colour_palette {
 	 GRID_LINE_SECOND_PROMPT| \
 	 GRID_LINE_START_COMMAND| \
 	 GRID_LINE_START_OUTPUT|  \
-	 GRID_LINE_END_OUTPUT)
+	 GRID_LINE_END_OUTPUT|    \
+	 GRID_LINE_END_OUTPUT_STATUS)
 
 /* Grid string flags. */
 #define GRID_STRING_WITH_SEQUENCES 0x1
@@ -987,6 +1002,7 @@ struct grid {
 	u_int			 scroll_added;
 	u_int			 scroll_collected;
 	u_int			 scroll_generation;
+	u_int			 resize_generation;
 
 	struct grid_line	*linedata;
 };
@@ -1103,6 +1119,13 @@ struct progress_bar {
 	int			progress;
 };
 
+/* Pending scroll type. */
+enum screen_scroll_type {
+	SCREEN_SCROLL_UP,
+	SCREEN_SCROLL_DL,
+	SCREEN_SCROLL_IL
+};
+
 /* Virtual screen. */
 struct screen_sel;
 struct screen_titles;
@@ -1113,7 +1136,6 @@ struct screen {
 	u_int				 ntitles;
 
 	struct grid			*grid;	  /* grid data */
-
 	u_int				 cx;	  /* cursor x */
 	u_int				 cy;	  /* cursor y */
 
@@ -1140,10 +1162,14 @@ struct screen {
 	struct screen_write_cline	*write_list;
 	u_int				 write_start;
 	u_int				 write_end;
-	u_int				 write_scrolled;
+
 	u_int				 write_rupper;
 	u_int				 write_rlower;
 	u_int				 write_bg;
+
+	enum screen_scroll_type		 scroll_type;
+	u_int				 scroll_lines;
+	u_int				 scroll_y;
 
 	struct hyperlinks		*hyperlinks;
 	struct progress_bar		 progress_bar;
@@ -1804,6 +1830,8 @@ struct tty_term {
 	char			*name;
 	struct tty		*tty;
 	int			 applied_features;
+	enum tty_code_code	 italics;
+	u_int			 separate_reset;
 
 	char			 acs[UCHAR_MAX + 1][2];
 	struct tty_code		*codes;
@@ -2956,6 +2984,7 @@ const struct options_table_entry *options_search(const char *);
 char		*options_match(const char *, char **, int *);
 struct options_entry *options_match_get(struct options *, const char *,
 		     char **, int, int *);
+const char	*options_entry_string(struct options_entry *);
 const char	*options_get_string(struct options *, const char *);
 long long	 options_get_number(struct options *, const char *);
 struct cmd_list *options_get_command(struct options *, const char *);
@@ -3623,8 +3652,8 @@ const struct grid_line *grid_peek_line(struct grid *, u_int);
 void	 grid_get_cell(struct grid *, u_int, u_int, struct grid_cell *);
 void	 grid_set_cell(struct grid *, u_int, u_int, const struct grid_cell *);
 void	 grid_set_padding(struct grid *, u_int, u_int, int);
-void	 grid_set_cells(struct grid *, u_int, u_int, const struct grid_cell *,
-	     const char *, size_t);
+int	 grid_set_cells(struct grid *, u_int *, u_int, const struct grid_cell *,
+	     const char *, u_int *, int);
 struct grid_line *grid_get_line(struct grid *, u_int);
 void	 grid_adjust_lines(struct grid *, u_int);
 void	 grid_clear(struct grid *, u_int, u_int, u_int, u_int, u_int);
@@ -3670,8 +3699,8 @@ void	 grid_view_get_cell(struct grid *, u_int, u_int, struct grid_cell *);
 void	 grid_view_set_cell(struct grid *, u_int, u_int,
 	     const struct grid_cell *);
 void	 grid_view_set_padding(struct grid *, u_int, u_int, int);
-void	 grid_view_set_cells(struct grid *, u_int, u_int,
-	     const struct grid_cell *, const char *, size_t);
+int	 grid_view_set_cells(struct grid *, u_int *, u_int,
+	     const struct grid_cell *, const char *, u_int *, int);
 void	 grid_view_clear_history(struct grid *, u_int);
 void	 grid_view_clear(struct grid *, u_int, u_int, u_int, u_int, u_int);
 void	 grid_view_scroll_region_up(struct grid *, u_int, u_int, u_int);
@@ -3790,6 +3819,7 @@ void	 screen_free(struct screen *);
 void	 screen_reset_tabs(struct screen *);
 void	 screen_reset_hyperlinks(struct screen *);
 void	 screen_set_default_cursor(struct screen *, struct options *);
+void	 screen_set_copy_cursor(struct screen *, struct options *);
 void	 screen_set_cursor_style(u_int, enum screen_cursor_style *, int *);
 void	 screen_set_cursor_colour(struct screen *, int);
 int	 screen_set_title(struct screen *, const char *, int);
@@ -4249,6 +4279,7 @@ enum utf8_state	 utf8_fromwc(int wc, struct utf8_data *);
 int		 utf8_has_whitespace(const struct utf8_data *);
 void		 utf8_update_width_cache(void);
 utf8_char	 utf8_build_one(u_char);
+int		 utf8_is_one(utf8_char, u_char);
 int		 utf8_get_one(utf8_char);
 enum utf8_state	 utf8_from_data(const struct utf8_data *, utf8_char *);
 void		 utf8_to_data(utf8_char, struct utf8_data *);

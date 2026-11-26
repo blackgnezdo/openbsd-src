@@ -1,4 +1,4 @@
-/* $OpenBSD: session.c,v 1.354 2026/10/30 02:31:36 djm Exp $ */
+/* $OpenBSD: session.c,v 1.356 2026/11/25 08:37:34 djm Exp $ */
 /*
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
  *                    All rights reserved
@@ -1284,7 +1284,16 @@ do_child(struct ssh *ssh, Session *s, const char *command)
 
 	closefrom(STDERR_FILENO + 1);
 
-	do_rc_files(ssh, s, shell);
+	/*
+	 * Don't run rc files or xauth for sessions forced to the in-process
+	 * sftp server (ForceCommand/command="internal-sftp"). Such users are
+	 * not supposed to execute anything: unlike internal-sftp itself, the
+	 * helper processes are traceable and could be taken over via another
+	 * sftp session.
+	 */
+	if (!s->forced || (s->is_subsystem != SUBSYSTEM_INT_SFTP &&
+	    s->is_subsystem != SUBSYSTEM_INT_SFTP_ERROR))
+		do_rc_files(ssh, s, shell);
 
 	/* restore SIGPIPE for child */
 	ssh_signal(SIGPIPE, SIG_DFL);
@@ -1633,6 +1642,14 @@ session_subsystem_req(struct ssh *ssh, Session *s)
 		logit("subsystem request for %.100s by user %s failed, %s",
 		    s->subsys, s->pw->pw_name,
 		    found ? "execution failed" : "subsystem not found");
+		/*
+		 * The channel is still larval and may receive a shell, exec
+		 * or another subsystem request; don't leave it marked as a
+		 * subsystem.
+		 */
+		s->is_subsystem = SUBSYSTEM_NONE;
+		free(s->subsys);
+		s->subsys = NULL;
 	}
 
 	return success;

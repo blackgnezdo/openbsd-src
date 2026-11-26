@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.331 2026/11/23 10:01:53 tb Exp $ */
+/*	$OpenBSD: extern.h,v 1.334 2026/11/26 10:08:00 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -998,8 +998,7 @@ unsigned char	*inflate_buffer(uint8_t *, size_t, size_t *);
 int		 base64_decode_len(size_t, size_t *);
 int		 base64_decode(const unsigned char *, size_t,
 		    unsigned char **, size_t *);
-int		 base64_encode_len(size_t, size_t *);
-int		 base64_encode(const unsigned char *, size_t, char **);
+void		 base64_encode(const unsigned char *, size_t, char **);
 char		*hex_encode(const unsigned char *, size_t);
 int		 hex_decode(const char *, char *, size_t);
 
@@ -1044,7 +1043,6 @@ time_t		 x509_find_expires(time_t, struct auth *, struct crl *);
 char		*nid2str(int);
 const char	*purpose2str(enum cert_purpose);
 char		*time2str(time_t);
-void		 x509_print(const X509 *);
 void		 tal_print(const struct tal *);
 void		 cert_print(const struct cert *);
 void		 crl_print(const struct crl *);

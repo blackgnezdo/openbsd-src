@@ -1,4 +1,4 @@
-/*	$OpenBSD: encoding.c,v 1.16 2026/11/23 10:31:01 tb Exp $ */
+/*	$OpenBSD: encoding.c,v 1.18 2026/11/26 10:08:00 tb Exp $ */
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
  *
@@ -187,24 +187,21 @@ fail:
 }
 
 /*
- * Return the size of the base64 blob in outlen for a inlen sized binary buffer.
- * Returns 0 on success and -1 if inlen would overflow the calculation.
+ * Returns the size of the base64 blob for a inlen sized binary buffer.
  */
-int
-base64_encode_len(size_t inlen, size_t *outlen)
+static size_t
+base64_encode_len(size_t inlen)
 {
-	*outlen = 0;
 	if (inlen >= INT_MAX / 2)
-		return -1;
-	*outlen = ((inlen + 2) / 3) * 4 + 1;
-	return 0;
+		errx(1, "%s: %zu too large", __func__, inlen);
+	return ((inlen + 2) / 3) * 4 + 1;
 }
 
 /*
  * Encode a binary buffer into a base64 encoded string returned in out.
- * Returns 0 on success or -1 for any errors.
+ * This function can't fail.
  */
-int
+void
 base64_encode(const unsigned char *in, size_t inlen, char **out)
 {
 	unsigned char *to;
@@ -212,14 +209,12 @@ base64_encode(const unsigned char *in, size_t inlen, char **out)
 
 	*out = NULL;
 
-	if (base64_encode_len(inlen, &tolen) == -1)
-		return -1;
+	tolen = base64_encode_len(inlen);
 	if ((to = malloc(tolen)) == NULL)
-		return -1;
+		err(1, NULL);
 
 	EVP_EncodeBlock(to, in, inlen);
 	*out = to;
-	return 0;
 }
 
 /*

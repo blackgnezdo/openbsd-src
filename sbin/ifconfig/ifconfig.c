@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifconfig.c,v 1.482 2026/07/13 01:08:59 dlg Exp $	*/
+/*	$OpenBSD: ifconfig.c,v 1.485 2026/11/26 15:55:17 stsp Exp $	*/
 /*	$NetBSD: ifconfig.c,v 1.40 1997/10/01 02:19:43 enami Exp $	*/
 
 /*
@@ -181,6 +181,9 @@ int	showtransceiver;
 struct	ifencap;
 
 struct ieee80211_join join;
+struct ieee80211_wpaparams wpa;
+struct ieee80211_wpaparams wpacur;
+struct ieee80211_wpapsk psk;
 
 const	char *lacpmodeactive = "active";
 const	char *lacpmodepassive = "passive";
@@ -393,6 +396,8 @@ int	actions;			/* Actions performed */
 #define	A_MEDIAMODE	0x0010		/* mode command */
 #define	A_JOIN		0x0020		/* join */
 #define	A_WIREGUARD	0x0040		/* any WireGuard command */
+#define	A_WPAPARAMS	0x0080		/* WPA parameters */
+#define	A_WPAKEY	0x0100		/* WPA key */
 #define A_SILENT	0x8000000	/* doing operation, do not print */
 
 #define	NEXTARG0	0xffffff
@@ -727,6 +732,7 @@ void	process_media_commands(void);
 void	init_current_media(void);
 
 void	process_join_commands(void);
+void	process_wpa_commands(void);
 
 void	process_wg_commands(void);
 
@@ -982,6 +988,7 @@ nextarg:
 #endif
 
 	process_join_commands();
+	process_wpa_commands();
 
 	/* Process any media commands that may have been issued. */
 	process_media_commands();
@@ -1850,6 +1857,22 @@ process_join_commands(void)
 }
 
 void
+process_wpa_commands(void)
+{
+	if (actions & A_WPAKEY) {
+		(void)strlcpy(psk.i_name, ifname, sizeof(psk.i_name));
+		if (ioctl(sock, SIOCS80211WPAPSK, (caddr_t)&psk) == -1)
+			err(1, "%s: SIOCS80211WPAPSK", psk.i_name);
+	}
+
+	if (actions & A_WPAPARAMS) {
+		(void)strlcpy(wpa.i_name, ifname, sizeof(wpa.i_name));
+		if (ioctl(sock, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
+			err(1, "%s: SIOCS80211WPAPARMS", wpa.i_name);
+	}
+}
+
+void
 setifjoin(const char *val, int d)
 {
 	int len;
@@ -2047,27 +2070,40 @@ setifnwkey(const char *val, int d)
 void
 setifwpa(const char *val, int d)
 {
-	struct ieee80211_wpaparams wpa;
-
-	memset(&wpa, 0, sizeof(wpa));
-	(void)strlcpy(wpa.i_name, ifname, sizeof(wpa.i_name));
-	/* Don't read current values. The kernel will set defaults. */
-	wpa.i_enabled = d;
-
 	if (actions & A_JOIN) {
 		join.i_wpaparams.i_enabled = d;
 		join.i_flags |= IEEE80211_JOIN_WPA;
 		return;
 	}
 
-	if (ioctl(sock, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCS80211WPAPARMS", wpa.i_name);
+	if ((actions & A_WPAPARAMS) == 0 || d != wpa.i_enabled) {
+		/* The "wpa" and "-wpa" commands reset previous wpa commands. */
+		memset(&wpa, 0, sizeof(wpa));
+		memset(&psk, 0, sizeof(psk));
+		actions &= ~(A_WPAPARAMS | A_WPAKEY);
+	}
+
+	if ((actions & A_WPAPARAMS) == 0 && d) {
+
+		/*
+		 * While WPA is enabled use the kernel's current
+		 * configuration as a starting point.
+		 */
+		memset(&wpacur, 0, sizeof(wpacur));
+		strlcpy(wpacur.i_name, ifname, sizeof(wpacur.i_name));
+		if (ioctl(sock, SIOCG80211WPAPARMS, &wpacur) == -1)
+			err(1, "%s: SIOCG80211WPAPARMS", wpacur.i_name);
+		if (wpacur.i_enabled)
+			memcpy(&wpa, &wpacur, sizeof(wpa));
+	}
+
+	wpa.i_enabled = d;
+	actions |= A_WPAPARAMS;
 }
 
 void
 setifwpaprotos(const char *val, int d)
 {
-	struct ieee80211_wpaparams wpa;
 	char *optlist, *str;
 	u_int rval = 0;
 
@@ -2085,29 +2121,33 @@ setifwpaprotos(const char *val, int d)
 	}
 	free(optlist);
 
+	if (rval == 0)
+		errx(1, "wpaprotos: no WPA protocol version specified");
+
 	if (actions & A_JOIN) {
 		join.i_wpaparams.i_protos = rval;
+		join.i_wpaparams.i_enabled = 1;
 		join.i_flags |= IEEE80211_JOIN_WPA;
 		return;
 	}
 
-	memset(&wpa, 0, sizeof(wpa));
-	(void)strlcpy(wpa.i_name, ifname, sizeof(wpa.i_name));
-	if (ioctl(sock, SIOCG80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCG80211WPAPARMS", wpa.i_name);
+	setifwpa(NULL, 1);
 	wpa.i_protos = rval;
-	/* Let the kernel set up the appropriate default ciphers. */
-	wpa.i_ciphers = 0;
-	wpa.i_groupcipher = 0;
-
-	if (ioctl(sock, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCS80211WPAPARMS", wpa.i_name);
+	/*
+	 * If WPA protocol versions change then let the kernel set up
+	 * appropriate default ciphers and AKMs if not overrridden by
+	 * subsequent wpa commands.
+	 */
+	if (wpacur.i_enabled && wpacur.i_protos != wpa.i_protos) {
+		wpa.i_ciphers = 0;
+		wpa.i_groupcipher = 0;
+		wpa.i_akms = 0;
+	}
 }
 
 void
 setifwpaakms(const char *val, int d)
 {
-	struct ieee80211_wpaparams wpa;
 	char *optlist, *str;
 	u_int rval = 0;
 
@@ -2127,24 +2167,18 @@ setifwpaakms(const char *val, int d)
 	}
 	free(optlist);
 
+	if (rval == 0)
+		errx(1, "wpaakms: no AKMs specified");
+
 	if (actions & A_JOIN) {
 		join.i_wpaparams.i_akms = rval;
-		join.i_wpaparams.i_enabled =
-		    ((rval & IEEE80211_WPA_AKM_8021X) != 0);
+		join.i_wpaparams.i_enabled = 1;
 		join.i_flags |= IEEE80211_JOIN_WPA;
 		return;
 	}
 
-	memset(&wpa, 0, sizeof(wpa));
-	(void)strlcpy(wpa.i_name, ifname, sizeof(wpa.i_name));
-	if (ioctl(sock, SIOCG80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCG80211WPAPARMS", wpa.i_name);
+	setifwpa(NULL, 1);
 	wpa.i_akms = rval;
-	/* Enable WPA for 802.1x here. PSK case is handled in setifwpakey(). */
-	wpa.i_enabled = ((rval & IEEE80211_WPA_AKM_8021X) != 0);
-
-	if (ioctl(sock, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCS80211WPAPARMS", wpa.i_name);
 }
 
 static const struct {
@@ -2172,7 +2206,6 @@ getwpacipher(const char *name)
 void
 setifwpaciphers(const char *val, int d)
 {
-	struct ieee80211_wpaparams wpa;
 	char *optlist, *str;
 	u_int rval = 0;
 
@@ -2189,57 +2222,47 @@ setifwpaciphers(const char *val, int d)
 	}
 	free(optlist);
 
+	if (rval == 0)
+		errx(1, "wpaciphers: no ciphers specified");
+
 	if (actions & A_JOIN) {
 		join.i_wpaparams.i_ciphers = rval;
+		join.i_wpaparams.i_enabled = 1;
 		join.i_flags |= IEEE80211_JOIN_WPA;
 		return;
 	}
 
-	memset(&wpa, 0, sizeof(wpa));
-	(void)strlcpy(wpa.i_name, ifname, sizeof(wpa.i_name));
-	if (ioctl(sock, SIOCG80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCG80211WPAPARMS", wpa.i_name);
+	setifwpa(NULL, 1);
 	wpa.i_ciphers = rval;
-
-	if (ioctl(sock, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCS80211WPAPARMS", wpa.i_name);
 }
 
 void
 setifwpagroupcipher(const char *val, int d)
 {
-	struct ieee80211_wpaparams wpa;
 	u_int cipher;
 
 	cipher = getwpacipher(val);
 	if (cipher == IEEE80211_WPA_CIPHER_NONE)
 		errx(1, "wpagroupcipher: unknown cipher: %s", val);
 
-	memset(&wpa, 0, sizeof(wpa));
-	(void)strlcpy(wpa.i_name, ifname, sizeof(wpa.i_name));
-	if (ioctl(sock, SIOCG80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCG80211WPAPARMS", wpa.i_name);
-	wpa.i_groupcipher = cipher;
-
 	if (actions & A_JOIN) {
-		join.i_wpaparams.i_groupcipher = cipher;
-		join.i_flags |= IEEE80211_JOIN_WPA;
+		/* wpagroupcipher is only valid in hostap mode */
 		return;
 	}
 
-	if (ioctl(sock, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCS80211WPAPARMS", wpa.i_name);
+	setifwpa(NULL, 1);
+	wpa.i_groupcipher = cipher;
 }
 
 void
 setifwpakey(const char *val, int d)
 {
-	struct ieee80211_wpaparams wpa;
-	struct ieee80211_wpapsk psk;
 	struct ieee80211_nwid nwid;
 	int passlen;
 
 	memset(&psk, 0, sizeof(psk));
+	if ((actions & A_JOIN) == 0) 
+		setifwpa(NULL, d == -1 ? 0 : 1);
 	if (d != -1) {
 		memset(&ifr, 0, sizeof(ifr));
 		ifr.ifr_data = (caddr_t)&nwid;
@@ -2282,27 +2305,17 @@ setifwpakey(const char *val, int d)
 	} else
 		psk.i_enabled = 0;
 
-	(void)strlcpy(psk.i_name, ifname, sizeof(psk.i_name));
-
 	if (actions & A_JOIN) {
-		memcpy(&join.i_wpapsk, &psk, sizeof(join.i_wpapsk));
-		join.i_flags |= IEEE80211_JOIN_WPAPSK;
-		if (!join.i_wpaparams.i_enabled)
-			setifwpa(NULL, join.i_wpapsk.i_enabled);
+		join.i_wpaparams.i_enabled = psk.i_enabled;
+		join.i_flags |= IEEE80211_JOIN_WPA;
+		if (join.i_wpaparams.i_enabled) {
+			memcpy(&join.i_wpapsk, &psk, sizeof(join.i_wpapsk));
+			join.i_flags |= IEEE80211_JOIN_WPAPSK;
+		}
 		return;
 	}
 
-	if (ioctl(sock, SIOCS80211WPAPSK, (caddr_t)&psk) == -1)
-		err(1, "%s: SIOCS80211WPAPSK", psk.i_name);
-
-	/* And ... automatically enable or disable WPA */
-	memset(&wpa, 0, sizeof(wpa));
-	(void)strlcpy(wpa.i_name, ifname, sizeof(wpa.i_name));
-	if (ioctl(sock, SIOCG80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCG80211WPAPARMS", psk.i_name);
-	wpa.i_enabled = psk.i_enabled;
-	if (ioctl(sock, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
-		err(1, "%s: SIOCS80211WPAPARMS", psk.i_name);
+	actions |= A_WPAKEY;
 }
 
 void

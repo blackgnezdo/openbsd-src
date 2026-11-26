@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.345 2026/11/23 10:01:53 tb Exp $ */
+/*	$OpenBSD: main.c,v 1.347 2026/11/26 08:48:57 claudio Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -631,7 +631,9 @@ entity_process(struct ibuf *b, struct validation_data *vd, struct stats *st)
 		errx(1, "no filename present in entity response");
 	if (filepath_valid(&fpt, file, talid)) {
 		warnx("%s: File already visited", file);
-		goto done;
+		/* MFT dispatched work in the parser, account for that */
+		if (type != RTYPE_MFT)
+			goto done;
 	}
 
 	if (type != RTYPE_TAL) {
@@ -1582,7 +1584,7 @@ main(int argc, char *argv[])
 	}
 
 	/* processing did not finish because of error */
-	if (entity_queue != 0) {
+	if (entity_queue != 0 || entity_lowprio_queue != 0) {
 		repo_printinfo(entity_queue, entity_lowprio_queue);
 		errx(1, "not all files processed, giving up");
 	}

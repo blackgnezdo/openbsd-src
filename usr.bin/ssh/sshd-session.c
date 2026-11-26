@@ -1,4 +1,4 @@
-/* $OpenBSD: sshd-session.c,v 1.26 2026/09/16 00:13:58 djm Exp $ */
+/* $OpenBSD: sshd-session.c,v 1.28 2026/11/25 20:42:32 djm Exp $ */
 /*
  * SSH2 implementation:
  * Privilege Separation:
@@ -204,6 +204,15 @@ grace_alarm_handler(int sig)
 		sa.sa_flags = SA_RESTART;
 		(void)sigaction(SIGTERM, &sa, NULL);
 		kill(0, SIGTERM);
+	} else if (privsep_is_preauth && pmonitor != NULL &&
+	    pmonitor->m_pid > 1) {
+		/*
+		 * The process group signal above does not reach the privsep
+		 * child if we are not the group leader (e.g. started via
+		 * sshd -i by something that didn't setsid()), so kill it
+		 * explicitly by pid.
+		 */
+		kill(pmonitor->m_pid, SIGKILL);
 	}
 	_exit(EXIT_LOGIN_GRACE);
 }
@@ -1243,10 +1252,13 @@ cleanup_exit(int i)
 			}
 		}
 	}
-	/* Override default fatal exit value when auth was attempted */
-	if (i == 255 && monitor_auth_attempted())
-		_exit(EXIT_AUTH_ATTEMPTED);
+	/*
+	 * Override default fatal exit value when auth was attempted.
+	 * An invalid user takes precedence over a plain auth failure.
+	 */
 	if (i == 255 && monitor_invalid_user())
 		_exit(EXIT_INVALID_USER);
+	if (i == 255 && monitor_auth_attempted())
+		_exit(EXIT_AUTH_ATTEMPTED);
 	_exit(i);
 }

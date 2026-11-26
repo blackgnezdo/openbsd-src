@@ -1,4 +1,4 @@
-.\" $OpenBSD: tmux.1,v 1.1202 2026/11/23 08:44:19 nicm Exp $
+.\" $OpenBSD: tmux.1,v 1.1206 2026/11/26 19:54:42 nicm Exp $
 .\"
 .\" Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
 .\"
@@ -14,7 +14,7 @@
 .\" IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
 .\" OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: November 23 2026 $
+.Dd $Mdocdate: November 26 2026 $
 .Dt TMUX 1
 .Os
 .Sh NAME
@@ -2553,6 +2553,11 @@ command.
 .Xc
 Search forward for the specified plain text.
 .It Xo
+.Ic search\-reset
+.Xc
+Reset the saved origin so that the next incremental search starts at the
+current cursor position.
+.It Xo
 .Ic search\-reverse
 (vi: N)
 (emacs: N)
@@ -2804,8 +2809,13 @@ The same as
 .Cm main\-vertical
 but mirrored so the main pane is on the right of the window.
 .It Cm tiled
-Panes are spread out as evenly as possible over the window in both rows and
+By default, panes are spread out as evenly as possible over the window in both rows and
 columns.
+The
+.Em tiled\-layout\-min\-columns
+and
+.Em tiled\-layout\-max\-columns
+options control the minimum and maximum columns.
 .El
 .Pp
 In addition,
@@ -5260,6 +5270,8 @@ Allows setting the system clipboard.
 Allows setting the cursor colour.
 .It cstyle
 Allows setting the cursor style.
+.It ecmasgr
+Supports the separate attribute resets from ECMA-48 third edition.
 .It extkeys
 Supports extended keys.
 .It focus
@@ -6016,6 +6028,15 @@ If suffixed by
 .Ql % ,
 this is a percentage of the window size.
 .Pp
+.It Ic copy\-mode\-cursor\-colour Ar colour
+Set the colour of the cursor in copy mode.
+.Pp
+.It Ic copy\-mode\-cursor\-style Ar style
+Set the style of the cursor in copy mode.
+.Cm inherit
+means use
+.Ic cursor\-style .
+.Pp
 .It Ic copy\-mode\-match\-style Ar style
 Set the style of search matches in copy mode.
 For how to specify
@@ -6362,11 +6383,15 @@ see the
 .Sx STYLES
 section.
 .Pp
+.It Ic tiled\-layout\-min\-columns Ar number
+Set the minimum number of columns that will be created in the
+.Cm tiled
+layout before the number of rows will be increased.
+.Pp
 .It Ic tiled\-layout\-max\-columns Ar number
 Set the maximum number of columns in the
 .Cm tiled
 layout.
-A value of 0 (the default) means no limit.
 When a limit is set, panes are arranged to not exceed this number of columns,
 with additional panes stacked in extra rows.
 .Pp
@@ -9134,6 +9159,9 @@ Disable and enable focus reporting.
 These are set automatically if the
 .Em XT
 capability is present.
+.It Em \&Esgr
+Indicates that the terminal supports the separate attribute resets from
+ECMA-48 third edition.
 .It Em \&Hls
 Set or clear a hyperlink annotation.
 .It Em \&Iscrl

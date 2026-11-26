@@ -1,4 +1,4 @@
-/* $OpenBSD: input.c,v 1.291 2026/11/23 08:44:19 nicm Exp $ */
+/* $OpenBSD: input.c,v 1.296 2026/11/26 19:54:42 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -157,6 +157,7 @@ static int	input_add_request(struct input_ctx *, enum input_request_type,
 		    int);
 static int	input_number(char **);
 static int	input_split(struct input_ctx *);
+static size_t	input_csi_parse(struct input_ctx *, const u_char *, size_t);
 static int	input_get(struct input_ctx *, u_int, int, int);
 static void	input_set_state(struct input_ctx *,
 		    const struct input_transition *);
@@ -260,94 +261,53 @@ static const struct input_table_entry input_esc_table[] = {
 
 /* Control (CSI) commands. */
 enum input_csi_type {
-	INPUT_CSI_CBT,
-	INPUT_CSI_CNL,
-	INPUT_CSI_CPL,
-	INPUT_CSI_CUB,
-	INPUT_CSI_CUD,
-	INPUT_CSI_CUF,
-	INPUT_CSI_CUP,
-	INPUT_CSI_CUU,
-	INPUT_CSI_DA,
-	INPUT_CSI_DA_TWO,
-	INPUT_CSI_DCH,
+	INPUT_CSI_UNKNOWN = -1,
+
+	INPUT_CSI_CBT = 'Z',
+	INPUT_CSI_CHA = 'G',
+	INPUT_CSI_CHT = 'I',
+	INPUT_CSI_CNL = 'E',
+	INPUT_CSI_CPL = 'F',
+	INPUT_CSI_CUB = 'D',
+	INPUT_CSI_CUD = 'B',
+	INPUT_CSI_CUF = 'C',
+	INPUT_CSI_CUP = 'H',
+	INPUT_CSI_CUU = 'A',
+	INPUT_CSI_DA = 'c',
+	INPUT_CSI_DCH = 'P',
+	INPUT_CSI_DECSTBM = 'r',
+	INPUT_CSI_DL = 'M',
+	INPUT_CSI_DSR = 'n',
+	INPUT_CSI_ECH = 'X',
+	INPUT_CSI_ED = 'J',
+	INPUT_CSI_EL = 'K',
+	INPUT_CSI_HPA = '`',
+	INPUT_CSI_HVP = 'f',
+	INPUT_CSI_ICH = '@',
+	INPUT_CSI_IL = 'L',
+	INPUT_CSI_RCP = 'u',
+	INPUT_CSI_REP = 'b',
+	INPUT_CSI_RM = 'l',
+	INPUT_CSI_SCP = 's',
+	INPUT_CSI_SD = 'T',
+	INPUT_CSI_SGR = 'm',
+	INPUT_CSI_SM = 'h',
+	INPUT_CSI_SU = 'S',
+	INPUT_CSI_TBC = 'g',
+	INPUT_CSI_VPA = 'd',
+	INPUT_CSI_WINOPS = 't',
+
+	INPUT_CSI_DA_TWO = 256,
 	INPUT_CSI_DECSCUSR,
-	INPUT_CSI_DECSTBM,
-	INPUT_CSI_DL,
-	INPUT_CSI_DSR,
 	INPUT_CSI_DSR_PRIVATE,
-	INPUT_CSI_ECH,
-	INPUT_CSI_ED,
-	INPUT_CSI_EL,
-	INPUT_CSI_HPA,
-	INPUT_CSI_ICH,
-	INPUT_CSI_IL,
 	INPUT_CSI_MODOFF,
 	INPUT_CSI_MODSET,
 	INPUT_CSI_QUERY,
 	INPUT_CSI_QUERY_PRIVATE,
-	INPUT_CSI_RCP,
-	INPUT_CSI_REP,
-	INPUT_CSI_RM,
 	INPUT_CSI_RM_PRIVATE,
-	INPUT_CSI_SCP,
-	INPUT_CSI_SD,
-	INPUT_CSI_SGR,
-	INPUT_CSI_SM,
 	INPUT_CSI_SM_GRAPHICS,
 	INPUT_CSI_SM_PRIVATE,
-	INPUT_CSI_SU,
-	INPUT_CSI_TBC,
-	INPUT_CSI_VPA,
-	INPUT_CSI_WINOPS,
 	INPUT_CSI_XDA
-};
-
-/* Control (CSI) command table. */
-static const struct input_table_entry input_csi_table[] = {
-	{ '@', "",  INPUT_CSI_ICH },
-	{ 'A', "",  INPUT_CSI_CUU },
-	{ 'B', "",  INPUT_CSI_CUD },
-	{ 'C', "",  INPUT_CSI_CUF },
-	{ 'D', "",  INPUT_CSI_CUB },
-	{ 'E', "",  INPUT_CSI_CNL },
-	{ 'F', "",  INPUT_CSI_CPL },
-	{ 'G', "",  INPUT_CSI_HPA },
-	{ 'H', "",  INPUT_CSI_CUP },
-	{ 'J', "",  INPUT_CSI_ED },
-	{ 'K', "",  INPUT_CSI_EL },
-	{ 'L', "",  INPUT_CSI_IL },
-	{ 'M', "",  INPUT_CSI_DL },
-	{ 'P', "",  INPUT_CSI_DCH },
-	{ 'S', "",  INPUT_CSI_SU },
-	{ 'S', "?", INPUT_CSI_SM_GRAPHICS },
-	{ 'T', "",  INPUT_CSI_SD },
-	{ 'X', "",  INPUT_CSI_ECH },
-	{ 'Z', "",  INPUT_CSI_CBT },
-	{ '`', "",  INPUT_CSI_HPA },
-	{ 'b', "",  INPUT_CSI_REP },
-	{ 'c', "",  INPUT_CSI_DA },
-	{ 'c', ">", INPUT_CSI_DA_TWO },
-	{ 'd', "",  INPUT_CSI_VPA },
-	{ 'f', "",  INPUT_CSI_CUP },
-	{ 'g', "",  INPUT_CSI_TBC },
-	{ 'h', "",  INPUT_CSI_SM },
-	{ 'h', "?", INPUT_CSI_SM_PRIVATE },
-	{ 'l', "",  INPUT_CSI_RM },
-	{ 'l', "?", INPUT_CSI_RM_PRIVATE },
-	{ 'm', "",  INPUT_CSI_SGR },
-	{ 'm', ">", INPUT_CSI_MODSET },
-	{ 'n', "",  INPUT_CSI_DSR },
-	{ 'n', ">", INPUT_CSI_MODOFF },
-	{ 'n', "?", INPUT_CSI_DSR_PRIVATE },
-	{ 'p', "$",  INPUT_CSI_QUERY },
-	{ 'p', "?$", INPUT_CSI_QUERY_PRIVATE },
-	{ 'q', " ", INPUT_CSI_DECSCUSR },
-	{ 'q', ">", INPUT_CSI_XDA },
-	{ 'r', "",  INPUT_CSI_DECSTBM },
-	{ 's', "",  INPUT_CSI_SCP },
-	{ 't', "",  INPUT_CSI_WINOPS },
-	{ 'u', "",  INPUT_CSI_RCP }
 };
 
 /* Input transition. */
@@ -897,28 +857,36 @@ input_init(struct window_pane *wp, struct colour_palette *palette)
 	return (ictx);
 }
 
-/* Destroy input parser. */
-void
-input_free(struct input_ctx *ictx)
+/* Free saved parameters. */
+static void
+input_clear_params(struct input_ctx *ictx)
 {
-	struct input_request	*ir, *ir1;
-	u_int			 i;
+	u_int	i;
 
 	for (i = 0; i < ictx->param_list_len; i++) {
 		if (ictx->param_list[i].type == INPUT_STRING)
 			free(ictx->param_list[i].str);
 	}
+	ictx->param_list_len = 0;
+}
+
+/* Destroy input parser. */
+void
+input_free(struct input_ctx *ictx)
+{
+	struct input_request	*ir, *ir1;
 
 	TAILQ_FOREACH_SAFE(ir, &ictx->requests, entry, ir1)
 		input_free_request(ir);
 	event_del(&ictx->request_timer);
 
+	input_clear_params(ictx);
 	free(ictx->input_buf);
+
 	free(ictx->since_ground_buf);
 	event_del(&ictx->ground_timer);
 
 	screen_write_stop_sync(ictx->wp);
-
 	free(ictx);
 }
 
@@ -1048,8 +1016,19 @@ input_parse(struct input_ctx *ictx, const u_char *buf, size_t len)
 		 * sequences that don't make a terminal change, but they should
 		 * be the minority.
 		 */
-		if (itr->handler != input_print && state == &input_state_ground)
+		if (itr->handler != input_print &&
+		    state == &input_state_ground) {
 			screen_write_collect_end(sctx);
+
+			n = len - off;
+			if (ictx->ch == '\033' && n > 1 && buf[off] == '[') {
+				n = input_csi_parse(ictx, buf + off + 1, n - 1);
+				if (n != 0) {
+					off += n + 1;
+					continue;
+				}
+			}
+		}
 
 		/*
 		 * Execute the handler, if any. Don't switch state if it
@@ -1134,7 +1113,7 @@ input_parse_screen(struct input_ctx *ictx, struct screen *s,
 	screen_write_stop(sctx);
 }
 
-/* Parse a nonnegative numeric parameter. */
+/* Parse a number. */
 static int
 input_number(char **ptr)
 {
@@ -1161,12 +1140,7 @@ input_split(struct input_ctx *ictx)
 	u_int			 i;
 	int			 n;
 
-	for (i = 0; i < ictx->param_list_len; i++) {
-		if (ictx->param_list[i].type == INPUT_STRING)
-			free(ictx->param_list[i].str);
-	}
-	ictx->param_list_len = 0;
-
+	input_clear_params(ictx);
 	if (ictx->param_len == 0)
 		return (0);
 	ip = &ictx->param_list[0];
@@ -1552,36 +1526,20 @@ input_esc_dispatch(struct input_ctx *ictx)
 	return (0);
 }
 
-/* Execute control sequence. */
-static int
-input_csi_dispatch(struct input_ctx *ictx)
+/* Execute a CSI with parsed parameters. */
+static void
+input_csi_execute(struct input_ctx *ictx, enum input_csi_type type)
 {
 	struct screen_write_ctx		*sctx = &ictx->ctx;
 	struct screen			*s = sctx->s;
-	const struct input_table_entry	*entry;
 	struct options			*oo;
 	const char			*clip;
 	int				 i, n, m, ek, set, p;
-	u_int				 cx, bg = ictx->cell.cell.bg;
+	u_int				 cx, sx = screen_size_x(s);
+	u_int				 bg = ictx->cell.cell.bg;
 	int64_t				 v;
 
-	if (ictx->flags & INPUT_DISCARD)
-		return (0);
-
-	log_debug("%s: '%c' \"%s\" \"%s\"", __func__, ictx->ch,
-	    ictx->interm_buf, ictx->param_buf);
-
-	if (input_split(ictx) != 0)
-		return (0);
-
-	entry = bsearch(ictx, input_csi_table, nitems(input_csi_table),
-	    sizeof input_csi_table[0], input_table_compare);
-	if (entry == NULL) {
-		log_debug("%s: unknown '%c'", __func__, ictx->ch);
-		return (0);
-	}
-
-	switch (entry->type) {
+	switch (type) {
 	case INPUT_CSI_CBT:
 		/* Find the previous tab point, n times. */
 		cx = s->cx;
@@ -1594,6 +1552,21 @@ input_csi_dispatch(struct input_ctx *ictx)
 			do
 				cx--;
 			while (cx > 0 && !bit_test(s->tabs, cx));
+		}
+		s->cx = cx;
+		break;
+	case INPUT_CSI_CHT:
+		/* Find the next tab point, n times. */
+		cx = s->cx;
+		if (cx > sx - 1)
+			cx = sx - 1;
+		n = input_get(ictx, 0, 1, 1);
+		if (n == -1)
+			break;
+		while (cx < sx - 1 && n-- > 0) {
+			do
+				cx++;
+			while (cx < sx - 1 && !bit_test(s->tabs, cx));
 		}
 		s->cx = cx;
 		break;
@@ -1613,6 +1586,7 @@ input_csi_dispatch(struct input_ctx *ictx)
 			screen_write_cursorright(sctx, n);
 		break;
 	case INPUT_CSI_CUP:
+	case INPUT_CSI_HVP:
 		n = input_get(ictx, 0, 1, 1);
 		m = input_get(ictx, 1, 1, 1);
 		if (n != -1 && m != -1)
@@ -1868,6 +1842,7 @@ input_csi_dispatch(struct input_ctx *ictx)
 			break;
 		}
 		break;
+	case INPUT_CSI_CHA:
 	case INPUT_CSI_HPA:
 		n = input_get(ictx, 0, 1, 1);
 		if (n != -1)
@@ -1978,11 +1953,135 @@ input_csi_dispatch(struct input_ctx *ictx)
 			    getversion());
 		}
 		break;
-
+	default:
+		log_debug("%s: unknown '%c'", __func__, ictx->ch);
+		return;
 	}
 
 	ictx->flags &= ~INPUT_LAST;
+}
+
+/* Dispatch a CSI collected by the state machine. */
+static int
+input_csi_dispatch(struct input_ctx *ictx)
+{
+	const u_char		*interm = ictx->interm_buf;
+	enum input_csi_type	 type = INPUT_CSI_UNKNOWN;
+
+	if (ictx->flags & INPUT_DISCARD)
+		return (0);
+
+	log_debug("%s: '%c' \"%s\" \"%s\"", __func__, ictx->ch,
+	    ictx->interm_buf, ictx->param_buf);
+	if (input_split(ictx) != 0)
+		return (0);
+
+	if (ictx->interm_len == 0) {
+		input_csi_execute(ictx, ictx->ch);
+		return (0);
+	}
+
+	switch (ictx->ch) {
+	case 'S':
+		if (strcmp(interm, "?") == 0)
+			type = INPUT_CSI_SM_GRAPHICS;
+		break;
+	case 'c':
+		if (strcmp(interm, ">") == 0)
+			type = INPUT_CSI_DA_TWO;
+		break;
+	case 'h':
+		if (strcmp(interm, "?") == 0)
+			type = INPUT_CSI_SM_PRIVATE;
+		break;
+	case 'l':
+		if (strcmp(interm, "?") == 0)
+			type = INPUT_CSI_RM_PRIVATE;
+		break;
+	case 'm':
+		if (strcmp(interm, ">") == 0)
+			type = INPUT_CSI_MODSET;
+		break;
+	case 'n':
+		if (strcmp(interm, ">") == 0)
+			type = INPUT_CSI_MODOFF;
+		else if (strcmp(interm, "?") == 0)
+			type = INPUT_CSI_DSR_PRIVATE;
+		break;
+	case 'p':
+		if (strcmp(interm, "$") == 0)
+			type = INPUT_CSI_QUERY;
+		else if (strcmp(interm, "?$") == 0)
+			type = INPUT_CSI_QUERY_PRIVATE;
+		break;
+	case 'q':
+		if (strcmp(interm, " ") == 0)
+			type = INPUT_CSI_DECSCUSR;
+		else if (strcmp(interm, ">") == 0)
+			type = INPUT_CSI_XDA;
+		break;
+	}
+
+	if (type == INPUT_CSI_UNKNOWN)
+		log_debug("%s: unknown '%c'", __func__, ictx->ch);
+	else
+		input_csi_execute(ictx, type);
 	return (0);
+}
+
+/* Parse a complete CSI with only numeric or missing parameters. */
+static size_t
+input_csi_parse(struct input_ctx *ictx, const u_char *buf, size_t len)
+{
+	struct input_param	*ip;
+	size_t			 i;
+	u_int			 nparams = 0;
+	int			 ch, n = -1;
+
+	if (log_get_level() != 0)
+		return (0);
+	if (len > sizeof ictx->param_buf)
+		len = sizeof ictx->param_buf;
+	input_clear_params(ictx);
+
+	for (i = 0; i < len; i++) {
+		ch = buf[i];
+		if (ch >= '0' && ch <= '9') {
+			if (n == -1)
+				n = 0;
+			if (n >= INT_MAX / 10)
+				return (0);
+			n = 10 * n + (ch - '0');
+			continue;
+		}
+		if (ch != ';' && (ch < '@' || ch > '~'))
+			return (0);
+		if (i != 0 || ch == ';') {
+			if (nparams == nitems(ictx->param_list) - 1)
+				return (0);
+			ip = &ictx->param_list[nparams++];
+			if (n == -1)
+				ip->type = INPUT_MISSING;
+			else {
+				ip->type = INPUT_NUMBER;
+				ip->num = n;
+			}
+		}
+		if (ch != ';')
+			break;
+		n = -1;
+	}
+	if (i == len)
+		return (0);
+
+	input_clear(ictx);
+	ictx->ch = buf[i];
+	ictx->param_list_len = nparams;
+
+	input_csi_execute(ictx, ictx->ch);
+	input_ground(ictx);
+
+	return (i + 1);
 }
 
 /* Handle CSI RM. */
@@ -3440,23 +3539,22 @@ input_osc_112(struct input_ctx *ictx, const char *p)
 static int
 input_osc_133_exit_status(const char *p)
 {
-	const char	*end;
+	const char	*end, *errstr;
 	char		*copy;
-	const char	*errstr;
 	long long	 status;
 
 	if (p[1] != ';' || p[2] == '\0' || strchr(p + 2, '=') == p + 2)
-		return (0);
+		return (-1);
 	end = strchr(p + 2, ';');
 	if (end == p + 2)
-		return (0);
+		return (-1);
 	if (end == NULL)
 		copy = xstrdup(p + 2);
 	else
 		copy = xstrndup(p + 2, end - (p + 2));
 	if (strchr(copy, '=') != NULL) {
 		free(copy);
-		return (0);
+		return (-1);
 	}
 	status = strtonum(copy, 0, 255, &errstr);
 	free(copy);
@@ -3553,6 +3651,31 @@ input_fire_command_event(struct window_pane *wp, const char *name)
 	events_fire(name, ep);
 }
 
+/* Record the first primary or secondary prompt marker on a line. */
+static void
+input_osc_133_mark_prompt(struct grid_line *gl, u_int col, const char *p)
+{
+	const char	*cp;
+
+	if (gl == NULL)
+		return;
+	if (gl->flags & (GRID_LINE_START_PROMPT|GRID_LINE_SECOND_PROMPT))
+		return;
+
+	while ((cp = strstr(p, ";k=")) != NULL) {
+		p = cp + 3;
+		if (*p != 's' && *p != 'c')
+			continue;
+		if (p[1] == '\0' || p[1] == ';') {
+			gl->flags |= GRID_LINE_SECOND_PROMPT;
+			break;
+		}
+	}
+	if (cp == NULL)
+		gl->flags |= GRID_LINE_START_PROMPT;
+	gl->osc133_data.prompt_col = col;
+}
+
 /* Handle the OSC 133 sequence. */
 static void
 input_osc_133(struct input_ctx *ictx, const char *p)
@@ -3562,7 +3685,6 @@ input_osc_133(struct input_ctx *ictx, const char *p)
 	struct grid		*gd = s->grid;
 	u_int			 line = s->cy + gd->hsize;
 	struct grid_line	*gl = NULL;
-	const char		*cp;
 	int			 status;
 
 	if (line < gd->hsize + gd->sy)
@@ -3571,10 +3693,7 @@ input_osc_133(struct input_ctx *ictx, const char *p)
 	switch (*p) {
 	case 'A':
 	case 'N':
-		if (gl != NULL) {
-			gl->osc133_data.prompt_col = s->cx;
-			gl->flags |= GRID_LINE_START_PROMPT;
-		}
+		input_osc_133_mark_prompt(gl, s->cx, p);
 		if (wp != NULL) {
 			if (*p == 'A' && wp->program_state != NULL) {
 				window_pane_clear_program_status(wp, 0);
@@ -3586,24 +3705,17 @@ input_osc_133(struct input_ctx *ictx, const char *p)
 		}
 		break;
 	case 'P':
-		if (gl != NULL) {
-			cp = strstr(p, ";k=s");
-			if (cp != NULL && (cp[4] == ';' || cp[4] == '\0'))
-				gl->flags |= GRID_LINE_SECOND_PROMPT;
-			else
-				gl->flags |= GRID_LINE_START_PROMPT;
-			gl->osc133_data.prompt_col = s->cx;
-		}
+		input_osc_133_mark_prompt(gl, s->cx, p);
 		break;
 	case 'B':
 	case 'I':
-		if (gl != NULL) {
+		if (gl != NULL && (~gl->flags & GRID_LINE_START_COMMAND)) {
 			gl->flags |= GRID_LINE_START_COMMAND;
 			gl->osc133_data.cmd_col = s->cx;
 		}
 		break;
 	case 'C':
-		if (gl != NULL) {
+		if (gl != NULL && (~gl->flags & GRID_LINE_START_OUTPUT)) {
 			gl->flags |= GRID_LINE_START_OUTPUT;
 			gl->osc133_data.out_start_col = s->cx;
 		}
@@ -3622,13 +3734,17 @@ input_osc_133(struct input_ctx *ictx, const char *p)
 		if (wp != NULL) {
 			wp->cmd_end_time = time(NULL);
 			wp->flags &= ~PANE_CMDRUNNING;
-			wp->cmd_status = status;
+			wp->cmd_status = (status != -1 ? status : 0);
 			input_fire_command_event(wp, "pane-command-finished");
 		}
 		if (gl != NULL) {
 			gl->flags |= GRID_LINE_END_OUTPUT;
+			if (status != -1)
+				gl->flags |= GRID_LINE_END_OUTPUT_STATUS;
+			else
+				gl->flags &= ~GRID_LINE_END_OUTPUT_STATUS;
 			gl->osc133_data.out_end_col = s->cx;
-			gl->osc133_data.exit_status = status;
+			gl->osc133_data.exit_status = (status != -1 ? status : 0);
 		}
 		break;
 	}

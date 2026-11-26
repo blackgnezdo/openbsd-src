@@ -1,4 +1,4 @@
-/* $OpenBSD: screen.c,v 1.110 2026/11/23 08:11:24 nicm Exp $ */
+/* $OpenBSD: screen.c,v 1.113 2026/11/26 15:59:01 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -95,7 +95,7 @@ screen_init(struct screen *s, u_int sx, u_int sy, u_int hlimit)
 	s->sel = NULL;
 
 	s->write_list = NULL;
-	s->write_start = s->write_end = s->write_scrolled = 0;
+	s->write_start = s->write_end = s->scroll_lines = 0;
 	s->hyperlinks = NULL;
 
 	screen_reinit(s);
@@ -189,6 +189,30 @@ screen_set_default_cursor(struct screen *s, struct options *oo)
 	c = options_get_number(oo, "cursor-style");
 	s->default_mode = 0;
 	screen_set_cursor_style(c, &s->default_cstyle, &s->default_mode);
+}
+
+/* Set copy mode cursor style and colour from options. */
+void
+screen_set_copy_cursor(struct screen *s, struct options *oo)
+{
+	struct grid_cell	gc;
+	const char	*colour;
+	int		 c;
+
+	screen_set_default_cursor(s, global_w_options);
+
+	colour = options_get_string(oo, "copy-mode-cursor-colour");
+	if (*colour != '\0') {
+		style_apply(&gc, oo, "copy-mode-cursor-colour", NULL);
+		s->default_ccolour = gc.fg;
+	}
+
+	c = options_get_number(oo, "copy-mode-cursor-style");
+	if (c == 0)
+		return;
+
+	s->default_mode = 0;
+	screen_set_cursor_style(c - 1, &s->default_cstyle, &s->default_mode);
 }
 
 /* Set screen cursor style and mode. */
@@ -343,6 +367,8 @@ screen_resize_cursor(struct screen *s, u_int sx, u_int sy, int reflow,
 	if (sy < 1)
 		sy = 1;
 
+	if (sx != screen_size_x(s) || sy != screen_size_y(s))
+		s->grid->resize_generation++;
 	if (sx != screen_size_x(s)) {
 		s->grid->sx = sx;
 		screen_reset_tabs(s);
