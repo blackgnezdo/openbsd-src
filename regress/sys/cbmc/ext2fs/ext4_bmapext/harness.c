@@ -5,7 +5,8 @@
  * leaving path as it was (bad root header), or it releases an
  * earlier path->ep_bp, as the real one does before reading an extent
  * block, and then returns NULL (read or header failure, ep_bp NULL) or
- * path with ep_bp NULL or a held buffer and ep_ext NULL or an extent.
+ * path with ep_bp NULL or a held buffer and ep_ext NULL or an extent
+ * (inside the held buffer if there is one, else in the inode).
  *
  * Properties: no access outside an object (no use of an uninitialised
  * path), and on return no buffer is held but the one ext2fs_bufatoff
@@ -65,7 +66,11 @@ model_find_extent(struct m_ext2fs *fs, struct inode *ip, daddr_t lbn,
 		model_bread(NULL, 0, fs->e2fs_fsize, &bp);
 		path->ep_bp = bp;
 	}
-	path->ep_ext = nondet_bool() ? &g_ext : NULL;
+	if (nondet_bool())
+		path->ep_ext = NULL;
+	else				/* in the block read, or in the inode */
+		path->ep_ext = path->ep_bp != NULL ?
+		    (struct ext4_extent *)path->ep_bp->b_data : &g_ext;
 	path->ep_index = NULL;
 	return (path);
 }
@@ -90,6 +95,7 @@ main(void)
 	fs.e2fs_bmask = ~1023;
 	fs.e2fs_fsbtodb = 1;
 	ump.um_devvp = &devvp;
+	__CPROVER_havoc_object(&g_ext);	/* an arbitrary in-inode extent */
 	ino.i_ump = &ump;
 	ino.i_vnode = &vn;
 	ino.i_e2fs = &fs;

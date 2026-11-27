@@ -1678,8 +1678,14 @@ ext2fs/ext4_bmapext, ext2fs/ext4_bufatoff, ext2fs/ext4_ext_read
 	ext4_ext_find_extent replaced by a model of its contract (above):
 	NULL with path untouched, or an earlier path->ep_bp released and
 	then NULL or path with ep_bp and ep_ext each set or not.
-	ext4_ext_read also has the extent cache as a model and at most 3
-	breads.  VERIFIED: no access outside an object, no buffer held on
+	The extent returned lies in the held buffer if there is one, else
+	in the inode, with arbitrary content.  ext4_ext_read also has the
+	extent cache as a model and at most 3 breads.  VERIFIED: no access
+	outside an object (nor to a released buffer), no buffer held on
 	return but the one ext2fs_bufatoff hands back.  mutant_prefix/ is
 	each file before a8b853ca1 (VIOLATED: ext4_bmapext used an
-	uninitialised path; all three returned holding path.ep_bp).
+	uninitialised path; all three returned holding path.ep_bp;
+	ext4_ext_read used a stale ep_ext, in a released buffer, after a
+	failed lookup).  ext4_bufatoff/mutant_release/ is ext2fs_subr.c as
+	of a8b853ca1, which read ep after releasing the buffer it points
+	into (VIOLATED; fixed in 6eb817310).
