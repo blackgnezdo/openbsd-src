@@ -219,12 +219,13 @@ udf_mountfs(struct vnode *devvp, struct mount *mp, uint32_t lb, struct proc *p)
 	struct fileset_desc *fsd;
 	struct extfile_entry *xfentry;
 	struct file_entry *fentry;
-	uint32_t sector, size, mvds_start, mvds_end;
+	uint32_t sector, mvds_start, mvds_end;
 	uint32_t fsd_offset = 0;
 	uint16_t part_num = 0, fsd_part = 0;
 	int error = EINVAL;
 	int logvol_found = 0, part_found = 0, fsd_found = 0;
 	int bsize;
+	uint32_t lb_size, hdr, l_ea;
 
 	/*
 	 * Disallow multiple mounts of the same device.
@@ -290,7 +291,15 @@ udf_mountfs(struct vnode *devvp, struct mount *mp, uint32_t lb, struct proc *p)
 		}
 		lvd = (struct logvol_desc *)bp->b_data;
 		if (!udf_checktag(&lvd->tag, TAGID_LOGVOL)) {
-			ump->um_bsize = letoh32(lvd->lb_size);
+			lb_size = letoh32(lvd->lb_size);
+			if (lb_size < DEV_BSIZE || lb_size > MAXBSIZE ||
+			    !powerof2(lb_size)) {
+				printf("Invalid logical block size %u\n",
+				    lb_size);
+				error = EINVAL;
+				goto bail;
+			}
+			ump->um_bsize = lb_size;
 			ump->um_bmask = ump->um_bsize - 1;
 			ump->um_bshift = ffs(ump->um_bsize) - 1;
 			fsd_part = letoh16(lvd->_lvd_use.fsd_loc.loc.part_num);
@@ -329,16 +338,25 @@ udf_mountfs(struct vnode *devvp, struct mount *mp, uint32_t lb, struct proc *p)
 		}
 		xfentry = (struct extfile_entry *)bp->b_data;
 		fentry = (struct file_entry *)bp->b_data;
-		if (udf_checktag(&xfentry->tag, TAGID_EXTFENTRY) == 0)
-			la = (struct long_ad *)&xfentry->data[letoh32(xfentry->l_ea)];
-		else if (udf_checktag(&fentry->tag, TAGID_FENTRY) == 0)
-			la = (struct long_ad *)&fentry->data[letoh32(fentry->l_ea)];
-		else {
+		if (udf_checktag(&xfentry->tag, TAGID_EXTFENTRY) == 0) {
+			hdr = UDF_EXTFENTRY_SIZE;
+			l_ea = letoh32(xfentry->l_ea);
+		} else if (udf_checktag(&fentry->tag, TAGID_FENTRY) == 0) {
+			hdr = UDF_FENTRY_SIZE;
+			l_ea = letoh32(fentry->l_ea);
+		} else {
 			printf("Invalid Metadata File FE @ sector %d! (tag.id %d)\n",
 			    sector, fentry->tag.id);
 			error = EINVAL;
 			goto bail;
 		}
+		if (l_ea > ump->um_bsize - hdr - sizeof(struct long_ad)) {
+			printf("Invalid Metadata File FE @ sector %d!\n",
+			    sector);
+			error = EINVAL;
+			goto bail;
+		}
+		la = (struct long_ad *)((char *)bp->b_data + hdr + l_ea);
 		ump->um_meta_start = letoh32(la->loc.lb_num);
 		ump->um_meta_len = letoh32(la->len);
 		if (bp != NULL) {
@@ -402,9 +420,8 @@ udf_mountfs(struct vnode *devvp, struct mount *mp, uint32_t lb, struct proc *p)
 	 * Find the file entry for the root directory.
 	 */
 	sector = letoh32(ump->um_root_icb.loc.lb_num);
-	size = letoh32(ump->um_root_icb.len);
 	udf_vat_map(ump, &sector);
-	if ((error = udf_readlblks(ump, sector, size, &bp)) != 0) {
+	if ((error = RDSECTOR(devvp, sector, ump->um_bsize, &bp)) != 0) {
 		printf("Cannot read sector %d\n", sector);
 		goto bail;
 	}
@@ -429,6 +446,7 @@ udf_mountfs(struct vnode *devvp, struct mount *mp, uint32_t lb, struct proc *p)
 
 bail:
 	if (ump != NULL) {
+		free(ump->um_stbl, M_UDFMOUNT, 0);
 		hashfree(ump->um_hashtbl, UDF_HASHTBLSIZE, M_UDFMOUNT);
 		free(ump, M_UDFMOUNT, 0);
 		mp->mnt_data = NULL;
