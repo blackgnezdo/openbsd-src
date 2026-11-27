@@ -81,11 +81,12 @@ ext2fs_bufatoff(struct inode *ip, off_t offset, char **res, struct buf **bpp)
 			goto normal;
 		}
 
+		/* ep points into path.ep_bp */
+		pos = lbn - ep->e_blk + (((daddr_t)ep->e_start_hi << 32) | ep->e_start_lo);
 		if (path.ep_bp != NULL) {
 			brelse(path.ep_bp);
 			path.ep_bp = NULL;
 		}
-		pos = lbn - ep->e_blk + (((daddr_t)ep->e_start_hi << 32) | ep->e_start_lo);
 		error = bread(ip->i_devvp, fsbtodb(fs, pos), fs->e2fs_bsize, &bp);
 		if (error) {
 			brelse(bp);
