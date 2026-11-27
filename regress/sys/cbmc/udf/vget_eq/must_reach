@@ -1,0 +1,3 @@
+udf_vfsops.c:bcopy(bp->b_data, up->u_fentry, size);
+udf_vfsops.c:printf("Invalid file entry size!\n");
+udf_vfsops.c:*vpp = vp;

@@ -1,0 +1,5 @@
+udf_vfsops.c:*hdr = UDF_EXTFENTRY_SIZE;
+udf_vfsops.c:*hdr = UDF_FENTRY_SIZE;
+udf_vfsops.c:bcopy(bp->b_data, up->u_fentry, size);
+udf_vfsops.c:printf("Invalid file entry size!\n");
+udf_vfsops.c:*vpp = vp;

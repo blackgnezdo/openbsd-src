@@ -25,6 +25,9 @@ Fixed on this branch and not upstream
 	76f5dd290, 916018f12	ipmi SMIC loop bound, BMC reply length
 	1eb9b557e	acpimadt_validate entry header
 	3eb637104	udf_getfid fragment lengths
+	9a103f788, c05d2c931, f61f24bf6	udf_vget entry lengths,
+			udf_mountfs block size, metadata and root
+			entries, um_stbl on failure
 	Upstream has, in the same form: 0c58720fc (pfsync peer reads,
 	targets net/pfsync_in_clr, _ins, _tdb), 01fea79e8 and 0615bc1fb
 	(pf tags, /0 mask; 34d59093f, 5260cd972 here), 2f6d8ba00
@@ -50,6 +53,12 @@ acpi/amlprims (cbmc)
 	interface carries no bound.  A fix changes the interface.
 
 Unfixed, no target
+
+sys/isofs/udf/udf_vfsops.c, udf_find_partmaps and handlers (read)
+	The n_pm walk over lvd->maps is bounded neither by mt_l nor by
+	the block; udf_get_spartmap trusts st_size (malloc, bread size,
+	bcopy) and rt_l (entries[] walk).  udf/mountfs models this part.
+	um_vat is not freed on udf_mountfs's failure path either.
 
 sys/dev/acpi/acpimadt.c, acpimadt_attach (read)
 	ioapic_find_bybase() result dereferenced without a NULL test.

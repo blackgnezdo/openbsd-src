@@ -1,0 +1,6 @@
+udf_vfsops.c:devvp->v_specmountpoint = mp;
+udf_vfsops.c:la = (struct long_ad *)((char *)bp->b_data + hdr + l_ea);
+udf_vfsops.c:*hdr = UDF_FENTRY_SIZE;
+udf_vfsops.c:*hdr = UDF_EXTFENTRY_SIZE;
+udf_vfsops.c:printf("Invalid root file entry!\n");
+udf_vfsops.c:printf("Invalid logical block size %u\n",

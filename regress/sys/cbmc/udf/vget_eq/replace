@@ -1,0 +1,5 @@
+bread:model_bread
+brelse:model_brelse
+__builtin_bcopy:model_bcopy
+kmalloc:model_kmalloc
+kfree:model_kfree

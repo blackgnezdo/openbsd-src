@@ -1610,3 +1610,47 @@ net/pfsync_in_upd
 	mutant/ (the timeout check one loose) and mutant_peer/ (upd_c's
 	dst.state check one loose) are VIOLATED.  Native: CLEAN.  Check
 	phase about 50 s, 3 million variables.
+
+udf/vget
+	udf_vget() of sys/isofs/udf/udf_vfsops.c on one file entry block
+	of 512 arbitrary bytes; bread, brelse, udf_allocv and the hash
+	are models, bcopy is a contract (both ranges, the first 216
+	bytes copied).  VERIFIED: no access outside the block or
+	u_fentry; on success the fixed part of the entry's type and
+	l_ea + l_ad bytes after it lie inside u_fentry.  Check about
+	155 s.  mutant_prefix/ is the source before 9a103f788 (l_ea +
+	l_ad summed in an int, unchecked: VIOLATED); mutant_sizeonly/
+	checks only that int sum against the block, as first proposed
+	(VIOLATED: the sum wraps, e.g. l_ea + l_ad == 0xffffff28).
+
+udf/vget_eq
+	Refinement: the current udf_vget() against the one before
+	9a103f788 (extracted into old_vget.h), on the same block and the
+	same bread, M_NOWAIT and udf_allocv outcomes.  VERIFIED: an
+	entry that fits in the block, or one with an invalid tag, gets
+	the same result (EINVAL where it was ENOMEM for an invalid tag);
+	on success the same bcopy from the block and the same vnode
+	type, and u_fentry is hdr + l_ea + l_ad bytes (it was 216 +
+	l_ea + l_ad).  A valid tag with an entry larger than the block
+	gets EINVAL and everything taken is released.  The old function
+	is not run on that entry (its bcopy overruns the block).
+	mutant_strict/ (>= in udf_fentry_sizes), mutant_alloc/ (the old
+	allocation size) and mutant_leak/ (no pool_put on rejection) are
+	VIOLATED.
+
+udf/mountfs
+	udf_mountfs() on a medium of arbitrary content (at most 5 breads
+	per run; bread hands out arbitrary bytes of the size asked).
+	udf_find_partmaps and udf_vat_get are models, so the partition
+	map parsing is not covered.  VERIFIED: no access outside an
+	object, no division by zero, bread sizes in (0, MAXBSIZE], no
+	leak; on success um_bsize is a power of two in [DEV_BSIZE,
+	MAXBSIZE] with matching um_bmask and um_bshift, and the root file
+	entry passes udf_vget's checks (otherwise the mount cannot be
+	looked up through, hence not unmounted).  mutant_prefix/ is the
+	source before 9a103f788 (VIOLATED: um_bsize, descriptor reads
+	past a small block, the metadata file entry's l_ea, the root
+	read's size, um_stbl leaked on failure).  mutant_noroot/ is the
+	source before f61f24bf6 (VIOLATED: the root entry).  The leak
+	check counts any allocation not freed by the end, so the harness
+	frees what udf_unmount frees after a successful mount.

@@ -1,0 +1,10 @@
+printf
+panic
+vfs_mountedon
+vcount
+vinvalbuf
+VOP_OPEN
+VOP_CLOSE
+vn_lock
+VOP_UNLOCK
+arc4random_buf
