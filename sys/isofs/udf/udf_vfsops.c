@@ -76,6 +76,7 @@ struct pool unode_pool;
 struct pool udf_ds_pool;
 
 int udf_find_partmaps(struct umount *, struct logvol_desc *);
+int udf_fentry_sizes(uint32_t, void *, uint32_t *, uint32_t *, uint32_t *);
 int udf_get_vpartmap(struct umount *, struct part_map_virt *);
 int udf_get_spartmap(struct umount *, struct part_map_spare *);
 int udf_get_mpartmap(struct umount *, struct part_map_meta *);
@@ -217,15 +218,13 @@ udf_mountfs(struct vnode *devvp, struct mount *mp, uint32_t lb, struct proc *p)
 	struct part_desc *pd;
 	struct logvol_desc *lvd;
 	struct fileset_desc *fsd;
-	struct extfile_entry *xfentry;
-	struct file_entry *fentry;
 	uint32_t sector, mvds_start, mvds_end;
 	uint32_t fsd_offset = 0;
 	uint16_t part_num = 0, fsd_part = 0;
 	int error = EINVAL;
 	int logvol_found = 0, part_found = 0, fsd_found = 0;
 	int bsize;
-	uint32_t lb_size, hdr, l_ea;
+	uint32_t lb_size, hdr, l_ea, l_ad;
 
 	/*
 	 * Disallow multiple mounts of the same device.
@@ -336,21 +335,10 @@ udf_mountfs(struct vnode *devvp, struct mount *mp, uint32_t lb, struct proc *p)
 			error = EINVAL;
 			goto bail;
 		}
-		xfentry = (struct extfile_entry *)bp->b_data;
-		fentry = (struct file_entry *)bp->b_data;
-		if (udf_checktag(&xfentry->tag, TAGID_EXTFENTRY) == 0) {
-			hdr = UDF_EXTFENTRY_SIZE;
-			l_ea = letoh32(xfentry->l_ea);
-		} else if (udf_checktag(&fentry->tag, TAGID_FENTRY) == 0) {
-			hdr = UDF_FENTRY_SIZE;
-			l_ea = letoh32(fentry->l_ea);
-		} else {
-			printf("Invalid Metadata File FE @ sector %d! (tag.id %d)\n",
-			    sector, fentry->tag.id);
-			error = EINVAL;
-			goto bail;
-		}
-		if (l_ea > ump->um_bsize - hdr - sizeof(struct long_ad)) {
+		error = udf_fentry_sizes(ump->um_bsize, bp->b_data, &hdr, &l_ea,
+		    &l_ad);
+		if (error ||
+		    l_ea > ump->um_bsize - hdr - sizeof(struct long_ad)) {
 			printf("Invalid Metadata File FE @ sector %d!\n",
 			    sector);
 			error = EINVAL;
@@ -426,15 +414,15 @@ udf_mountfs(struct vnode *devvp, struct mount *mp, uint32_t lb, struct proc *p)
 		goto bail;
 	}
 
-	xfentry = (struct extfile_entry *)bp->b_data;
-	fentry = (struct file_entry *)bp->b_data;
-	error = udf_checktag(&xfentry->tag, TAGID_EXTFENTRY);
+	/*
+	 * Check the root as udf_vget() will: a root it rejects would leave
+	 * a mount that cannot be looked up, hence cannot be unmounted.
+	 */
+	error = udf_fentry_sizes(ump->um_bsize, bp->b_data, &hdr, &l_ea, &l_ad);
 	if (error) {
-	    	error = udf_checktag(&fentry->tag, TAGID_FENTRY);
-		if (error) {
-			printf("Invalid root file entry!\n");
-			goto bail;
-		}
+		printf("Invalid root file entry!\n");
+		error = EINVAL;
+		goto bail;
 	}
 
 	brelse(bp);
@@ -567,8 +555,6 @@ udf_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
 	struct proc *p;
 	struct vnode *vp;
 	struct unode *up;
-	struct extfile_entry *xfe;
-	struct file_entry *fe;
 	uint32_t sector;
 	uint32_t l_ea, l_ad, hdr;
 	int error, size;
@@ -607,24 +593,8 @@ udf_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
 		return (error);
 	}
 
-	xfe = (struct extfile_entry *)bp->b_data;
-	fe = (struct file_entry *)bp->b_data;
-	if (udf_checktag(&xfe->tag, TAGID_EXTFENTRY) == 0) {
-		hdr = UDF_EXTFENTRY_SIZE;
-		l_ea = letoh32(xfe->l_ea);
-		l_ad = letoh32(xfe->l_ad);
-	} else if (udf_checktag(&fe->tag, TAGID_FENTRY) == 0) {
-		hdr = UDF_FENTRY_SIZE;
-		l_ea = letoh32(fe->l_ea);
-		l_ad = letoh32(fe->l_ad);
-	} else {
-		printf("Invalid file entry!\n");
-		pool_put(&unode_pool, up);
-		brelse(bp);
-		return (ENOMEM);
-	}
-
-	if (l_ea > ump->um_bsize - hdr || l_ad > ump->um_bsize - hdr - l_ea) {
+	error = udf_fentry_sizes(ump->um_bsize, bp->b_data, &hdr, &l_ea, &l_ad);
+	if (error) {
 		printf("Invalid file entry size!\n");
 		pool_put(&unode_pool, up);
 		brelse(bp);
@@ -812,6 +782,36 @@ udf_get_mpartmap(struct umount *ump, struct part_map_meta *pmm)
 {
 	ump->um_flags |= UDF_MNT_USES_META;
 	ump->um_meta_start = pmm->meta_file_lbn;
+	return (0);
+}
+
+/*
+ * Check that data holds a file entry or an extended file entry whose
+ * extended attribute and allocation descriptor areas fit in one logical
+ * block, and return its header size and the lengths of both areas.
+ * Return EINVAL on bad tag or the areas overrun the block.
+ */
+int
+udf_fentry_sizes(uint32_t um_bsize, void *data, uint32_t *hdr,
+    uint32_t *l_ea, uint32_t *l_ad)
+{
+	struct extfile_entry *xfe = data;
+	struct file_entry *fe = data;
+
+	if (udf_checktag(&xfe->tag, TAGID_EXTFENTRY) == 0) {
+		*hdr = UDF_EXTFENTRY_SIZE;
+		*l_ea = letoh32(xfe->l_ea);
+		*l_ad = letoh32(xfe->l_ad);
+	} else if (udf_checktag(&fe->tag, TAGID_FENTRY) == 0) {
+		*hdr = UDF_FENTRY_SIZE;
+		*l_ea = letoh32(fe->l_ea);
+		*l_ad = letoh32(fe->l_ad);
+	} else
+		return (EINVAL);
+
+	if (*l_ea > um_bsize - *hdr || *l_ad > um_bsize - *hdr - *l_ea)
+		return (EINVAL);
+
 	return (0);
 }
 
