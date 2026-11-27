@@ -41,13 +41,16 @@
 #include <ufs/ext2fs/ext2fs_extents.h>
 #include <ufs/ext2fs/ext2fs_extern.h>
 
+#define EXT4_EXT_DEPTH_MAX	5	/* as Linux EXT4_MAX_EXTENT_DEPTH */
+
 static void ext4_ext_binsearch_index(struct inode *ip, struct ext4_extent_path
 		*path, daddr_t lbn)
 {
 	struct ext4_extent_header *ehp = path->ep_header;
 	struct ext4_extent_index *l, *r, *m;
 
-	l = (struct ext4_extent_index *)(char *)(ehp + 1);
+	/* ext4_ext_check_header: an index node has at least one entry */
+	l = (struct ext4_extent_index *)(char *)(ehp + 1) + 1;
 	r = (struct ext4_extent_index *)(char *)(ehp + 1) + ehp->eh_ecount - 1;
 	while (l <= r) {
 		m = l + (r - l) / 2;
@@ -69,7 +72,7 @@ ext4_ext_binsearch(struct inode *ip, struct ext4_extent_path *path, daddr_t lbn)
 	if (ehp->eh_ecount == 0)
 		return;
 
-	l = (struct ext4_extent *)(char *)(ehp + 1);
+	l = (struct ext4_extent *)(char *)(ehp + 1) + 1;
 	r = (struct ext4_extent *)(char *)(ehp + 1) + ehp->eh_ecount - 1;
 	while (l <= r) {
 		m = l + (r - l) / 2;
@@ -80,6 +83,26 @@ ext4_ext_binsearch(struct inode *ip, struct ext4_extent_path *path, daddr_t lbn)
 	}
 
 	path->ep_ext = l - 1;
+}
+
+/*
+ * Check an extent tree header read from disk: its entries fit in the
+ * size bytes it was read in, and its depth is the one expected.
+ */
+static int
+ext4_ext_check_header(struct ext4_extent_header *ehp, size_t size, int depth)
+{
+	if (ehp->eh_magic != EXT4_EXT_MAGIC)
+		return (EINVAL);
+	if (ehp->eh_depth != depth || depth > EXT4_EXT_DEPTH_MAX)
+		return (EINVAL);
+	if (ehp->eh_max > (size - sizeof(*ehp)) / sizeof(struct ext4_extent))
+		return (EINVAL);
+	if (ehp->eh_ecount > ehp->eh_max)
+		return (EINVAL);
+	if (depth > 0 && ehp->eh_ecount == 0)
+		return (EINVAL);
+	return (0);
 }
 
 /*
@@ -138,7 +161,8 @@ ext4_ext_find_extent(struct m_ext2fs *fs, struct inode *ip,
 	vp = ITOV(ip);
 	ehp = (struct ext4_extent_header *)(char *)ip->i_e2fs_blocks;
 
-	if (ehp->eh_magic != EXT4_EXT_MAGIC)
+	if (ext4_ext_check_header(ehp, sizeof(ip->i_e2din->e2di_blocks),
+	    ehp->eh_depth))
 		return (NULL);
 
 	path->ep_header = ehp;
@@ -162,6 +186,11 @@ ext4_ext_find_extent(struct m_ext2fs *fs, struct inode *ip,
 			return (NULL);
 		}
 		ehp = (struct ext4_extent_header *)path->ep_bp->b_data;
+		if (ext4_ext_check_header(ehp, fs->e2fs_fsize, i - 1)) {
+			brelse(path->ep_bp);
+			path->ep_bp = NULL;
+			return (NULL);
+		}
 		path->ep_header = ehp;
 	}
 

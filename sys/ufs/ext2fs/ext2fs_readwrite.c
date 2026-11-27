@@ -188,9 +188,14 @@ ext4_ext_read(struct vnode *vp, struct inode *ip, struct m_ext2fs *fs, struct ui
 		cache_type = ext4_ext_in_cache(ip, lbn, &nex);
 		switch (cache_type) {
 		case EXT4_EXT_CACHE_NO:
-			ext4_ext_find_extent(fs, ip, lbn, &path);
-			if ((ep = path.ep_ext) == NULL)
+			if (ext4_ext_find_extent(fs, ip, lbn, &path) == NULL ||
+			    (ep = path.ep_ext) == NULL) {
+				if (path.ep_bp != NULL) {
+					brelse(path.ep_bp);
+					path.ep_bp = NULL;
+				}
 				return (EIO);
+			}
 			ext4_ext_put_cache(ip, ep, EXT4_EXT_CACHE_IN);
 
 			pos = lbn - ep->e_blk + (((daddr_t) ep->e_start_hi << 32) | ep->e_start_lo);

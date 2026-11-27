@@ -107,11 +107,17 @@ ext4_bmapext(struct vnode *vp, daddr_t bn, daddr_t *bnp, struct indir *ap, int *
 	if (nump != NULL)
 		*nump = 0;
 
-	ext4_ext_find_extent(fs, ip, bn, &path);
-	if ((ep = path.ep_ext) == NULL)
+	memset(&path, 0, sizeof(path));
+	if (ext4_ext_find_extent(fs, ip, bn, &path) == NULL ||
+	    (ep = path.ep_ext) == NULL) {
+		if (path.ep_bp != NULL)
+			brelse(path.ep_bp);
 		return (EIO);
+	}
 
 	pos = bn - ep->e_blk + (((daddr_t)ep->e_start_hi << 32) | ep->e_start_lo);
+	if (path.ep_bp != NULL)
+		brelse(path.ep_bp);
 	if ((*bnp = fsbtodb(fs, pos)) == 0)
 		*bnp = -1;
 	return (0);

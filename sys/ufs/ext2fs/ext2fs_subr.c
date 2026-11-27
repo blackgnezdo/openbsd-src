@@ -75,8 +75,11 @@ ext2fs_bufatoff(struct inode *ip, off_t offset, char **res, struct buf **bpp)
 
 		memset(&path, 0, sizeof path);
 		if (ext4_ext_find_extent(fs, ip, lbn, &path) == NULL ||
-		    (ep = path.ep_ext) == NULL)
+		    (ep = path.ep_ext) == NULL) {
+			if (path.ep_bp != NULL)
+				brelse(path.ep_bp);
 			goto normal;
+		}
 
 		if (path.ep_bp != NULL) {
 			brelse(path.ep_bp);
