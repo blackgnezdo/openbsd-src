@@ -1,0 +1,1 @@
+ext2fs_readwrite.c:error = uiomove(bp->b_data + blkoffset, xfersize, uio);

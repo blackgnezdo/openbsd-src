@@ -1654,3 +1654,32 @@ udf/mountfs
 	source before f61f24bf6 (VIOLATED: the root entry).  The leak
 	check counts any allocation not freed by the end, so the harness
 	frees what udf_unmount frees after a successful mount.
+
+ext2fs/ext4_find_extent
+	ext4_ext_find_extent() of sys/ufs/ext2fs/ext2fs_extents.c on an
+	inode whose dinode (the in-inode root, 60 bytes) has arbitrary
+	content and on extent blocks of arbitrary content, 64 bytes (the
+	kernel's are 1024 << n; 64 holds a header and 4 entries), at most
+	2 reads.  VERIFIED, check about 10 s: no access outside the dinode
+	or a block; a returned ep_ext is one of its header's entries; only
+	path->ep_bp is held.  mutant_nostart/ starts the binary searches
+	at the first entry (VIOLATED: with lbn below it the header itself
+	is returned as an extent).  The source before a8b853ca1 (eh_ecount
+	from disk unchecked) and the fix without the check of headers
+	read from blocks are not mutants here: CBMC times out on them (900
+	s, all properties at once); with --stop-on-fail it reports r
+	98260 bytes past the dinode, and the native engine reports an
+	ASan SEGV in ext4_ext_binsearch_index (resp. ext4_ext_binsearch)
+	within seconds.  Native: CLEAN.
+
+ext2fs/ext4_bmapext, ext2fs/ext4_bufatoff, ext2fs/ext4_ext_read
+	The callers of ext4_ext_find_extent(), one target per file (each
+	file includes ufs/inode.h, which has no include guard), with
+	ext4_ext_find_extent replaced by a model of its contract (above):
+	NULL with path untouched, or an earlier path->ep_bp released and
+	then NULL or path with ep_bp and ep_ext each set or not.
+	ext4_ext_read also has the extent cache as a model and at most 3
+	breads.  VERIFIED: no access outside an object, no buffer held on
+	return but the one ext2fs_bufatoff hands back.  mutant_prefix/ is
+	each file before a8b853ca1 (VIOLATED: ext4_bmapext used an
+	uninitialised path; all three returned holding path.ep_bp).
