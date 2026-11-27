@@ -1,4 +1,4 @@
-/* $OpenBSD: sshconnect.c,v 1.393 2026/10/30 08:39:48 djm Exp $ */
+/* $OpenBSD: sshconnect.c,v 1.395 2026/11/26 20:01:05 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -1504,10 +1504,12 @@ check_host_key(char *hostname, const struct ssh_conn_info *cinfo,
 	return 0;
 
 fail:
-	if (want_cert && host_status != HOST_REVOKED) {
+	if (want_cert && host_status != HOST_REVOKED && !clobber_port) {
 		/*
 		 * No matching certificate. Downgrade cert to raw key and
 		 * search normally.
+		 * Don't do this in the port-less lookup: the caller will
+		 * downgrade and retry itself.
 		 */
 		debug("No matching CA found. Retry with plain key");
 		if ((r = sshkey_from_private(host_key, &raw_key)) != 0)
@@ -1886,6 +1888,22 @@ maybe_add_key_to_agent(const char *authfile, struct sshkey *private,
 
 	if ((r = ssh_get_authentication_socket(&auth_sock)) != 0) {
 		debug3("no authentication agent, not adding key");
+		return;
+	}
+
+	/*
+	 * Don't replace a key that the agent already holds: it may have been
+	 * added with constraints (e.g. destination constraints that hide it
+	 * from the connection bound to this session) that re-adding it here
+	 * would discard.
+	 */
+	r = ssh_agent_has_key(auth_sock, private);
+	if (r != SSH_ERR_KEY_NOT_FOUND && r != SSH_ERR_AGENT_NO_IDENTITIES) {
+		if (r == 0)
+			debug3("key already in agent, not adding");
+		else
+			debug3_r(r, "can't list agent keys, not adding key");
+		close(auth_sock);
 		return;
 	}
 

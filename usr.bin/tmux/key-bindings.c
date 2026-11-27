@@ -1,4 +1,4 @@
-/* $OpenBSD: key-bindings.c,v 1.199 2026/11/16 20:40:55 nicm Exp $ */
+/* $OpenBSD: key-bindings.c,v 1.201 2026/11/24 09:09:04 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -52,7 +52,7 @@
 	" '#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Top,}' '<' {send -X history-top}" \
 	" '#{?#{m/r:(copy|view)-mode,#{pane_mode}},Go To Bottom,}' '>' {send -X history-bottom}" \
 	" ''" \
-	" '#{?#{==:#{pane_mode},copy-mode},#{?copy_line_numbers,Hide Line Numbers,Show Line Numbers},}' 'L' {send -X line-numbers-toggle}" \
+	" '#{?#{==:#{pane_mode},copy-mode},#{?copy_line_numbers,Line Numbers Off,Line Numbers On},}' 'L' {send -X line-numbers-toggle}" \
 	" '#{?#{==:#{pane_mode},copy-mode},#{?refresh_active,Refresh Off,Refresh On},}' 'r' {send -X refresh-toggle}" \
 	" ''" \
 	" '#{?#{&&:#{buffer_size},#{!:#{pane_in_mode}}},Paste #[underscore]#{=/9/...:buffer_sample},}' 'p' {paste-buffer}" \
@@ -589,10 +589,10 @@ key_bindings_init(void)
 		"bind -Tcopy-mode C-n { send -X cursor-down }",
 		"bind -Tcopy-mode C-o { send -X select-output }",
 		"bind -Tcopy-mode C-p { send -X cursor-up }",
-		"bind -Tcopy-mode C-r { command-prompt -P -T search -ip'(search up)' -I'#{pane_search_string}' { send -X search-backward-incremental -- '%%' } }",
-		"bind -Tcopy-mode C-M-r { command-prompt -P -T search -ip'(regex search up)' -I'#{pane_search_string}' { send -X search-backward-incremental-regex -- '%%' } }",
-		"bind -Tcopy-mode C-s { command-prompt -P -T search -ip'(search down)' -I'#{pane_search_string}' { send -X search-forward-incremental -- '%%' } }",
-		"bind -Tcopy-mode C-M-s { command-prompt -P -T search -ip'(regex search down)' -I'#{pane_search_string}' { send -X search-forward-incremental-regex -- '%%' } }",
+		"bind -Tcopy-mode C-r { send -X search-reset; command-prompt -P -T search -ip'(search up)' -I'#{pane_search_string}' { send -X search-backward-incremental -- '%%' } }",
+		"bind -Tcopy-mode C-M-r { send -X search-reset; command-prompt -P -T search -ip'(regex search up)' -I'#{pane_search_string}' { send -X search-backward-incremental-regex -- '%%' } }",
+		"bind -Tcopy-mode C-s { send -X search-reset; command-prompt -P -T search -ip'(search down)' -I'#{pane_search_string}' { send -X search-forward-incremental -- '%%' } }",
+		"bind -Tcopy-mode C-M-s { send -X search-reset; command-prompt -P -T search -ip'(regex search down)' -I'#{pane_search_string}' { send -X search-forward-incremental-regex -- '%%' } }",
 		"bind -Tcopy-mode C-v { send -X page-down }",
 		"bind -Tcopy-mode C-w { send -X copy-pipe-and-cancel }",
 		"bind -Tcopy-mode Escape { send -X cancel }",

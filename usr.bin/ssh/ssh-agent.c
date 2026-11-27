@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-agent.c,v 1.336 2026/10/30 07:18:18 djm Exp $ */
+/* $OpenBSD: ssh-agent.c,v 1.339 2026/11/26 22:26:35 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -101,6 +101,8 @@
 #define AGENT_MAX_DEST_CONSTRAINT_KEYS	16384
 /* Maximum number of associated certificate constraints to accept on a key */
 #define AGENT_MAX_EXT_CERTS		1024
+/* Maximum number of identities to hold; cf. MAX_AGENT_IDENTITIES in authfd.c */
+#define AGENT_MAX_IDENTITIES		2048
 /* Max length of username constraint */
 #define AGENT_USER_CONSTRAINT_MAX_LEN	256
 
@@ -173,10 +175,11 @@ static char *socket_dirspec;
 static char *allowed_providers;
 
 /*
- * Allows PKCS11 providers or SK keys that use non-internal providers to
- * be added over a remote connection (identified by session-bind@openssh.com).
+ * Allows PKCS11 providers or SK keys to be added over a remote connection
+ * (identified by session-bind@openssh.com).
  */
-static int remote_add_provider;
+static int remote_add_p11;
+static int remote_add_fido;
 
 /* locking */
 #define LOCK_SIZE	32
@@ -1090,6 +1093,17 @@ process_remove_all_identities(SocketEntry *e)
 	send_status(e, 1);
 }
 
+/* removes all keys if a signal has asked for that */
+static void
+check_keydrop(void)
+{
+	if (!signalled_keydrop)
+		return;
+	logit("signal %d received; removing all keys", (int)signalled_keydrop);
+	remove_all_identities();
+	signalled_keydrop = 0;
+}
+
 /* removes expired keys and returns number of seconds until the next expiry */
 static time_t
 reaper(void)
@@ -1417,15 +1431,21 @@ process_add_identity(SocketEntry *e)
 			    "authenticator-hosted key", sshkey_type(k));
 			goto out;
 		}
+		/*
+		 * Refuse remote addition of all SK keys, including those
+		 * using the internal provider: every field of the key is
+		 * passed to the local authenticator as-is, so a remote
+		 * client could otherwise probe it without user interaction.
+		 */
+		if (socket_is_remote(e) && !remote_add_fido) {
+			verbose("failed add of SK provider \"%.100s\": "
+			    "remote addition of providers is disabled",
+			    sk_provider);
+			goto out;
+		}
 		if (strcasecmp(sk_provider, "internal") == 0) {
 			debug_f("internal provider");
 		} else {
-			if (socket_is_remote(e) && !remote_add_provider) {
-				verbose("failed add of SK provider \"%.100s\": "
-				    "remote addition of providers is disabled",
-				    sk_provider);
-				goto out;
-			}
 			if (realpath(sk_provider, canonical_provider) == NULL) {
 				verbose("failed provider \"%.100s\": "
 				    "realpath: %s", sk_provider,
@@ -1454,6 +1474,10 @@ process_add_identity(SocketEntry *e)
 	if (lifetime && !death)
 		death = monotime() + lifetime;
 	if ((id = lookup_identity(k)) == NULL) {
+		if (idtab->nentries >= AGENT_MAX_IDENTITIES) {
+			error_f("too many identities");
+			goto out;
+		}
 		id = xcalloc(1, sizeof(Identity));
 		TAILQ_INSERT_TAIL(&idtab->idlist, id, next);
 		/* Increment the number of identities. */
@@ -1571,7 +1595,7 @@ no_identities(SocketEntry *e)
 
 #ifdef ENABLE_PKCS11
 /* Add an identity to idlist; takes ownership of 'key' and 'comment' */
-static void
+static int
 add_p11_identity(struct sshkey *key, char *comment, const char *provider,
     time_t death, u_int confirm, struct dest_constraint *dest_constraints,
     size_t ndest_constraints)
@@ -1588,7 +1612,13 @@ add_p11_identity(struct sshkey *key, char *comment, const char *provider,
 		error_f("too many destination constraint hostkeys loaded");
 		sshkey_free(key);
 		free(comment);
-		return;
+		return 0;
+	}
+	if (idtab->nentries >= AGENT_MAX_IDENTITIES) {
+		error_f("too many identities");
+		sshkey_free(key);
+		free(comment);
+		return -1;
 	}
 	id = xcalloc(1, sizeof(Identity));
 	id->key = key;
@@ -1601,6 +1631,7 @@ add_p11_identity(struct sshkey *key, char *comment, const char *provider,
 	id->ndest_constraints = ndest_constraints;
 	TAILQ_INSERT_TAIL(&idtab->idlist, id, next);
 	idtab->nentries++;
+	return 0;
 }
 
 static void
@@ -1630,7 +1661,7 @@ process_add_smartcard_key(SocketEntry *e)
 		goto send;
 	}
 	dump_dest_constraints(__func__, dest_constraints, ndest_constraints);
-	if (socket_is_remote(e) && !remote_add_provider) {
+	if (socket_is_remote(e) && !remote_add_p11) {
 		verbose("failed PKCS#11 add of \"%.100s\": remote addition of "
 		    "providers is disabled", provider);
 		goto send;
@@ -1662,18 +1693,18 @@ process_add_smartcard_key(SocketEntry *e)
 				continue;
 			if (pkcs11_make_cert(keys[i], certs[j], &k) != 0)
 				continue;
-			add_p11_identity(k, xstrdup(comments[i]),
+			if (add_p11_identity(k, xstrdup(comments[i]),
 			    canonical_provider, death, confirm,
-			    dest_constraints, ndest_constraints);
-			success = 1;
+			    dest_constraints, ndest_constraints) == 0)
+				success = 1;
 		}
 		if (!cert_only && lookup_identity(keys[i]) == NULL) {
-			add_p11_identity(keys[i], comments[i],
+			if (add_p11_identity(keys[i], comments[i],
 			    canonical_provider, death, confirm,
-			    dest_constraints, ndest_constraints);
+			    dest_constraints, ndest_constraints) == 0)
+				success = 1;
 			keys[i] = NULL;		/* transferred */
 			comments[i] = NULL;	/* transferred */
-			success = 1;
 		}
 		/* XXX update constraints for existing keys */
 		sshkey_free(keys[i]);
@@ -1706,7 +1737,7 @@ process_remove_smartcard_key(SocketEntry *e)
 	}
 	free(pin);
 
-	if (socket_is_remote(e) && !remote_add_provider) {
+	if (socket_is_remote(e) && !remote_add_p11) {
 		verbose("failed PKCS#11 remove of \"%.100s\": remote removal of "
 		    "providers is disabled", provider);
 		goto send;
@@ -1934,6 +1965,15 @@ process_message(u_int socknum)
 	}
 
 	debug_f("socket %u (fd=%d) type %d", socknum, e->fd, type);
+
+	/*
+	 * Requests served earlier in this pass of the main loop may have
+	 * taken a long time (e.g. slow signatures or confirmation dialogs).
+	 * Don't let this one use keys that have expired or that we were
+	 * told to drop in the meantime.
+	 */
+	check_keydrop();
+	(void) reaper();
 
 	/* check whether agent is locked */
 	if (locked && type != SSH_AGENTC_UNLOCK) {
@@ -2366,8 +2406,10 @@ main(int ac, char **av)
 		case 'O':
 			if (strcmp(optarg, "no-restrict-websafe") == 0)
 				restrict_websafe = 0;
+			else if (strcmp(optarg, "allow-remote-fido") == 0)
+				remote_add_fido = 1;
 			else if (strcmp(optarg, "allow-remote-pkcs11") == 0)
-				remote_add_provider = 1;
+				remote_add_p11 = 1;
 			else if ((ccp = strprefix(optarg,
 			    "websafe-allow=", 0)) != NULL) {
 				if (websafe_allowlist != NULL)
@@ -2654,12 +2696,7 @@ skip:
 			logit("exiting on signal %d", (int)signalled_exit);
 			cleanup_exit(2);
 		}
-		if (signalled_keydrop) {
-			logit("signal %d received; removing all keys",
-			    (int)signalled_keydrop);
-			remove_all_identities();
-			signalled_keydrop = 0;
-		}
+		check_keydrop();
 		ptimeout_init(&timeout);
 		prepare_poll(&pfd, &npfd, &timeout, maxfds);
 		result = ppoll(pfd, npfd, ptimeout_get_tsp(&timeout), &osigset);

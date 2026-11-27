@@ -1,4 +1,4 @@
-/*	$OpenBSD: print.c,v 1.82 2026/10/30 14:18:22 tb Exp $ */
+/*	$OpenBSD: print.c,v 1.84 2026/11/26 09:01:52 tb Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -136,9 +136,10 @@ tal_print(const struct tal *p)
 	free(ski);
 }
 
-void
-x509_print(const X509 *x)
+static void
+x509_print(const struct cert *cert)
 {
+	const X509		*x = cert->x509;
 	const ASN1_INTEGER	*xserial;
 	const X509_NAME		*xissuer;
 	char			*issuer = NULL;
@@ -290,7 +291,7 @@ cert_print(const struct cert *p)
 		json_do_string("ski", p->ski);
 		if (p->aki != NULL)
 			json_do_string("aki", p->aki);
-		x509_print(p->x509);
+		x509_print(p);
 		if (p->aia != NULL)
 			json_do_string("aia", p->aia);
 		if (p->crldp != NULL)
@@ -313,7 +314,7 @@ cert_print(const struct cert *p)
 		if (p->aki != NULL)
 			printf("Authority key identifier: %s\n",
 			    pretty_key_id(p->aki));
-		x509_print(p->x509);
+		x509_print(p);
 		if (p->aia != NULL)
 			printf("Authority info access:    %s\n", p->aia);
 		if (p->crldp != NULL)
@@ -462,7 +463,7 @@ mft_print(const struct cert *c, const struct mft *p)
 	if (outformats & FORMAT_JSON) {
 		json_do_string("type", "manifest");
 		json_do_string("ski", c->ski);
-		x509_print(c->x509);
+		x509_print(c);
 		json_do_string("aki", c->aki);
 		json_do_string("aia", c->aia);
 		json_do_string("sia", c->signedobj);
@@ -475,7 +476,7 @@ mft_print(const struct cert *c, const struct mft *p)
 	} else {
 		printf("Subject key identifier:   %s\n", pretty_key_id(c->ski));
 		printf("Authority key identifier: %s\n", pretty_key_id(c->aki));
-		x509_print(c->x509);
+		x509_print(c);
 		printf("Authority info access:    %s\n", c->aia);
 		printf("Subject info access:      %s\n", c->signedobj);
 		printf("Manifest number:          %s\n", p->seqnum);
@@ -490,9 +491,8 @@ mft_print(const struct cert *c, const struct mft *p)
 	if (outformats & FORMAT_JSON)
 		json_do_array("filesandhashes");
 	for (i = 0; i < p->filesz; i++) {
-		if (base64_encode(p->files[i].hash, sizeof(p->files[i].hash),
-		    &hash) == -1)
-			errx(1, "base64_encode failure");
+		base64_encode(p->files[i].hash, sizeof(p->files[i].hash),
+		    &hash);
 
 		if (outformats & FORMAT_JSON) {
 			json_do_object("filehash", 1);
@@ -521,7 +521,7 @@ roa_print(const struct cert *c, const struct roa *p)
 	if (outformats & FORMAT_JSON) {
 		json_do_string("type", "roa");
 		json_do_string("ski", c->ski);
-		x509_print(c->x509);
+		x509_print(c);
 		json_do_string("aki", c->aki);
 		json_do_string("aia", c->aia);
 		json_do_string("sia", c->signedobj);
@@ -533,7 +533,7 @@ roa_print(const struct cert *c, const struct roa *p)
 			json_do_int("expires", p->expires);
 	} else {
 		printf("Subject key identifier:   %s\n", pretty_key_id(c->ski));
-		x509_print(c->x509);
+		x509_print(c);
 		printf("Authority key identifier: %s\n", pretty_key_id(c->aki));
 		printf("Authority info access:    %s\n", c->aia);
 		printf("Subject info access:      %s\n", c->signedobj);
@@ -582,7 +582,7 @@ spl_print(const struct cert *c, const struct spl *s)
 	if (outformats & FORMAT_JSON) {
 		json_do_string("type", "spl");
 		json_do_string("ski", c->ski);
-		x509_print(c->x509);
+		x509_print(c);
 		json_do_string("aki", c->aki);
 		json_do_string("aia", c->aia);
 		json_do_string("sia", c->signedobj);
@@ -594,7 +594,7 @@ spl_print(const struct cert *c, const struct spl *s)
 		json_do_uint("asid", s->asid);
 	} else {
 		printf("Subject key identifier:   %s\n", pretty_key_id(c->ski));
-		x509_print(c->x509);
+		x509_print(c);
 		printf("Authority key identifier: %s\n", pretty_key_id(c->aki));
 		printf("Authority info access:    %s\n", c->aia);
 		printf("Subject info access:      %s\n", c->signedobj);
@@ -633,7 +633,7 @@ rsc_print(const struct cert *c, const struct rsc *p)
 	if (outformats & FORMAT_JSON) {
 		json_do_string("type", "rsc");
 		json_do_string("ski", c->ski);
-		x509_print(c->x509);
+		x509_print(c);
 		json_do_string("aki", c->aki);
 		json_do_string("aia", c->aia);
 		json_do_int("signing_time", p->signtime);
@@ -645,7 +645,7 @@ rsc_print(const struct cert *c, const struct rsc *p)
 	} else {
 		printf("Subject key identifier:   %s\n", pretty_key_id(c->ski));
 		printf("Authority key identifier: %s\n", pretty_key_id(c->aki));
-		x509_print(c->x509);
+		x509_print(c);
 		printf("Authority info access:    %s\n", c->aia);
 		printf("Signing time:             %s\n", time2str(p->signtime));
 		printf("RSC not before:           %s\n",
@@ -664,9 +664,8 @@ rsc_print(const struct cert *c, const struct rsc *p)
 		printf("Filenames and hashes:     ");
 
 	for (i = 0; i < p->num_files; i++) {
-		if (base64_encode(p->files[i].hash, sizeof(p->files[i].hash),
-		    &hash) == -1)
-			errx(1, "base64_encode failure");
+		base64_encode(p->files[i].hash, sizeof(p->files[i].hash),
+		    &hash);
 
 		if (outformats & FORMAT_JSON) {
 			json_do_object("filehash", 1);
@@ -698,7 +697,7 @@ aspa_print(const struct cert *c, const struct aspa *p)
 	if (outformats & FORMAT_JSON) {
 		json_do_string("type", "aspa");
 		json_do_string("ski", c->ski);
-		x509_print(c->x509);
+		x509_print(c);
 		json_do_string("aki", c->aki);
 		json_do_string("aia", c->aia);
 		json_do_string("sia", c->signedobj);
@@ -711,7 +710,7 @@ aspa_print(const struct cert *c, const struct aspa *p)
 		json_do_array("providers");
 	} else {
 		printf("Subject key identifier:   %s\n", pretty_key_id(c->ski));
-		x509_print(c->x509);
+		x509_print(c);
 		printf("Authority key identifier: %s\n", pretty_key_id(c->aki));
 		printf("Authority info access:    %s\n", c->aia);
 		printf("Subject info access:      %s\n", c->signedobj);
@@ -743,8 +742,7 @@ takey_print(char *name, const struct takey *t)
 	char	*spki = NULL;
 	size_t	 i, j = 0;
 
-	if (base64_encode(t->pubkey, t->pubkeysz, &spki) != 0)
-		errx(1, "base64_encode failed in %s", __func__);
+	base64_encode(t->pubkey, t->pubkeysz, &spki);
 
 	if (outformats & FORMAT_JSON) {
 		json_do_object("takey", 0);
@@ -784,7 +782,7 @@ tak_print(const struct cert *c, const struct tak *p)
 	if (outformats & FORMAT_JSON) {
 		json_do_string("type", "tak");
 		json_do_string("ski", c->ski);
-		x509_print(c->x509);
+		x509_print(c);
 		json_do_string("aki", c->aki);
 		json_do_string("aia", c->aia);
 		json_do_string("sia", c->signedobj);
@@ -796,7 +794,7 @@ tak_print(const struct cert *c, const struct tak *p)
 		json_do_array("takeys");
 	} else {
 		printf("Subject key identifier:   %s\n", pretty_key_id(c->ski));
-		x509_print(c->x509);
+		x509_print(c);
 		printf("Authority key identifier: %s\n", pretty_key_id(c->aki));
 		printf("Authority info access:    %s\n", c->aia);
 		printf("Subject info access:      %s\n", c->signedobj);
@@ -862,9 +860,7 @@ print_ccr_mftstate(struct ccr *ccr)
 	for (idx = 0; idx < ccr_mfts_num; idx++) {
 		ccr_mft = ccr_mfts[idx];
 
-		if (base64_encode(ccr_mft->hash, SHA256_DIGEST_LENGTH, &hash)
-		    == -1)
-			errx(1, "base64_encode");
+		base64_encode(ccr_mft->hash, SHA256_DIGEST_LENGTH, &hash);
 		aki = hex_encode(ccr_mft->aki, SHA_DIGEST_LENGTH);
 
 		if (outformats & FORMAT_JSON) {
