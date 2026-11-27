@@ -552,6 +552,7 @@ udf_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
 	struct extfile_entry *xfe;
 	struct file_entry *fe;
 	uint32_t sector;
+	uint32_t l_ea, l_ad, hdr;
 	int error, size;
 
 	if (ino > (udfino_t)-1)
@@ -590,35 +591,38 @@ udf_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
 
 	xfe = (struct extfile_entry *)bp->b_data;
 	fe = (struct file_entry *)bp->b_data;
-	error = udf_checktag(&xfe->tag, TAGID_EXTFENTRY);
-	if (error == 0) {
-		size = letoh32(xfe->l_ea) + letoh32(xfe->l_ad);
+	if (udf_checktag(&xfe->tag, TAGID_EXTFENTRY) == 0) {
+		hdr = UDF_EXTFENTRY_SIZE;
+		l_ea = letoh32(xfe->l_ea);
+		l_ad = letoh32(xfe->l_ad);
+	} else if (udf_checktag(&fe->tag, TAGID_FENTRY) == 0) {
+		hdr = UDF_FENTRY_SIZE;
+		l_ea = letoh32(fe->l_ea);
+		l_ad = letoh32(fe->l_ad);
 	} else {
-		error = udf_checktag(&fe->tag, TAGID_FENTRY);
-		if (error) {
-			printf("Invalid file entry!\n");
-			pool_put(&unode_pool, up);
-			if (bp != NULL)
-				brelse(bp);
-			return (ENOMEM);
-		} else
-			size = letoh32(fe->l_ea) + letoh32(fe->l_ad);
+		printf("Invalid file entry!\n");
+		pool_put(&unode_pool, up);
+		brelse(bp);
+		return (ENOMEM);
 	}
 
-	/* Allocate max size of FE/XFE. */
-	up->u_fentry = malloc(size + UDF_EXTFENTRY_SIZE, M_UDFFENTRY, M_NOWAIT | M_ZERO);
+	if (l_ea > ump->um_bsize - hdr || l_ad > ump->um_bsize - hdr - l_ea) {
+		printf("Invalid file entry size!\n");
+		pool_put(&unode_pool, up);
+		brelse(bp);
+		return (EINVAL);
+	}
+	size = l_ea + l_ad + hdr;
+
+	/* Allocate the right size. */
+	up->u_fentry = malloc(size, M_UDFFENTRY, M_NOWAIT | M_ZERO);
 	if (up->u_fentry == NULL) {
 		pool_put(&unode_pool, up);
-		if (bp != NULL)
-			brelse(bp);
+		brelse(bp);
 		return (ENOMEM); /* Cannot allocate file entry block */
 	}
 
-	if (udf_checktag(&xfe->tag, TAGID_EXTFENTRY) == 0)
-		bcopy(bp->b_data, up->u_fentry, size + UDF_EXTFENTRY_SIZE);
-	else
-		bcopy(bp->b_data, up->u_fentry, size + UDF_FENTRY_SIZE);
-	
+	bcopy(bp->b_data, up->u_fentry, size);
 	brelse(bp);
 	bp = NULL;
 
