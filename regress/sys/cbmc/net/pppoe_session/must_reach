@@ -1,0 +1,3 @@
+if_pppoe.c:sppp_input(&sc->sc_sppp.pp_if, m);
+if_pppoe.c:if_vinput(ifp, m, ns);
+if_pppoe.c:pppoe_send_padt(m->m_pkthdr.ph_ifidx, session, shost, 0);

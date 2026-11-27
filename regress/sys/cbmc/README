@@ -988,6 +988,24 @@ net/pppoe_disc
 	pulled up a MAX_PAYLOAD tag of the wrong length (VIOLATED: the
 	pulled-up mbuf leaks).  Native: VACUOUS.
 
+net/pppoe_session
+	pppoe_data_input() and pppoe_vinput() of sys/net/if_pppoe.c on one
+	frame of up to 26 bytes (contract models) against two softcs with
+	arbitrary state, session ID, interface and sc_dest.  Safety: a
+	frame reaches a session only from its concentrator (sc_dest), with
+	its session ID, on its interface.  Completeness: a well-formed
+	frame with a session's tuple is delivered.  VERIFIED, check about
+	95 s.  mutant_prefix/ is the source before 0a6c63c0c (lookups by
+	session ID and interface only; VIOLATED: safety).
+	mutant_collision/ checks the source after the old lookups
+	(VIOLATED: completeness; with two concentrators on one session ID
+	the second session's frames are dropped).  mutant_data/ leaves the
+	pppoe_data_input lookup without the source (VIOLATED: safety;
+	that path only sees frames pppoe_vinput handed back, so in the
+	kernel a session established in between).  CBMC_NEW zeroes: the
+	harness sets sc_dest byte by byte, or every session has the same
+	concentrator.
+
 net/sppp_lcp_rcr
 	sppp_lcp_RCR() of sys/net/if_spppsubr.c on configure requests of
 	up to 20 option bytes (flat buffer), bounded unwinding.
