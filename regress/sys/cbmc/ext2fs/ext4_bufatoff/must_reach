@@ -1,1 +1,2 @@
+ext2fs_subr.c:goto normal;
 ext2fs_subr.c:*res = (char *)bp->b_data + blkoff(fs, offset);

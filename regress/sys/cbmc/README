@@ -1689,3 +1689,51 @@ ext2fs/ext4_bmapext, ext2fs/ext4_bufatoff, ext2fs/ext4_ext_read
 	failed lookup).  ext4_bufatoff/mutant_release/ is ext2fs_subr.c as
 	of a8b853ca1, which read ep after releasing the buffer it points
 	into (VIOLATED; fixed in 6eb817310).
+	Since ea2c5c7ef they also check holes: every data read of the device
+	is lbn's block in a written extent that contains lbn, and
+	ext4_bmapext returns -1 or such a block.  ext4_ext_maps is
+	defined in the harnesses as in ext2fs_extents.c; ext4_ext_read
+	has models of ext2fs_size and uiomove and a cache model that
+	holds only extents mapping their block.  mutant_holes/ is each
+	file before ea2c5c7ef (VIOLATED: a hole, or an unwritten extent, read
+	the blocks after the previous extent).
+
+ext2fs/search_dirblock, ext2fs/search_dirblock_diag
+	ext2fs_search_dirblock() of sys/ufs/ext2fs/ext2fs_lookup.c on one
+	32-byte directory block of arbitrary content from offset 0, names
+	of 1..4 bytes, arbitrary slot state; dirchk 0 and 1 (_diag: as
+	with option DIAGNOSTIC, i.e. GENERIC).  ufs_dirbad is a model that
+	returns.  VERIFIED: it terminates; no access outside the block or
+	the name (names are read by a memcmp model that checks them
+	against the block); found: *entryoffsetinblockp is the entry and
+	i_offset its offset; not found: i_offset ends at the block end.
+	mutant_prefix/ is the file before c4c826265 (VIOLATED: no
+	termination after a bad entry).  mutant_fix2/ only recomputes ep
+	after a bad entry (VIOLATED: dirchk 0, the name compare reads past
+	the block; dirchk 1, ext2fs_dirbadentry panics; both, i_offset
+	left inside the block).  opts has --no-simplify: CBMC 6.8 reads a
+	non-first member of a pointer union (ip->i_e2fs) through a pointer
+	as an arbitrary value otherwise (fixed by diffblue/cbmc#9447).
+
+ufs/ufs_dirbad
+	ufs_dirbad() of sys/ufs/ufs/ufs_lookup.c with arbitrary mnt_flag
+	and mnt_stat.f_flags (only statfs(2) refreshes the latter).
+	VERIFIED: it panics only when MNT_RDONLY is clear in mnt_flag and
+	returns only when it is set.  mutant_prefix/ is the file before
+	72de2a7d3 (VIOLATED both ways).
+
+ext2fs/readdir, ext2fs/readdir_size
+	ext2fs_readdir() on 32-byte directory blocks of arbitrary content
+	from an arbitrary offset (lseek, seekdir); VOP_READ, uiomove and
+	strncpy are models.  readdir (getdents length up to 96):
+	VERIFIED: no panic, ufs_dirbad never called (the offset comes from
+	the user), no access outside the buffer, every name copied lies
+	in the bytes read, uio_offset does not move backwards.
+	readdir_size (getdents length up to INT_MAX, the read fails):
+	VERIFIED: malloc(9) is not asked for more than MALLOC_MAX.
+	mutant_prefix/ is the file before c4c826265 (VIOLATED: readdir reads
+	headers past the buffer and names outside the bytes read;
+	readdir_size reaches the malloc panic).  readdir/mutant_dirbad/
+	reports bad entries through ufs_dirbad (VIOLATED: a read-write
+	mount panics on a user-chosen offset).  Without --no-simplify:
+	with it CBMC 6.8 fails an invariant on __CPROVER_havoc_slice.

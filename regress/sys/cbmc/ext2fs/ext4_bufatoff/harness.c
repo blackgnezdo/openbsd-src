@@ -6,8 +6,7 @@
  * leaving path as it was (bad root header), or it releases an
  * earlier path->ep_bp, as the real one does before reading an extent
  * block, and then returns NULL (read or header failure, ep_bp NULL) or
- * path with ep_bp NULL or a held buffer and ep_ext NULL or an extent
- * (inside the held buffer if there is one, else in the inode).
+ * path with ep_bp NULL or a held buffer and ep_ext NULL or an extent.
  *
  * Properties: no access outside an object (no use of an uninitialised
  * path), and on return no buffer is held but the one ext2fs_bufatoff
@@ -18,12 +17,44 @@
 #include <sys/malloc.h>
 #include "ext2fs_subr.c"
 
+/* as ext2fs_extents.h (for mutants predating it: headers are not overridden) */
+#ifndef EXT4_EXT_INIT_MAX_LEN
+#define EXT4_EXT_INIT_MAX_LEN	32768
+#endif
+int	ext4_ext_maps(struct ext4_extent *, daddr_t);
+
 #ifndef NREADS
 #define NREADS	3
 #endif
 
 static int		g_reads, g_live;
 static struct ext4_extent	g_ext;
+/* the extent the caller was handed for g_lbn (find or cache) */
+static struct ext4_extent	g_used;
+static daddr_t			g_lbn;
+static int			g_used_set;
+static struct vnode		*g_devvp;
+
+/* as ext2fs_extents.c: lbn is in a written extent (the file is not included: ufs/inode.h has no guard) */
+int
+ext4_ext_maps(struct ext4_extent *ep, daddr_t lbn)
+{
+	if (ep->e_len > EXT4_EXT_INIT_MAX_LEN)
+		return (0);
+	return (lbn >= ep->e_blk && lbn < (daddr_t)ep->e_blk + ep->e_len);
+}
+
+/* blkno (DEV_BSIZE units, fsbtodb shift 1) is lbn's block in g_used */
+static int
+in_used(daddr_t blkno)
+{
+	daddr_t s = (daddr_t)g_used.e_start_hi << 32 | g_used.e_start_lo;
+
+	return (g_used_set && g_used.e_len <= EXT4_EXT_INIT_MAX_LEN &&
+	    g_lbn >= g_used.e_blk &&
+	    g_lbn < (daddr_t)g_used.e_blk + g_used.e_len &&
+	    blkno == (s + g_lbn - g_used.e_blk) << 1);
+}
 
 int
 model_bread(struct vnode *vp, daddr_t blkno, int size, struct buf **bpp)
@@ -32,6 +63,9 @@ model_bread(struct vnode *vp, daddr_t blkno, int size, struct buf **bpp)
 
 	__CPROVER_assume(g_reads < NREADS);
 	g_reads++;
+	if (vp == g_devvp)
+		__CPROVER_assert(in_used(blkno),
+		    "data read: lbn's block in a written extent that has it");
 	bp = malloc(sizeof(*bp), M_TEMP, M_WAITOK | M_ZERO);
 	bp->b_data = malloc(size, M_TEMP, M_WAITOK);
 	bp->b_bufsize = size;
@@ -69,9 +103,14 @@ model_find_extent(struct m_ext2fs *fs, struct inode *ip, daddr_t lbn,
 	}
 	if (nondet_bool())
 		path->ep_ext = NULL;
-	else				/* in the block read, or in the inode */
+	else {
+		/* in the block read, or in the in-inode root */
 		path->ep_ext = path->ep_bp != NULL ?
 		    (struct ext4_extent *)path->ep_bp->b_data : &g_ext;
+		g_used = *path->ep_ext;
+		g_lbn = lbn;
+		g_used_set = 1;
+	}
 	path->ep_index = NULL;
 	return (path);
 }
@@ -96,7 +135,8 @@ main(void)
 	fs.e2fs_bmask = ~1023;
 	fs.e2fs_fsbtodb = 1;
 	ump.um_devvp = &devvp;
-	__CPROVER_havoc_object(&g_ext);	/* an arbitrary in-inode extent */
+	g_devvp = &devvp;
+	__CPROVER_havoc_object(&g_ext);	/* an arbitrary extent */
 	ino.i_ump = &ump;
 	ino.i_vnode = &vn;
 	ino.i_e2fs = &fs;

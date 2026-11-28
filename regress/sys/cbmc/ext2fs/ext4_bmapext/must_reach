@@ -1,1 +1,2 @@
-ext2fs_bmap.c:pos = bn - ep->e_blk
+ext2fs_bmap.c:pos = 0;		/* a hole */
+ext2fs_bmap.c:pos = bn - ep->e_blk +

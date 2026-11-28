@@ -29,6 +29,10 @@ Fixed on this branch and not upstream
 			udf_mountfs block size, metadata and root
 			entries, um_stbl on failure
 	a8b853ca1, 6eb817310	ext4 extent headers, callers' path and buffers
+	ea2c5c7ef	ext4 holes and unwritten extents read as zeros
+	72de2a7d3	ufs_dirbad read-only from mnt_flag
+	c4c826265	ext2fs directory entries in lookup and readdir,
+			readdir buffer at MAXBSIZE
 	Upstream has, in the same form: 0c58720fc (pfsync peer reads,
 	targets net/pfsync_in_clr, _ins, _tdb), 01fea79e8 and 0615bc1fb
 	(pf tags, /0 mask; 34d59093f, 5260cd972 here), 2f6d8ba00
