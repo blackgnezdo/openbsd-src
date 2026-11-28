@@ -106,6 +106,19 @@ ext4_ext_check_header(struct ext4_extent_header *ehp, size_t size, int depth)
 }
 
 /*
+ * Whether ep maps lbn to data on disk: lbn is inside the extent and the
+ * extent is written.  An unwritten (preallocated) extent and a block
+ * outside every extent (a hole) read as zeros.
+ */
+int
+ext4_ext_maps(struct ext4_extent *ep, daddr_t lbn)
+{
+	if (ep->e_len > EXT4_EXT_INIT_MAX_LEN)
+		return (0);
+	return (lbn >= ep->e_blk && lbn < (daddr_t)ep->e_blk + ep->e_len);
+}
+
+/*
  * Find a block in ext4 extent cache.
  */
 int

@@ -156,6 +156,21 @@ ext2_ind_read(struct vnode *vp, struct inode *ip, struct m_ext2fs *fs,
 	return (error);
 }
 
+/*
+ * Copy n zero bytes out.
+ */
+static int
+ext4_ext_zero(struct uio *uio, int n)
+{
+	char *zp;
+	int error;
+
+	zp = malloc(n, M_TEMP, M_WAITOK | M_ZERO);
+	error = uiomove(zp, n, uio);
+	free(zp, M_TEMP, n);
+	return (error);
+}
+
 int
 ext4_ext_read(struct vnode *vp, struct inode *ip, struct m_ext2fs *fs, struct uio *uio)
 {
@@ -188,13 +203,24 @@ ext4_ext_read(struct vnode *vp, struct inode *ip, struct m_ext2fs *fs, struct ui
 		cache_type = ext4_ext_in_cache(ip, lbn, &nex);
 		switch (cache_type) {
 		case EXT4_EXT_CACHE_NO:
-			if (ext4_ext_find_extent(fs, ip, lbn, &path) == NULL ||
-			    (ep = path.ep_ext) == NULL) {
+			if (ext4_ext_find_extent(fs, ip, lbn, &path) == NULL) {
 				if (path.ep_bp != NULL) {
 					brelse(path.ep_bp);
 					path.ep_bp = NULL;
 				}
 				return (EIO);
+			}
+			ep = path.ep_ext;
+			if (ep == NULL || !ext4_ext_maps(ep, lbn)) {
+				if (path.ep_bp != NULL) {
+					brelse(path.ep_bp);
+					path.ep_bp = NULL;
+				}
+				/* a hole reads as zeros */
+				error = ext4_ext_zero(uio, xfersize);
+				if (error)
+					return (error);
+				continue;
 			}
 			ext4_ext_put_cache(ip, ep, EXT4_EXT_CACHE_IN);
 

@@ -36,6 +36,8 @@
 #define	EXT4_EXT_CACHE_GAP	1
 #define	EXT4_EXT_CACHE_IN	2
 
+#define	EXT4_EXT_INIT_MAX_LEN	32768	/* longer: unwritten, reads as 0 */
+
 /*
  * Ext4 file system extent on disk.
  */
@@ -91,6 +93,7 @@ struct ext4_extent_path {
 
 struct inode;
 struct m_ext2fs;
+int	ext4_ext_maps(struct ext4_extent *, daddr_t);
 int	ext4_ext_in_cache(struct inode *, daddr_t, struct ext4_extent *);
 void	ext4_ext_put_cache(struct inode *, struct ext4_extent *, int);
 struct ext4_extent_path *ext4_ext_find_extent(struct m_ext2fs *fs,
