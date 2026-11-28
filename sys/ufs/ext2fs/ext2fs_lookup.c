@@ -140,12 +140,13 @@ ext2fs_readdir(void *v)
 	struct iovec aiov;
 	caddr_t dirbuf;
 	off_t off = uio->uio_offset;
-	int e2d_reclen;
+	int e2d_reclen, boff, tail;
 
 	if (vp->v_type != VDIR)
 		return (ENOTDIR);
 
-	e2fs_count = uio->uio_resid;
+	/* malloc(9) panics above MALLOC_MAX; getdents(2) allows INT_MAX. */
+	e2fs_count = MIN(uio->uio_resid, MAXBSIZE);
 	entries = (uio->uio_offset + e2fs_count) & (fs->e2fs_bsize - 1);
 
 	/* Make sure we don't return partial entries. */
@@ -166,11 +167,30 @@ ext2fs_readdir(void *v)
 	if (error == 0) {
 		readcnt = e2fs_count - auio.uio_resid;
 		dp = (struct ext2fs_direct *) dirbuf;
-		while ((char *) dp < (char *) dirbuf + readcnt) {
+		while ((char *)dp < (char *)dirbuf + readcnt &&
+		    (char *)dirbuf + readcnt - (char *)dp >= EXT2FS_DIRSIZ(0)) {
+			/*
+			 * As ext2fs_search_dirblock(): an entry holds its name,
+			 * is a multiple of 4 long and stays in its block.  Go
+			 * on from the next block after a bad one, or when less
+			 * than a header is left in this one.  The offset comes
+			 * from the user (lseek, seekdir), so a bad entry need
+			 * not be corruption: skip it quietly, as ufs_readdir()
+			 * does, and leave reporting to lookup.
+			 */
+			boff = off & (fs->e2fs_bsize - 1);
+			tail = fs->e2fs_bsize - boff < EXT2FS_DIRSIZ(0);
 			e2d_reclen = letoh16(dp->e2d_reclen);
-			if (e2d_reclen == 0) {
-				error = EIO;
-				break;
+			if (tail ||
+			    e2d_reclen < EXT2FS_DIRSIZ(dp->e2d_namlen) ||
+			    e2d_reclen % 4 != 0 ||
+			    e2d_reclen > fs->e2fs_bsize - boff ||
+			    e2d_reclen >
+			    (char *)dirbuf + readcnt - (char *)dp) {
+				off += fs->e2fs_bsize - boff;
+				dp = (struct ext2fs_direct *)
+				    ((char *)dp + fs->e2fs_bsize - boff);
+				continue;
 			}
 			ext2fs_dirconv2ffs(dp, &dstd);
 			if (memchr(dstd.d_name, '/', dstd.d_namlen) != NULL) {
@@ -613,6 +633,7 @@ ext2fs_search_dirblock(struct inode *ip, void *data, int *foundp,
 	struct vnode *vdp;
 	int offset = *entryoffsetinblockp;
 	int dirblksize = ip->i_e2fs->e2fs_bsize;
+	int reclen;
 	size_t namlen;
 
 	vdp = ITOV(ip);
@@ -628,13 +649,16 @@ ext2fs_search_dirblock(struct inode *ip, void *data, int *foundp,
 		 * directory. Complete checks can be run by patching
 		 * "dirchk" to be true.
 		 */
-		if (ep->e2d_reclen == 0 ||
+		reclen = letoh16(ep->e2d_reclen);
+		if (reclen < EXT2FS_DIRSIZ(ep->e2d_namlen) || reclen % 4 != 0 ||
+		    reclen > dirblksize - offset ||
 		    (dirchk && ext2fs_dirbadentry(vdp, ep, offset))) {
 			int i;
 			ufs_dirbad(ip, ip->i_offset, "mangled entry");
 			i = dirblksize - (offset & (dirblksize - 1));
 			ip->i_offset += i;
 			offset += i;
+			ep = (struct ext2fs_direct *)((char *)data + offset);
 			continue;
 		}
 
@@ -696,6 +720,11 @@ ext2fs_search_dirblock(struct inode *ip, void *data, int *foundp,
 		ep = (struct ext2fs_direct *) ((char *)data + offset);
 	}
 
+	/* Less than a header left: the rest of the block is unused. */
+	if (offset < dirblksize) {
+		ip->i_offset += dirblksize - offset;
+		*entryoffsetinblockp = dirblksize;
+	}
 	return (0);
 }
 
@@ -735,7 +764,7 @@ ext2fs_dirbadentry(struct vnode *dp, struct ext2fs_direct *de,
 		    "offset=%d, inode=%u, rec_len=%d, name_len=%d \n",
 		    error_msg, entryoffsetinblock, letoh32(de->e2d_ino),
 		    reclen, namlen);
-		panic(__func__);
+		return (1);
 	}
 	return (0);
 }
