@@ -1713,7 +1713,8 @@ ext2fs/search_dirblock, ext2fs/search_dirblock_diag
 	the block; dirchk 1, ext2fs_dirbadentry panics; both, i_offset
 	left inside the block).  opts has --no-simplify: CBMC 6.8 reads a
 	non-first member of a pointer union (ip->i_e2fs) through a pointer
-	as an arbitrary value otherwise (fixed by diffblue/cbmc#9447).
+	as an arbitrary value otherwise (fix proposed in the open
+	diffblue/cbmc#9447).
 
 ufs/ufs_dirbad
 	ufs_dirbad() of sys/ufs/ufs/ufs_lookup.c with arbitrary mnt_flag
